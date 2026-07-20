@@ -17,7 +17,7 @@ void setup() {
 
   if (Config::ENABLE_TELEMETRY) {
     Serial.begin(115200);
-    delay(200);
+    delay(2000);
   }
 
   inputController.begin();

@@ -30,25 +30,64 @@ void SensorController::begin() {
   powerOff(Config::PIN_MAG3_LS);
   delay(5);
 
+  bool magGood;
+
   Wire.begin();
   Wire.setClock(400000);
 
   powerOn(Config::PIN_MAG1_LS);
-  mag1Sensor_.begin(true, false, false, true);
-  mag1Sensor_.setIICAddress(TLx493D_IIC_ADDR_A2_e);
-  mag1Sensor_.setSensitivity(TLx493D_EXTRA_SHORT_RANGE_e);
-  delay(10);
+  magGood = mag1Sensor_.begin(true, false, true, true);
+  if (!magGood) {
+    Serial.println("Failed to initialize MAG1 sensor!");
+  }
+  magGood = mag1Sensor_.setIICAddress(TLx493D_IIC_ADDR_A2_e);
+  if (!magGood) {
+    Serial.println("Failed to set MAG1 sensor I2C address!");
+  }
+  magGood = mag1Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
+  if (!magGood) {
+    Serial.println("Failed to set MAG1 sensor sensitivity!");
+  }
+  delay(100);
 
   powerOn(Config::PIN_MAG2_LS);
-  mag2Sensor_.begin(true, false, false, true);
-  mag2Sensor_.setIICAddress(TLx493D_IIC_ADDR_A1_e);
-  mag2Sensor_.setSensitivity(TLx493D_EXTRA_SHORT_RANGE_e);
-  delay(10);
+  magGood = mag2Sensor_.begin(true, false, true, true);
+  if (!magGood) {
+    Serial.println("Failed to initialize MAG2 sensor!");
+  }
+  magGood = mag2Sensor_.setIICAddress(TLx493D_IIC_ADDR_A1_e);
+  if (!magGood) {
+    Serial.println("Failed to set MAG2 sensor I2C address!");
+  }
+  magGood = mag2Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
+  if (!magGood) {
+    Serial.println("Failed to set MAG2 sensor sensitivity!");
+  }
+  delay(100);
 
   powerOn(Config::PIN_MAG3_LS);
-  mag3Sensor_.begin(true, false, false, true);
-  mag3Sensor_.setSensitivity(TLx493D_EXTRA_SHORT_RANGE_e);
-  delay(10);
+  magGood = mag3Sensor_.begin(true, false, true, true);
+  if (!magGood) {
+    Serial.println("Failed to initialize MAG3 sensor!");
+  }
+  magGood = mag3Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
+  if (!magGood) {
+    Serial.println("Failed to set MAG3 sensor sensitivity!");
+  }
+  delay(100);
+
+  delay(1000);
+  Serial.println("sensor1 has valid data: " + String(mag1Sensor_.hasValidData()));
+  Serial.println("sensor2 has valid data: " + String(mag2Sensor_.hasValidData()));
+  Serial.println("sensor3 has valid data: " + String(mag3Sensor_.hasValidData()));
+
+  Serial.println("sensor1 is functional: " + String(mag1Sensor_.isFunctional()));
+  Serial.println("sensor2 is functional: " + String(mag2Sensor_.isFunctional()));
+  Serial.println("sensor3 is functional: " + String(mag3Sensor_.isFunctional()));
+
+  Serial.println("sensor1 I2C address: " + String(mag1Sensor_.getI2CAddress()));
+  Serial.println("sensor2 I2C address: " + String(mag2Sensor_.getI2CAddress()));
+  Serial.println("sensor3 I2C address: " + String(mag3Sensor_.getI2CAddress()));
 }
 
 void SensorController::readRaw(float out[9]) {
@@ -56,9 +95,19 @@ void SensorController::readRaw(float out[9]) {
   double mag2x = 0, mag2y = 0, mag2z = 0, temp2 = 0;
   double mag3x = 0, mag3y = 0, mag3z = 0, temp3 = 0;
 
-  mag1Sensor_.getMagneticFieldAndTemperature(&mag1x, &mag1y, &mag1z, &temp1);
-  mag2Sensor_.getMagneticFieldAndTemperature(&mag2x, &mag2y, &mag2z, &temp2);
-  mag3Sensor_.getMagneticFieldAndTemperature(&mag3x, &mag3y, &mag3z, &temp3);
+  Serial.println("Reading raw sensor data...");
+  Serial.flush();
+  bool res_1 = mag1Sensor_.getMagneticFieldAndTemperature(&mag1x, &mag1y, &mag1z, &temp1);
+  bool res_2 = mag2Sensor_.getMagneticFieldAndTemperature(&mag2x, &mag2y, &mag2z, &temp2);
+  bool res_3 = mag3Sensor_.getMagneticFieldAndTemperature(&mag3x, &mag3y, &mag3z, &temp3);
+  Serial.println("read raw sensor data, results:");
+  Serial.print("MAG1: ");
+  Serial.print(mag1x, 6);
+  Serial.print(", MAG2: ");
+  Serial.print(mag2x, 6);
+  Serial.print(", MAG3: ");
+  Serial.println(mag3x, 6);
+  Serial.flush();
 
   // MAG1 = bottom, MAG2 = top left, MAG3 = top right.
   out[0] = mag1x;
@@ -110,6 +159,16 @@ void SensorController::updateCalibration() {
     baseline_[i] = calibrationSum_[i] / Config::ZERO_SAMPLES;
   }
 
+  Serial.println("Calibration complete. Baseline values:");
+  for (int i = 0; i < 9; i++) {
+    Serial.print(baseline_[i], 6);
+    if (i < 8) {
+      Serial.print(", ");
+    } else {
+      Serial.println();
+    }
+  }
+  Serial.flush();
   calibrationActive_ = false;
   calibrationDone_ = true;
 }
