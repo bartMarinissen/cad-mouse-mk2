@@ -1,4 +1,5 @@
 #include "controllers/MotionController.h"
+#include "math3D.h"
 
 #include <Arduino.h>
 #include <math.h>
@@ -55,26 +56,25 @@ float MotionController::axisBaseDead(int i) {
   return (i < 3) ? Config::DEAD_T : Config::DEAD_R;
 }
 
-void MotionController::compute(const float raw[9], const float* baseline, float dt,
+
+void MotionController::compute(const float raw[9], const float baseline[9], float dt,
                                float out[6]) {
-  // Baseline subtraction converts magnetic deltas around the calibrated rest pose.
-  const float mag1x = raw[RAW_MAG1_X] - baseline[RAW_MAG1_X];
-  const float mag1y = raw[RAW_MAG1_Y] - baseline[RAW_MAG1_Y];
-  const float mag1z = raw[RAW_MAG1_Z] - baseline[RAW_MAG1_Z];
-  const float mag2x = raw[RAW_MAG2_X] - baseline[RAW_MAG2_X];
-  const float mag2y = raw[RAW_MAG2_Y] - baseline[RAW_MAG2_Y];
-  const float mag2z = raw[RAW_MAG2_Z] - baseline[RAW_MAG2_Z];
-  const float mag3x = raw[RAW_MAG3_X] - baseline[RAW_MAG3_X];
-  const float mag3y = raw[RAW_MAG3_Y] - baseline[RAW_MAG3_Y];
-  const float mag3z = raw[RAW_MAG3_Z] - baseline[RAW_MAG3_Z];
+  const Vec3 baseline1 = Vec3(baseline[RAW_MAG1_X], baseline[RAW_MAG1_Y], baseline[RAW_MAG1_Z]);
+  const Vec3 baseline2 = Vec3(baseline[RAW_MAG2_X], baseline[RAW_MAG2_Y], baseline[RAW_MAG2_Z]);
+  const Vec3 baseline3 = Vec3(baseline[RAW_MAG3_X], baseline[RAW_MAG3_Y], baseline[RAW_MAG3_Z]);
+  const Vec3 raw1 = Vec3(raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]);
+  const Vec3 raw2 = Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]);
+  const Vec3 raw3 = Vec3(raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]);
+
+  const Vec3 sens1 = pow_magnitude(raw1, -0.3333333333) - pow_magnitude(baseline1, -0.333333333);
+  const Vec3 sens2 = pow_magnitude(raw2, -0.3333333333) - pow_magnitude(baseline2, -0.333333333);
+  const Vec3 sens3 = pow_magnitude(raw3, -0.3333333333) - pow_magnitude(baseline3, -0.333333333);
 
   // Translation:
-  //   Tx = (mag1x + mag2x + mag3x) / 3
-  //   Ty = (mag1y + mag2y + mag3y) / 3
-  //   Tz = (mag1z + mag2z + mag3z) / 3
-  const float tx = (mag1x + mag2x + mag3x) / 3.0;
-  const float ty = (mag1y + mag2y + mag3y) / 3.0;
-  const float tz = (mag1z + mag2z + mag3z) / 3.0;
+  const Vec3 sensAvg = (sens1 + sens2 + sens3) * (1.0f / 3.0f);
+  const float tx = sensAvg[0];
+  const float ty = sensAvg[1];
+  const float tz = sensAvg[2];
 
   // Physical PCB layout:
   // MAG2 = top left, MAG3 = top right, MAG1 = bottom.
@@ -95,15 +95,15 @@ void MotionController::compute(const float raw[9], const float* baseline, float 
   //   Rx = sqrt(3) * (mag2z + mag3z - 2 * mag1z) / 3
   //     top pair minus bottom sensor
   //     -> front/back tilt of the triangle
-  const float rx = (sqrt(3.0) * (mag2z + mag3z - 2.0 * mag1z)) / 3.0;
-  const float ry = (mag3z - mag2z);
+  const float rx = (sqrt(3.0) * (sens2[2] + sens3[2] - 2.0 * sens1[2])) / 3.0;
+  const float ry = (sens3[2] - sens2[2]);
 
   //   Rz = sum_i (posXi * magYi - posYi * magXi)
   // Each sensor contributes according to its x/y position in the triangle.
   const float swirlNum =
-      (mag2PosX * mag2y - mag2PosY * mag2x) +
-      (mag3PosX * mag3y - mag3PosY * mag3x) +
-      (mag1PosX * mag1y - mag1PosY * mag1x);
+      (mag2PosX * sens2[1] - mag2PosY * sens2[0]) +
+      (mag3PosX * sens3[1] - mag3PosY * sens3[0]) +
+      (mag1PosX * sens1[1] - mag1PosY * sens1[0]);
   const float rz = swirlNum;
 
   // Apply sign fixes and gains
@@ -114,6 +114,8 @@ void MotionController::compute(const float raw[9], const float* baseline, float 
   y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rx * Config::GAIN_R[AXIS_RX - 3];
   y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * ry * Config::GAIN_R[AXIS_RY - 3];
   y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rz * Config::GAIN_R[AXIS_RZ - 3];
+  
+ 
 
   // Filter, clamp to range and dead zones.
   motionActive_ = false;

@@ -4,6 +4,7 @@
 #include "Controllers.h"
 #include "StateMachine.h"
 
+#ifndef PIO_UNIT_TESTING
 InputController inputController;
 LEDController ledController;
 SensorController sensorController;
@@ -17,11 +18,15 @@ void setup() {
 
   if (Config::ENABLE_TELEMETRY) {
     Serial.begin(115200);
-    delay(200);
+    delay(1000);
   }
 
   inputController.begin();
   ledController.begin();
+  if (!sensorController.begin()) {
+    stateMachine.changeState(&StateMachine::errorState);
+    return;
+  }
   sensorController.begin();
   motionController.reset();
   telemetryController.begin();
@@ -33,3 +38,4 @@ void loop() {
   hidController.task();
   stateMachine.update();
 }
+#endif

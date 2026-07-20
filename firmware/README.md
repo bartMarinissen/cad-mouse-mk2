@@ -1,6 +1,14 @@
 You can customize several variables to tune gains, smoothing, and deadzones for all six axes.
 Most of these settings are defined in [`Config.h`](include/Config.h) and are the main place to adjust the overall feel of the device.
 
+There are X, Y, Z for the Translation gains T
+And Rx, Ry, Rz for the rotation gains R.
+
+The X axis is side to side (axis between the buttons).  
+The Y axis is front to back (axis through the USB-C port).  
+The Z axis is vertical, through the main knob
+
+
 ```cpp
 // Gains and sign fixes
 const float GAIN_T[3] = {28.0, 28.0, 24.0};

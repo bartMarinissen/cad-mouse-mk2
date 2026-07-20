@@ -1,0 +1,14 @@
+[project]
+name = "magnet-field-model"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ipykernel>=7.3.0",
+    "jupyterlab>=4.6.2",
+    "magpylib>=5.2.3",
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.1",
+    "sympy>=1.14.0",
+]

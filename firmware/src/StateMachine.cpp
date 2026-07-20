@@ -5,6 +5,7 @@ StateMachine stateMachine;
 IdleState StateMachine::idleState;
 SleepState StateMachine::sleepState;
 CalibratingState StateMachine::calibratingState;
+ErrorState StateMachine::errorState;
 
 StateMachine::StateMachine() : currentState(nullptr) {}
 
