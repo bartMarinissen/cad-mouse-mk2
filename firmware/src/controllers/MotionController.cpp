@@ -55,26 +55,59 @@ float MotionController::axisBaseDead(int i) {
   return (i < 3) ? Config::DEAD_T : Config::DEAD_R;
 }
 
-void MotionController::compute(const float raw[9], const float* baseline, float dt,
+struct Vector3 {
+  float x;
+  float y;
+  float z;
+
+  Vector3 operator+(const Vector3& other) const {
+    return {x + other.x, y + other.y, z + other.z};
+  }
+
+  Vector3 operator-(const Vector3& other) const {
+    return {x - other.x, y - other.y, z - other.z};
+  }
+
+  Vector3 operator*(float scalar) const {
+    return {x * scalar, y * scalar, z * scalar};
+  }
+
+  float magnitude() const {
+    return sqrtf(x*x + y*y + z*z);
+  }
+
+  Vector3 pow_magnitude(float power) const {
+    float mag = magnitude();
+    float scaled_mag = powf(mag, power);  
+    float ratio = (mag != 0.0f) ? (scaled_mag / mag) : 1.0f;
+
+    return *this * ratio;
+  }
+
+  String toString() const {
+    return String("Vector3(") + x + ", " + y + ", " + z + ")";
+  }
+
+};
+
+void MotionController::compute(const float raw[9], const float baseline[9], float dt,
                                float out[6]) {
-  // Baseline subtraction converts magnetic deltas around the calibrated rest pose.
-  const float mag1x = raw[RAW_MAG1_X] - baseline[RAW_MAG1_X];
-  const float mag1y = raw[RAW_MAG1_Y] - baseline[RAW_MAG1_Y];
-  const float mag1z = raw[RAW_MAG1_Z] - baseline[RAW_MAG1_Z];
-  const float mag2x = raw[RAW_MAG2_X] - baseline[RAW_MAG2_X];
-  const float mag2y = raw[RAW_MAG2_Y] - baseline[RAW_MAG2_Y];
-  const float mag2z = raw[RAW_MAG2_Z] - baseline[RAW_MAG2_Z];
-  const float mag3x = raw[RAW_MAG3_X] - baseline[RAW_MAG3_X];
-  const float mag3y = raw[RAW_MAG3_Y] - baseline[RAW_MAG3_Y];
-  const float mag3z = raw[RAW_MAG3_Z] - baseline[RAW_MAG3_Z];
+  Vector3 baseline1 = {baseline[RAW_MAG1_X], baseline[RAW_MAG1_Y], baseline[RAW_MAG1_Z]};
+  Vector3 baseline2 = {baseline[RAW_MAG2_X], baseline[RAW_MAG2_Y], baseline[RAW_MAG2_Z]};
+  Vector3 baseline3 = {baseline[RAW_MAG3_X], baseline[RAW_MAG3_Y], baseline[RAW_MAG3_Z]};
+  Vector3 raw1 = {raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]};
+  Vector3 raw2 = {raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]};
+  Vector3 raw3 = {raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]};
+
+  Vector3 sens1 = raw1.pow_magnitude(-0.25) - baseline1.pow_magnitude(-0.25);
+  Vector3 sens2 = raw2.pow_magnitude(-0.25) - baseline2.pow_magnitude(-0.25);
+  Vector3 sens3 = raw3.pow_magnitude(-0.25) - baseline3.pow_magnitude(-0.25);
 
   // Translation:
-  //   Tx = (mag1x + mag2x + mag3x) / 3
-  //   Ty = (mag1y + mag2y + mag3y) / 3
-  //   Tz = (mag1z + mag2z + mag3z) / 3
-  const float tx = (mag1x + mag2x + mag3x) / 3.0;
-  const float ty = (mag1y + mag2y + mag3y) / 3.0;
-  const float tz = (mag1z + mag2z + mag3z) / 3.0;
+  const Vector3 sensAvg = (sens1 + sens2 + sens3) * (1.0f / 3.0f);
+  const float tx = sensAvg.x;
+  const float ty = sensAvg.y;
+  const float tz = sensAvg.z;
 
   // Physical PCB layout:
   // MAG2 = top left, MAG3 = top right, MAG1 = bottom.
@@ -95,15 +128,15 @@ void MotionController::compute(const float raw[9], const float* baseline, float 
   //   Rx = sqrt(3) * (mag2z + mag3z - 2 * mag1z) / 3
   //     top pair minus bottom sensor
   //     -> front/back tilt of the triangle
-  const float rx = (sqrt(3.0) * (mag2z + mag3z - 2.0 * mag1z)) / 3.0;
-  const float ry = (mag3z - mag2z);
+  const float rx = (sqrt(3.0) * (sens2.z + sens3.z - 2.0 * sens1.z)) / 3.0;
+  const float ry = (sens3.z - sens2.z);
 
   //   Rz = sum_i (posXi * magYi - posYi * magXi)
   // Each sensor contributes according to its x/y position in the triangle.
   const float swirlNum =
-      (mag2PosX * mag2y - mag2PosY * mag2x) +
-      (mag3PosX * mag3y - mag3PosY * mag3x) +
-      (mag1PosX * mag1y - mag1PosY * mag1x);
+      (mag2PosX * sens2.y - mag2PosY * sens2.x) +
+      (mag3PosX * sens3.y - mag3PosY * sens3.x) +
+      (mag1PosX * sens1.y - mag1PosY * sens1.x);
   const float rz = swirlNum;
 
   // Apply sign fixes and gains
@@ -114,6 +147,7 @@ void MotionController::compute(const float raw[9], const float* baseline, float 
   y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rx * Config::GAIN_R[AXIS_RX - 3];
   y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * ry * Config::GAIN_R[AXIS_RY - 3];
   y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rz * Config::GAIN_R[AXIS_RZ - 3];
+  
 
   // Filter, clamp to range and dead zones.
   motionActive_ = false;
