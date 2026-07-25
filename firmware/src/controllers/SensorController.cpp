@@ -16,8 +16,30 @@ void SensorController::powerOn(int pin) {
   delay(5);
 }
 
-void SensorController::begin() {
+bool SensorController::setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin, TLx493D_IICAddressType_t address) {
+  SensorController::powerOn(pin);
+  bool res = sensor.begin(true, false, true, true);
+  sensor.printRegisters();
+  if (!res) {
+    Serial.println("Failed to initialize sensor!");
+    return false;
+  }
+  res = sensor.setIICAddress(address);
+  if (!res) {
+    Serial.println("Failed to set sensor I2C address!");
+    return false;
+  }
+  res = sensor.setSensitivity(TLx493D_SHORT_RANGE_e);
+  if (!res) {
+    Serial.println("Failed to set sensor sensitivity!");
+    return false;
+  }
+  delay(10);
+  return true;
+}
 
+bool SensorController::begin() {
+ 
   pinMode(Config::PIN_MAG1_LS, OUTPUT);
   pinMode(Config::PIN_MAG2_LS, OUTPUT);
   pinMode(Config::PIN_MAG3_LS, OUTPUT);
@@ -30,64 +52,37 @@ void SensorController::begin() {
   powerOff(Config::PIN_MAG3_LS);
   delay(5);
 
-  bool magGood;
-
+  
   Wire.begin();
   Wire.setClock(400000);
 
   powerOn(Config::PIN_MAG1_LS);
-  magGood = mag1Sensor_.begin(true, false, true, true);
-  if (!magGood) {
-    Serial.println("Failed to initialize MAG1 sensor!");
-  }
-  magGood = mag1Sensor_.setIICAddress(TLx493D_IIC_ADDR_A2_e);
-  if (!magGood) {
-    Serial.println("Failed to set MAG1 sensor I2C address!");
-  }
-  magGood = mag1Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
-  if (!magGood) {
-    Serial.println("Failed to set MAG1 sensor sensitivity!");
-  }
-  delay(100);
 
-  powerOn(Config::PIN_MAG2_LS);
-  magGood = mag2Sensor_.begin(true, false, true, true);
-  if (!magGood) {
-    Serial.println("Failed to initialize MAG2 sensor!");
+  bool res;
+  res = setup_sensor(mag1Sensor_, Config::PIN_MAG1_LS, TLx493D_IIC_ADDR_A2_e);
+  if (not res) {
+    Serial.println("Failed to setup sensor 1!");
+    return false;
   }
-  magGood = mag2Sensor_.setIICAddress(TLx493D_IIC_ADDR_A1_e);
-  if (!magGood) {
-    Serial.println("Failed to set MAG2 sensor I2C address!");
+  res = setup_sensor(mag2Sensor_, Config::PIN_MAG2_LS, TLx493D_IIC_ADDR_A1_e);
+  if (not res) {
+    Serial.println("Failed to setup sensor 2!");
+    return false;
   }
-  magGood = mag2Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
-  if (!magGood) {
-    Serial.println("Failed to set MAG2 sensor sensitivity!");
+  res = setup_sensor(mag3Sensor_, Config::PIN_MAG3_LS, TLx493D_IIC_ADDR_A0_e);
+  if (not res) {
+    Serial.println("Failed to setup sensor 3!");
+    return false;
   }
-  delay(100);
-
-  powerOn(Config::PIN_MAG3_LS);
-  magGood = mag3Sensor_.begin(true, false, true, true);
-  if (!magGood) {
-    Serial.println("Failed to initialize MAG3 sensor!");
-  }
-  magGood = mag3Sensor_.setSensitivity(TLx493D_SHORT_RANGE_e);
-  if (!magGood) {
-    Serial.println("Failed to set MAG3 sensor sensitivity!");
-  }
-  delay(100);
-
-  delay(1000);
+  Serial.println("All sensors initialized successfully.");
   Serial.println("sensor1 has valid data: " + String(mag1Sensor_.hasValidData()));
   Serial.println("sensor2 has valid data: " + String(mag2Sensor_.hasValidData()));
   Serial.println("sensor3 has valid data: " + String(mag3Sensor_.hasValidData()));
 
-  Serial.println("sensor1 is functional: " + String(mag1Sensor_.isFunctional()));
-  Serial.println("sensor2 is functional: " + String(mag2Sensor_.isFunctional()));
-  Serial.println("sensor3 is functional: " + String(mag3Sensor_.isFunctional()));
-
   Serial.println("sensor1 I2C address: " + String(mag1Sensor_.getI2CAddress()));
   Serial.println("sensor2 I2C address: " + String(mag2Sensor_.getI2CAddress()));
   Serial.println("sensor3 I2C address: " + String(mag3Sensor_.getI2CAddress()));
+  return true;
 }
 
 void SensorController::readRaw(float out[9]) {
@@ -95,19 +90,9 @@ void SensorController::readRaw(float out[9]) {
   double mag2x = 0, mag2y = 0, mag2z = 0, temp2 = 0;
   double mag3x = 0, mag3y = 0, mag3z = 0, temp3 = 0;
 
-  Serial.println("Reading raw sensor data...");
-  Serial.flush();
   bool res_1 = mag1Sensor_.getMagneticFieldAndTemperature(&mag1x, &mag1y, &mag1z, &temp1);
   bool res_2 = mag2Sensor_.getMagneticFieldAndTemperature(&mag2x, &mag2y, &mag2z, &temp2);
   bool res_3 = mag3Sensor_.getMagneticFieldAndTemperature(&mag3x, &mag3y, &mag3z, &temp3);
-  Serial.println("read raw sensor data, results:");
-  Serial.print("MAG1: ");
-  Serial.print(mag1x, 6);
-  Serial.print(", MAG2: ");
-  Serial.print(mag2x, 6);
-  Serial.print(", MAG3: ");
-  Serial.println(mag3x, 6);
-  Serial.flush();
 
   // MAG1 = bottom, MAG2 = top left, MAG3 = top right.
   out[0] = mag1x;

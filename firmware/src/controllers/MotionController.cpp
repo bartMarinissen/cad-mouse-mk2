@@ -1,9 +1,32 @@
 #include "controllers/MotionController.h"
+#include "magnet_model/forward_model.h"
+#include "math3D.h"
+#include "magnet_model/positions.h"
 
 #include <Arduino.h>
 #include <math.h>
 
 #include "Config.h"
+#include <magnet_model/solve_pose.h>
+
+
+
+MagnetModel magnets[3] = {
+  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_1_knob),
+  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_2_knob),
+  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_3_knob),
+};
+const Vec3 sensor_positions[3] = {
+  Positions::sensor_1_world,
+  Positions::sensor_2_world,
+  Positions::sensor_3_world,
+};
+ForwardModel forward_model(
+  sensor_positions, magnets
+);
+
+Eigen::Matrix<float, 9, 6> J;
+Eigen::Matrix<float, 9, 1> residual;
 
 namespace {
 enum RawIndex {
@@ -55,59 +78,46 @@ float MotionController::axisBaseDead(int i) {
   return (i < 3) ? Config::DEAD_T : Config::DEAD_R;
 }
 
-struct Vector3 {
-  float x;
-  float y;
-  float z;
-
-  Vector3 operator+(const Vector3& other) const {
-    return {x + other.x, y + other.y, z + other.z};
-  }
-
-  Vector3 operator-(const Vector3& other) const {
-    return {x - other.x, y - other.y, z - other.z};
-  }
-
-  Vector3 operator*(float scalar) const {
-    return {x * scalar, y * scalar, z * scalar};
-  }
-
-  float magnitude() const {
-    return sqrtf(x*x + y*y + z*z);
-  }
-
-  Vector3 pow_magnitude(float power) const {
-    float mag = magnitude();
-    float scaled_mag = powf(mag, power);  
-    float ratio = (mag != 0.0f) ? (scaled_mag / mag) : 1.0f;
-
-    return *this * ratio;
-  }
-
-  String toString() const {
-    return String("Vector3(") + x + ", " + y + ", " + z + ")";
-  }
-
-};
 
 void MotionController::compute(const float raw[9], const float baseline[9], float dt,
                                float out[6]) {
-  Vector3 baseline1 = {baseline[RAW_MAG1_X], baseline[RAW_MAG1_Y], baseline[RAW_MAG1_Z]};
-  Vector3 baseline2 = {baseline[RAW_MAG2_X], baseline[RAW_MAG2_Y], baseline[RAW_MAG2_Z]};
-  Vector3 baseline3 = {baseline[RAW_MAG3_X], baseline[RAW_MAG3_Y], baseline[RAW_MAG3_Z]};
-  Vector3 raw1 = {raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]};
-  Vector3 raw2 = {raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]};
-  Vector3 raw3 = {raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]};
+  const Vec3 baseline1 = Vec3(baseline[RAW_MAG1_X], baseline[RAW_MAG1_Y], baseline[RAW_MAG1_Z]);
+  const Vec3 baseline2 = Vec3(baseline[RAW_MAG2_X], baseline[RAW_MAG2_Y], baseline[RAW_MAG2_Z]);
+  const Vec3 baseline3 = Vec3(baseline[RAW_MAG3_X], baseline[RAW_MAG3_Y], baseline[RAW_MAG3_Z]);
+  const Vec3 raw1 = Vec3(raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]);
+  const Vec3 raw2 = Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]);
+  const Vec3 raw3 = Vec3(raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]);
 
-  Vector3 sens1 = raw1.pow_magnitude(-0.25) - baseline1.pow_magnitude(-0.25);
-  Vector3 sens2 = raw2.pow_magnitude(-0.25) - baseline2.pow_magnitude(-0.25);
-  Vector3 sens3 = raw3.pow_magnitude(-0.25) - baseline3.pow_magnitude(-0.25);
+  const Vec3 sens1 = pow_magnitude(raw1, -0.3333333333) - pow_magnitude(baseline1, -0.333333333);
+  const Vec3 sens2 = pow_magnitude(raw2, -0.3333333333) - pow_magnitude(baseline2, -0.333333333);
+  const Vec3 sens3 = pow_magnitude(raw3, -0.3333333333) - pow_magnitude(baseline3, -0.333333333);
 
   // Translation:
-  const Vector3 sensAvg = (sens1 + sens2 + sens3) * (1.0f / 3.0f);
-  const float tx = sensAvg.x;
-  const float ty = sensAvg.y;
-  const float tz = sensAvg.z;
+  const Vec3 sensAvg = (sens1 + sens2 + sens3) * (1.0f / 3.0f);
+  const float tx = sensAvg[0];
+  const float ty = sensAvg[1];
+  const float tz = sensAvg[2];
+
+  Vec3 zeros[3] = {Vec3::Zero(),Vec3::Zero(),Vec3::Zero()};
+  Vec3 measured[3] = {raw1, raw2, raw3};
+  forward_model.evaluate({0.0, 0.0, 5.4}, Mat3::Identity(), zeros, residual, J);
+
+  Serial.printf("Predicted\n%3.3f %f %f\n%f %f %f\n%f %f %f\n", 
+    residual[0], residual[1], residual[2], 
+    residual[3], residual[4], residual[5], 
+    residual[6], residual[7], residual[8]
+  );
+
+  Vec3 t = Vec3(0.0, 0.0, 5.4);
+  Mat3 R = Mat3::Identity();
+  solve_knob_pose(t, R, forward_model, measured);
+  Serial.printf("pose found: t= %f %f %f ", t[0], t[1], t[2]);
+
+  Serial.printf("Measured\n%f %f %f\n%f %f %f\n%f %f %f\n", 
+    raw[0], raw[1], raw[2], 
+    raw[3], raw[4], raw[5], 
+    raw[6], raw[7], raw[8]
+  );
 
   // Physical PCB layout:
   // MAG2 = top left, MAG3 = top right, MAG1 = bottom.
@@ -128,15 +138,15 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   //   Rx = sqrt(3) * (mag2z + mag3z - 2 * mag1z) / 3
   //     top pair minus bottom sensor
   //     -> front/back tilt of the triangle
-  const float rx = (sqrt(3.0) * (sens2.z + sens3.z - 2.0 * sens1.z)) / 3.0;
-  const float ry = (sens3.z - sens2.z);
+  const float rx = (sqrt(3.0) * (sens2[2] + sens3[2] - 2.0 * sens1[2])) / 3.0;
+  const float ry = (sens3[2] - sens2[2]);
 
   //   Rz = sum_i (posXi * magYi - posYi * magXi)
   // Each sensor contributes according to its x/y position in the triangle.
   const float swirlNum =
-      (mag2PosX * sens2.y - mag2PosY * sens2.x) +
-      (mag3PosX * sens3.y - mag3PosY * sens3.x) +
-      (mag1PosX * sens1.y - mag1PosY * sens1.x);
+      (mag2PosX * sens2[1] - mag2PosY * sens2[0]) +
+      (mag3PosX * sens3[1] - mag3PosY * sens3[0]) +
+      (mag1PosX * sens1[1] - mag1PosY * sens1[0]);
   const float rz = swirlNum;
 
   // Apply sign fixes and gains
@@ -148,6 +158,7 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * ry * Config::GAIN_R[AXIS_RY - 3];
   y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rz * Config::GAIN_R[AXIS_RZ - 3];
   
+ 
 
   // Filter, clamp to range and dead zones.
   motionActive_ = false;

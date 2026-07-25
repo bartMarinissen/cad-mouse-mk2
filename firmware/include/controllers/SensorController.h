@@ -2,13 +2,13 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include "TLx493D_inc.hpp"
+#include <TLx493D_inc.hpp>
 
 class SensorController {
  public:
   SensorController();
 
-  void begin();
+  bool begin();
   void readRaw(float out[9]);
 
   void beginCalibration();
@@ -20,6 +20,7 @@ class SensorController {
  private:
   static void powerOff(int pin);
   static void powerOn(int pin);
+  static bool setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin, TLx493D_IICAddressType_t address);
 
   ifx::tlx493d::TLx493D_A2B6 mag1Sensor_;
   ifx::tlx493d::TLx493D_A2B6 mag2Sensor_;
