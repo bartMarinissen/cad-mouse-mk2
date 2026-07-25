@@ -17,19 +17,23 @@ void solve_knob_pose(
     const int MAX_ITER = 5;
     const float TOLERANCE = 3e-3f; // Stop if the update step is smaller than this
 
-    Vector9f r;        // Residual vector
-    Matrix9x6f J;      // Jacobian matrix
+    Vector9f residual;        // Residual vector: B_field - measured_fields
+    Matrix9x6f jacobian;      // Jacobian matrix
 
     for (int iter = 0; iter < MAX_ITER; ++iter) {
         Serial.printf("iteration %i", iter);
         
         // 1. Evaluate the forward model at the current state (t, R)
         // This populates the 9x1 residual and 9x6 Jacobian
-        model.evaluate(t, R, measured_fields, r, J);
+        model.evaluate(t, R, residual, jacobian);
+        residual.block<3, 1>(0, 0) -= measured_fields[0];
+        residual.block<3, 1>(3, 0) -= measured_fields[1];
+        residual.block<3, 1>(6, 0) -= measured_fields[2];
+
 
         // 2. Construct the Normal Equations (H * dx = g)
-        Matrix6x6f H = J.transpose() * J;
-        Vector6f g = -J.transpose() * r;
+        Matrix6x6f H = jacobian.transpose() * jacobian;
+        Vector6f g = -jacobian.transpose() * residual;
 
         // 3. Solve the 6x6 linear system for the update step dx = [dt, dw]^T
         // LDLT (Robust Cholesky) is extremely fast and safe for positive semi-definite matrices

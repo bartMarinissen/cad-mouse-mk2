@@ -9,8 +9,7 @@ ForwardModel::ForwardModel(const Vec3 sensor_positions[3], const MagnetModel* ma
 
 void ForwardModel::evaluate(const Vec3& t,  
                             const Mat3& R, 
-                            const Vec3 measured_fields[3], 
-                            Eigen::Matrix<float, 9, 1> &residual, 
+                            Eigen::Matrix<float, 9, 1> &B_field, 
                             Eigen::Matrix<float, 9, 6> &J) const {
                             
     Mat3 R_T = R.transpose();
@@ -30,12 +29,7 @@ void ForwardModel::evaluate(const Vec3& t,
 
         // 4. Rotate field back to global frame to get the field as measured by the sensors
         Vec3 B_global = R * B_local;
-
-        // 5. Populate the residual vector (Predicted - Measured)
-        residual[i*3 + 0] = B_global[0] - measured_fields[i][0];
-        residual[i*3 + 1] = B_global[1] - measured_fields[i][1];
-        residual[i*3 + 2] = B_global[2] - measured_fields[i][2];
-
+        
         // 6. Assemble the Jacobian blocks
         Mat3 M = (R * J_local) * R_T;
         Mat3 J_trans = M * -1.0f;
@@ -47,8 +41,9 @@ void ForwardModel::evaluate(const Vec3& t,
         Mat3 M_v_skew = M * v_skew;
         Mat3 J_rot = (M * skew_matrix(v)) - skew_matrix(B_global);
 
-        // 7. Copy blocks into the flat 9x6 global Jacobian
+        // 7. Copy blocks into the flat 9x6 global Jacobian and the expected field
         J.block<3, 3>(i * 3, 0) = J_trans;
         J.block<3, 3>(i * 3, 3) = J_rot; 
+        B_field.block<3, 1>(i * 3, 0) = B_global;
     }
 }

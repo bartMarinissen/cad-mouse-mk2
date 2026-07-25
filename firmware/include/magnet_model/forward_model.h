@@ -13,8 +13,7 @@ public:
     //  and a rotation vector omega. But we caluclate it in terms of a rotation MATRIX R.
     void evaluate(const Vec3& t, 
                   const Mat3& R, 
-                  const Vec3 measured_fields[3], 
-                  Eigen::Matrix<float, 9, 1> &residual, 
+                  Eigen::Matrix<float, 9, 1> &B_field, 
                   Eigen::Matrix<float, 9, 6> &J) const;
 
 private:

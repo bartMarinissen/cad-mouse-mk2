@@ -26,7 +26,7 @@ ForwardModel forward_model(
 );
 
 Eigen::Matrix<float, 9, 6> J;
-Eigen::Matrix<float, 9, 1> residual;
+Eigen::Matrix<float, 9, 1> B_field;
 
 namespace {
 enum RawIndex {
@@ -100,12 +100,12 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
 
   Vec3 zeros[3] = {Vec3::Zero(),Vec3::Zero(),Vec3::Zero()};
   Vec3 measured[3] = {raw1, raw2, raw3};
-  forward_model.evaluate({0.0, 0.0, 5.4}, Mat3::Identity(), zeros, residual, J);
+  forward_model.evaluate({0.0, 0.0, 5.4}, Mat3::Identity(), B_field, J);
 
   Serial.printf("Predicted\n%3.3f %f %f\n%f %f %f\n%f %f %f\n", 
-    residual[0], residual[1], residual[2], 
-    residual[3], residual[4], residual[5], 
-    residual[6], residual[7], residual[8]
+    B_field[0], B_field[1], B_field[2], 
+    B_field[3], B_field[4], B_field[5], 
+    B_field[6], B_field[7], B_field[8]
   );
 
   Vec3 t = Vec3(0.0, 0.0, 5.4);

@@ -34,6 +34,7 @@
 #include "magnet_model/BicubicField.h"
 #include "magnet_model/magnet_local_model.h"   // declares CALCULATED_BICUBIC_FIELD + MagnetModel
 #include "magnet_model/forward_model.h"        // declares ForwardModel  (adjust filename if different)
+#include "magnet_model/positions.h"            // declares Positions:: sensor_i_world / Magnet_i_knob (adjust filename if different)
 
 // ======================================================================
 // Config: fill in with real values
@@ -48,30 +49,53 @@ static constexpr float FD_STEP_LINEAR  = 1.0e-3f;   // mm (or your length unit)
 static constexpr float FD_STEP_ANGULAR = 1.0e-3f;   // radians
 
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
-// MUST be interior to [BICUBIC_ORIGIN, BICUBIC_FAR] with margin >= FD_STEP_LINEAR.
+// Valid domain per BICUBIC_ORIGIN=(0.0,-12.0), BICUBIC_FAR=(6.0,-0.5):
+//   r in [0, 6], z in [-12, -0.5]  (z is always negative - sensor plane
+//   sits below the magnet). Points below are comfortably interior with
+//   margin >> FD_STEP_LINEAR.
 struct RZSample { float r; float z; };
 static constexpr RZSample BICUBIC_TEST_POINTS[] = {
-    { 2.0f,  0.0f },
-    { 2.0f,  1.5f },
-    { 4.0f, -1.5f },
-    { 1.0f,  2.5f },
+    { 1.0f, -1.0f },
+    { 3.0f, -6.0f },
+    { 5.0f, -1.0f },
+    { 0.5f, -11.0f },
 };
 
-// Placeholder PCB / knob geometry for the ForwardModel test.
-// Replace with your real sensor positions and magnet resting positions.
+// PCB / knob geometry, taken from Positions:: rather than placeholders.
+// NOTE: sensor_i_world and Magnet_i_knob use identical formulas in the
+// header you sent, which means at rest the local vector v_l between a
+// magnet and its own sensor is the 6mm z-standoff (sensor plane sits
+// 6mm below the magnet plane) plus whatever t.x/t.y and rotation you
+// apply.
 static const Vec3 SENSOR_POS[3] = {
-    Vec3( 10.0f,   0.0f, 5.0f),
-    Vec3( -5.0f,  8.66f, 5.0f),
-    Vec3( -5.0f, -8.66f, 5.0f),
+    Positions::sensor_1_world,
+    Positions::sensor_2_world,
+    Positions::sensor_3_world,
 };
 static const Vec3 MAGNET_LOCAL[3] = {
-    Vec3( 10.0f,   0.0f, 0.0f),
-    Vec3( -5.0f,  8.66f, 0.0f),
-    Vec3( -5.0f, -8.66f, 0.0f),
+    Positions::Magnet_1_knob,
+    Positions::Magnet_2_knob,
+    Positions::Magnet_3_knob,
 };
 
-// Base pose used for the ForwardModel test.
-static const Vec3 BASE_T(0.5f, -0.3f, 20.0f);
+// Base pose used for the ForwardModel tests.
+// x/y chosen so r = sqrt(t.x^2 + t.y^2) ~ 2.5mm at rest (comfortably
+// inside [0,6], away from both 0 and the outer edge).
+// z = 6.0f is the real standoff: at rest the sensor plane sits 6mm
+// below the magnet plane.
+static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
+
+// NOTE: physically, the two frames are rotationally ALIGNED at rest -
+// R=Identity, with only the 6mm z-standoff as an offset. The non-zero
+// axis below is a synthetic test pose, not an attempt to model rest.
+// It's kept non-identity deliberately: the analytic Jacobian needs to
+// be correct for any R the solver encounters while tracking, not just
+// R=Identity, and testing only at Identity risks masking a bug that
+// only shows up once R^T actually does something (e.g. a transpose or
+// sign error in how R feeds into the local-frame conversion). Kept
+// small purely so the resulting v_l for all three magnet/sensor pairs
+// stays inside the field's r<=6, -12<=z<=-0.5 domain.
+static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 
 // ======================================================================
 // Helpers
@@ -192,10 +216,12 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 void test_magnet_model_jacobian_generic(void) {
     MagnetModel model(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
     // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
-    check_magnet_model_at(model, Vec3(2.0f, 0.0f, 0.0f));
-    check_magnet_model_at(model, Vec3(1.4f, 1.4f, 1.0f));
-    check_magnet_model_at(model, Vec3(0.0f, 3.0f, -1.0f));
-    check_magnet_model_at(model, Vec3(-2.0f, -2.0f, 2.0f));
+    // z_l must stay in [-12,-0.5] (z=0 is NOT valid - it's the boundary
+    // BICUBIC_FAR sits at -0.5, i.e. sensor plane is below the magnet).
+    check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
+    check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
+    check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));
+    check_magnet_model_at(model, Vec3(-2.0f, -2.0f, -8.0f));
 }
 
 void test_magnet_model_jacobian_at_origin(void) {
@@ -204,9 +230,10 @@ void test_magnet_model_jacobian_at_origin(void) {
     // gives r = FD_STEP_LINEAR > 0 on both sides (never crosses back
     // through the singularity), so central differences are well-defined
     // even though the *base* point requires the L'Hopital limit.
+    // z_l chosen well away from the z=-0.5 domain edge for margin.
     MagnetModel model(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, 0.5f));
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -0.5f));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -1.0f));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -6.0f));
 }
 
 // ======================================================================
@@ -218,7 +245,12 @@ void test_magnet_model_jacobian_at_origin(void) {
 //    d(residual)/d(pose) exactly.
 // ======================================================================
 
-void test_forward_model_jacobian_translation(void) {
+// Shared setup + FD computation for a given (t, R) pose. Fills J_analytic
+// and J_numeric (all 6 columns) so callers can check whichever block(s)
+// they care about.
+static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
+                                             Eigen::Matrix<float, 9, 6>& J_analytic,
+                                             Eigen::Matrix<float, 9, 6>& J_numeric) {
     MagnetModel magnets[3] = {
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
@@ -226,89 +258,90 @@ void test_forward_model_jacobian_translation(void) {
     };
     ForwardModel fm(SENSOR_POS, magnets);
 
-    Mat3 R = Mat3::Identity();
-
-    // Use a self-consistent "measured" field: whatever the model predicts
-    // at the base pose. The residual's *value* at the base pose doesn't
-    // matter for a Jacobian check, only how it changes - but evaluate()
-    // needs some measured_fields[3] input, so any fixed vector works as
-    // long as it's held constant across the +/- perturbations.
-    Vec3 measured[3] = { Vec3(10.0f, 5.0f, -3.0f),
-                         Vec3(-4.0f, 8.0f,  2.0f),
-                         Vec3( 1.0f,-6.0f,  7.0f) };
-
     Eigen::Matrix<float, 9, 1> residual0;
-    Eigen::Matrix<float, 9, 6> J;
-    fm.evaluate(BASE_T, R, measured, residual0, J);
+    fm.evaluate(t, R, residual0, J_analytic);
 
-    Eigen::Matrix<float, 9, 6> J_numeric = Eigen::Matrix<float, 9, 6>::Zero();
+    J_numeric = Eigen::Matrix<float, 9, 6>::Zero();
 
+    // Translation columns (0..2): straightforward Euclidean perturbation.
     for (int i = 0; i < 3; ++i) {
         Vec3 dt = Vec3::Zero();
         dt[i] = FD_STEP_LINEAR;
 
         Eigen::Matrix<float, 9, 1> res_p, res_m;
         Eigen::Matrix<float, 9, 6> J_dummy;
-        fm.evaluate(BASE_T + dt, R, measured, res_p, J_dummy);
-        fm.evaluate(BASE_T - dt, R, measured, res_m, J_dummy);
+        fm.evaluate(t + dt, R, res_p, J_dummy);
+        fm.evaluate(t - dt, R, res_m, J_dummy);
 
         J_numeric.col(i) = (res_p - res_m) / (2.0f * FD_STEP_LINEAR);
     }
 
-    char msg[128];
-    // Only check the translation columns (0..2) here.
+    // Rotation columns (3..5): exact exponential-map perturbation of R.
+    for (int i = 0; i < 3; ++i) {
+        Vec3 dw = Vec3::Zero();
+        dw[i] = FD_STEP_ANGULAR;
+
+        Mat3 R_p = exp_so3(dw) * R;
+        Mat3 R_m = exp_so3(-dw) * R;
+
+        Eigen::Matrix<float, 9, 1> res_p, res_m;
+        Eigen::Matrix<float, 9, 6> J_dummy;
+        fm.evaluate(t, R_p, res_p, J_dummy);
+        fm.evaluate(t, R_m, res_m, J_dummy);
+
+        J_numeric.col(3 + i) = (res_p - res_m) / (2.0f * FD_STEP_ANGULAR);
+    }
+}
+
+static float max_rel_error_cols(const Eigen::Matrix<float, 9, 6>& A,
+                                 const Eigen::Matrix<float, 9, 6>& N,
+                                 int col_lo, int col_hi) {
     float e = 0.0f;
-    for (int c = 0; c < 3; ++c)
+    for (int c = col_lo; c < col_hi; ++c)
         for (int r = 0; r < 9; ++r)
-            e = std::max(e, rel_error(J(r, c), J_numeric(r, c)));
+            e = std::max(e, rel_error(A(r, c), N(r, c)));
+    return e;
+}
+
+void test_forward_model_jacobian_translation(void) {
+    // See BASE_ROTATION_AXIS definition above for why this uses a
+    // non-identity R rather than the true rest pose.
+    Mat3 R = exp_so3(BASE_ROTATION_AXIS);
+    Eigen::Matrix<float, 9, 6> J, J_numeric;
+    compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
+
+    char msg[128];
+    float e = max_rel_error_cols(J, J_numeric, 0, 3);
     snprintf(msg, sizeof(msg), "J_trans mismatch, max rel err %.5f", e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
 
 void test_forward_model_jacobian_rotation(void) {
-    MagnetModel magnets[3] = {
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
-    };
-    ForwardModel fm(SENSOR_POS, magnets);
-
-    // Use a non-identity base rotation so we're not accidentally testing
-    // only a degenerate case.
-    Vec3 base_axis(0.3f, -0.5f, 0.2f);
-    Mat3 R = exp_so3(base_axis);
-
-    Vec3 measured[3] = { Vec3(10.0f, 5.0f, -3.0f),
-                         Vec3(-4.0f, 8.0f,  2.0f),
-                         Vec3( 1.0f,-6.0f,  7.0f) };
-
-    Eigen::Matrix<float, 9, 1> residual0;
-    Eigen::Matrix<float, 9, 6> J;
-    fm.evaluate(BASE_T, R, measured, residual0, J);
-
-    Eigen::Matrix<float, 9, 6> J_numeric = Eigen::Matrix<float, 9, 6>::Zero();
-
-    for (int i = 0; i < 3; ++i) {
-        Vec3 dw = Vec3::Zero();
-        dw[i] = FD_STEP_ANGULAR;
-
-        Mat3 R_p = exp_so3(dw) * R;    // exact exponential perturbation
-        Mat3 R_m = exp_so3(-dw) * R;
-
-        Eigen::Matrix<float, 9, 1> res_p, res_m;
-        Eigen::Matrix<float, 9, 6> J_dummy;
-        fm.evaluate(BASE_T, R_p, measured, res_p, J_dummy);
-        fm.evaluate(BASE_T, R_m, measured, res_m, J_dummy);
-
-        J_numeric.col(3 + i) = (res_p - res_m) / (2.0f * FD_STEP_ANGULAR);
-    }
+    Mat3 R = exp_so3(BASE_ROTATION_AXIS);
+    Eigen::Matrix<float, 9, 6> J, J_numeric;
+    compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
 
     char msg[128];
-    float e = 0.0f;
-    for (int c = 3; c < 6; ++c)
-        for (int r = 0; r < 9; ++r)
-            e = std::max(e, rel_error(J(r, c), J_numeric(r, c)));
+    float e = max_rel_error_cols(J, J_numeric, 3, 6);
     snprintf(msg, sizeof(msg), "J_rot mismatch, max rel err %.5f", e);
+    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
+}
+
+void test_forward_model_jacobian_at_rest_pose(void) {
+    // The true physical rest pose: frames rotationally aligned (R =
+    // Identity), only the 6mm z-standoff as an offset. Checked
+    // separately from the generic-pose tests above because it's a real
+    // configuration the solver starts every tracking session from, not
+    // just a synthetic point chosen for FD-testing convenience.
+    Vec3 t_rest(0.0f, 0.0f, 6.0f);
+    Mat3 R_rest = Mat3::Identity();
+
+    Eigen::Matrix<float, 9, 6> J, J_numeric;
+    compute_forward_model_jacobians(t_rest, R_rest, J, J_numeric);
+
+    char msg[128];
+    float e = max_rel_error_cols(J, J_numeric, 0, 6);
+    snprintf(msg, sizeof(msg), "Full 9x6 J mismatch at rest pose, max rel err %.5f", e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
 
@@ -327,6 +360,7 @@ void setup() {
     RUN_TEST(test_magnet_model_jacobian_at_origin);
     RUN_TEST(test_forward_model_jacobian_translation);
     RUN_TEST(test_forward_model_jacobian_rotation);
+    RUN_TEST(test_forward_model_jacobian_at_rest_pose);
     UNITY_END();
 }
 
