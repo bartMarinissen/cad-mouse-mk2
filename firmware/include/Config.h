@@ -4,7 +4,7 @@
 
 namespace Config {
 
-const bool ENABLE_TELEMETRY = true;
+const bool ENABLE_TELEMETRY = false;
 
 // Hardware pins (XIAO RP2040)
 const int PIN_RIGHT_BTN = D0;
@@ -32,8 +32,8 @@ const float GAIN_R[3] = {800.0, 1000.0, 900.0};
 const int SIGN_AXIS[6] = {+1, -1, -1, +1, +1, -1};
 
 // Dead zones
-const float DEAD_T = 10.0;
-const float DEAD_R = 15.0;
+const float DEAD_T = 10000.0;
+const float DEAD_R = 15000.0;
 
 // Smoothing
 const float SMOOTH_TAU_S = 0.08;

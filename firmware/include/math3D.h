@@ -3,6 +3,7 @@
 #include <ArduinoEigenDense.h>
 
 using Vec3 = Eigen::Vector3f;
+using Vec2 = Eigen::Vector2f;
 using Mat3 = Eigen::Matrix3f;
 
 inline Vec3 pow_magnitude(Vec3 const &vec, float power) {

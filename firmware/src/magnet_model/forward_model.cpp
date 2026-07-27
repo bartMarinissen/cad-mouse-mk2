@@ -19,7 +19,7 @@ void ForwardModel::evaluate(const Vec3& t,
         Vec3 v = sensors_[i] - t;
         
         // 2. Transform to local knob frame
-        Vec3 magnet_pos_knob = magnets_[i].get_m_local();
+        Vec3 magnet_pos_knob = magnets_[i].magnet_pos_knob;
         Vec3 sensor_pos_knob = R_T * (sensors_[i] - t);
         Vec3 sensor_magnet_rel = sensor_pos_knob - magnet_pos_knob;
 

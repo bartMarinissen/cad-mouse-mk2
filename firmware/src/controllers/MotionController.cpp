@@ -78,6 +78,38 @@ float MotionController::axisBaseDead(int i) {
   return (i < 3) ? Config::DEAD_T : Config::DEAD_R;
 }
 
+// Extracts Z-Y-X Euler angles (Yaw, Pitch, Roll) from a rotation matrix.
+// Forces Pitch into the human-intuitive [-90, +90] degree range to prevent 180-deg flips.
+Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
+    float pitch, roll, yaw;
+
+    // R(row, col)
+    // Check for Gimbal Lock (when Pitch approaches exactly +/- 90 degrees)
+    if (R(2, 0) < -0.999f) { 
+        pitch = M_PI / 2.0f; // +90 degrees
+        roll = 0.0f;
+        yaw = std::atan2(R(0, 1), R(0, 2));
+    } 
+    else if (R(2, 0) > 0.999f) {
+        pitch = -M_PI / 2.0f; // -90 degrees
+        roll = 0.0f;
+        yaw = std::atan2(-R(0, 1), -R(0, 2));
+    } 
+    else {
+        // Standard extraction
+        // asin() strictly bounds the pitch between -pi/2 and +pi/2 (-90 to +90 deg)
+        pitch = std::asin(-R(2, 0));
+        
+        // atan2 determines the correct quadrant for roll and yaw based on the bounded pitch
+        roll = std::atan2(R(2, 1), R(2, 2));
+        yaw  = std::atan2(R(1, 0), R(0, 0));
+    }
+
+    // Return in radians [Yaw, Pitch, Roll] or [Pitch, Roll, Yaw] depending on your preference
+    // Here returning [Pitch, Roll, Yaw] 
+    return Vec3(pitch, roll, yaw)* (180.0f / M_PI); 
+}
+
 
 void MotionController::compute(const float raw[9], const float baseline[9], float dt,
                                float out[6]) {
@@ -98,26 +130,24 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   const float ty = sensAvg[1];
   const float tz = sensAvg[2];
 
-  Vec3 zeros[3] = {Vec3::Zero(),Vec3::Zero(),Vec3::Zero()};
+  
   Vec3 measured[3] = {raw1, raw2, raw3};
-  forward_model.evaluate({0.0, 0.0, 5.4}, Mat3::Identity(), B_field, J);
-
-  Serial.printf("Predicted\n%3.3f %f %f\n%f %f %f\n%f %f %f\n", 
-    B_field[0], B_field[1], B_field[2], 
-    B_field[3], B_field[4], B_field[5], 
-    B_field[6], B_field[7], B_field[8]
-  );
-
   Vec3 t = Vec3(0.0, 0.0, 5.4);
   Mat3 R = Mat3::Identity();
   solve_knob_pose(t, R, forward_model, measured);
-  Serial.printf("pose found: t= %f %f %f ", t[0], t[1], t[2]);
+  Vec3 rot = extract_angles_robust(R);
+  Serial.printf("pose found: t= %f %f %f r= %f %f %f ", t[0], t[1], t[2], rot[0], rot[1], rot[2]);
 
-  Serial.printf("Measured\n%f %f %f\n%f %f %f\n%f %f %f\n", 
-    raw[0], raw[1], raw[2], 
-    raw[3], raw[4], raw[5], 
-    raw[6], raw[7], raw[8]
-  );
+  forward_model.evaluate(t, R, B_field, J);
+
+  B_field.block<3, 1>(0, 0) -= measured[0];
+  B_field.block<3, 1>(3, 0) -= measured[1];
+  B_field.block<3, 1>(6, 0) -= measured[2];
+
+
+
+  Serial.printf("\nResidual field: %3.3f\n", B_field.norm());
+
 
   // Physical PCB layout:
   // MAG2 = top left, MAG3 = top right, MAG1 = bottom.

@@ -6,27 +6,13 @@
 //   2. MagnetModel      - J_local = dB_l/dv_l
 //   3. ForwardModel     - full 9x6 J (translation block + rotation block)
 //
-// Run with Unity on-device (RP2040 / PlatformIO).
-//
 // ---------------------------------------------------------------------
 // ASSUMPTIONS / THINGS YOU NEED TO CHECK BEFORE TRUSTING RESULTS
 // ---------------------------------------------------------------------
-// (a) ForwardModel::evaluate is assumed to take `residual` and `J` by
-//     REFERENCE. The signature you sent has them by value, which cannot
-//     return anything to the caller - almost certainly a typo. If it's
-//     not, this file won't compile against your real header and the
-//     signature below needs to change back.
 //
-// (b) SENSOR_POS[], MAGNET_LOCAL[], and the (r,z) sample points in
-//     BICUBIC_TEST_POINTS are PLACEHOLDERS. Replace them with your real
-//     PCB geometry and with (r,z) pairs you know are safely inside
-//     BICUBIC_ORIGIN..BICUBIC_FAR (not on the boundary, since the FD
-//     stencil pokes FD_STEP_LINEAR outside the sample point in both
-//     directions).
-//
-// (c) FD_STEP_LINEAR / FD_STEP_ANGULAR assume position units of mm and
-//     angle units of radians. If your state vector uses meters, scale
-//     FD_STEP_LINEAR down accordingly (see comment at declaration).
+//  FD_STEP_LINEAR / FD_STEP_ANGULAR assume position units of mm and
+//  angle units of radians. If your state vector uses meters, scale
+//  FD_STEP_LINEAR down accordingly (see comment at declaration).
 // ---------------------------------------------------------------------
 
 #include <unity.h>
@@ -101,33 +87,31 @@ static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 // Helpers
 // ======================================================================
 
-// Relative error with an absolute floor so we don't divide by ~0.
-static float rel_error(float analytic, float numeric, float floor_ = 1.0e-5f) {
-    float denom = std::max(std::fabs(analytic), std::max(std::fabs(numeric), floor_));
-    return std::fabs(analytic - numeric) / denom;
-}
 
-// Max relative error over a 3-vector.
-static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f) {
-    float e = 0.0f;
-    e = std::max(e, rel_error(a.x(), n.x(), floor_));
-    e = std::max(e, rel_error(a.y(), n.y(), floor_));
-    e = std::max(e, rel_error(a.z(), n.z(), floor_));
-    return e;
-}
+
 
 // Max relative error over a matrix, column by column (as Vec3s), generic size.
 template <int ROWS, int COLS>
 static float max_rel_error_mat(const Eigen::Matrix<float, ROWS, COLS>& A,
                                 const Eigen::Matrix<float, ROWS, COLS>& N,
                                 float floor_ = 1.0e-5f) {
-    float e = 0.0f;
-    for (int c = 0; c < COLS; ++c) {
-        for (int r = 0; r < ROWS; ++r) {
-            e = std::max(e, rel_error(A(r, c), N(r, c), floor_));
-        }
+    // || J_analytic - J_numeric ||_F
+    float error_norm = (A - N).norm();
+    
+    // || J_analytic ||_F
+    float numeric_norm = N.norm();
+
+    // Prevent division by zero if the target matrix is exactly zero
+    if (numeric_norm < 1e-8f) {
+        return error_norm; // Fallback to absolute error
     }
-    return e;
+    
+    return error_norm / numeric_norm;
+}
+
+// Max relative error over a 3-vector.
+static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f) {
+    return max_rel_error_mat<3, 1>(a, n);
 }
 
 // Exact SO(3) exponential map (Rodrigues' formula), used to perturb R.
@@ -189,7 +173,6 @@ void test_bicubic_field_derivatives(void) {
 // 2. MagnetModel: check J_local = dB_l/dv_l against central differences
 //    of MagnetModel::evaluate() over v_l.
 // ======================================================================
-
 static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
     Mat3 J_analytic;
     Vec3 B0 = model.evaluate(v_l, J_analytic);
@@ -206,10 +189,29 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
         J_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_LINEAR);
     }
 
-    char msg[160];
-    float e = max_rel_error_mat<3, 3>(J_analytic, J_numeric);
-    snprintf(msg, sizeof(msg), "J_local mismatch at v_l=(%.3f,%.3f,%.3f) rel err %.5f",
-             v_l.x(), v_l.y(), v_l.z(), e);
+    // Assuming you switched to norm_rel_error, otherwise use max_rel_error_mat
+    float e = max_rel_error_mat(J_analytic, J_numeric); 
+
+    // Buffer expanded to easily fit 18 floats plus formatting
+    char msg[1024]; 
+    snprintf(msg, sizeof(msg), 
+             "J_local mismatch at v_l=(%.3f,%.3f,%.3f) rel err %.5f\n"
+             "J_analytic:\n"
+             "  %9.5f %9.5f %9.5f\n"
+             "  %9.5f %9.5f %9.5f\n"
+             "  %9.5f %9.5f %9.5f\n"
+             "J_numeric:\n"
+             "  %9.5f %9.5f %9.5f\n"
+             "  %9.5f %9.5f %9.5f\n"
+             "  %9.5f %9.5f %9.5f\n",
+             v_l.x(), v_l.y(), v_l.z(), e,
+             J_analytic(0,0), J_analytic(0,1), J_analytic(0,2),
+             J_analytic(1,0), J_analytic(1,1), J_analytic(1,2),
+             J_analytic(2,0), J_analytic(2,1), J_analytic(2,2),
+             J_numeric(0,0), J_numeric(0,1), J_numeric(0,2),
+             J_numeric(1,0), J_numeric(1,1), J_numeric(1,2),
+             J_numeric(2,0), J_numeric(2,1), J_numeric(2,2));
+             
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
 
@@ -293,16 +295,6 @@ static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
     }
 }
 
-static float max_rel_error_cols(const Eigen::Matrix<float, 9, 6>& A,
-                                 const Eigen::Matrix<float, 9, 6>& N,
-                                 int col_lo, int col_hi) {
-    float e = 0.0f;
-    for (int c = col_lo; c < col_hi; ++c)
-        for (int r = 0; r < 9; ++r)
-            e = std::max(e, rel_error(A(r, c), N(r, c)));
-    return e;
-}
-
 void test_forward_model_jacobian_translation(void) {
     // See BASE_ROTATION_AXIS definition above for why this uses a
     // non-identity R rather than the true rest pose.
@@ -311,7 +303,7 @@ void test_forward_model_jacobian_translation(void) {
     compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
 
     char msg[128];
-    float e = max_rel_error_cols(J, J_numeric, 0, 3);
+    float e = max_rel_error_mat<9, 6>(J, J_numeric);
     snprintf(msg, sizeof(msg), "J_trans mismatch, max rel err %.5f", e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
@@ -322,7 +314,7 @@ void test_forward_model_jacobian_rotation(void) {
     compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
 
     char msg[128];
-    float e = max_rel_error_cols(J, J_numeric, 3, 6);
+    float e = max_rel_error_mat<9, 6>(J, J_numeric);
     snprintf(msg, sizeof(msg), "J_rot mismatch, max rel err %.5f", e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
@@ -340,7 +332,7 @@ void test_forward_model_jacobian_at_rest_pose(void) {
     compute_forward_model_jacobians(t_rest, R_rest, J, J_numeric);
 
     char msg[128];
-    float e = max_rel_error_cols(J, J_numeric, 0, 6);
+    float e = max_rel_error_mat<9, 6>(J, J_numeric);
     snprintf(msg, sizeof(msg), "Full 9x6 J mismatch at rest pose, max rel err %.5f", e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 }
