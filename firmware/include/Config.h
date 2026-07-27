@@ -51,4 +51,6 @@ const unsigned long LED_ERROR_COLOR = 0xFF0000;
 // FSM timing
 const long IDLE_SLEEP_TIMEOUT_MS = 2 * 60 * 1000;
 
+const float magnet_gains[3] = {0.9f, 1.0f, 0.95f};
+
 }  // namespace Config

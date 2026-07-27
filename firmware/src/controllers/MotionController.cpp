@@ -16,13 +16,13 @@ MagnetModel magnets[3] = {
   MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_2_knob),
   MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_3_knob),
 };
-const Vec3 sensor_positions[3] = {
-  Positions::sensor_1_world,
-  Positions::sensor_2_world,
-  Positions::sensor_3_world,
+const Sensor sensors[3] = {
+  Sensor(Positions::sensor_1_world, Config::magnet_gains[0] * Mat3::Identity()),
+  Sensor(Positions::sensor_2_world, Config::magnet_gains[1] * Mat3::Identity()),
+  Sensor(Positions::sensor_3_world, Config::magnet_gains[2] * Mat3::Identity()),
 };
 ForwardModel forward_model(
-  sensor_positions, magnets
+  sensors, magnets
 );
 
 Eigen::Matrix<float, 9, 6> J;

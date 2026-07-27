@@ -140,25 +140,25 @@ static Mat3 exp_so3(const Vec3& w) {
 // ======================================================================
 
 static void check_bicubic_point(float r0, float z0) {
-    Vec3 val0, ddr0, ddz0;
+    Vec2 val0, ddr0, ddz0;
     CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, val0, ddr0, ddz0);
 
-    Vec3 val_rp, val_rm, dummy_a, dummy_b;
+    Vec2 val_rp, val_rm, dummy_a, dummy_b;
     CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, val_rp, dummy_a, dummy_b);
     CALCULATED_BICUBIC_FIELD.evaluate(r0 - FD_STEP_LINEAR, z0, val_rm, dummy_a, dummy_b);
-    Vec3 ddr_num = (val_rp - val_rm) / (2.0f * FD_STEP_LINEAR);
+    Vec2 ddr_num = (val_rp - val_rm) / (2.0f * FD_STEP_LINEAR);
 
-    Vec3 val_zp, val_zm;
+    Vec2 val_zp, val_zm;
     CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 + FD_STEP_LINEAR, val_zp, dummy_a, dummy_b);
     CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 - FD_STEP_LINEAR, val_zm, dummy_a, dummy_b);
-    Vec3 ddz_num = (val_zp - val_zm) / (2.0f * FD_STEP_LINEAR);
+    Vec2 ddz_num = (val_zp - val_zm) / (2.0f * FD_STEP_LINEAR);
 
     char msg[128];
-    float e_dr = max_rel_error(ddr0, ddr_num);
+    float e_dr = max_rel_error_mat(ddr0, ddr_num);
     snprintf(msg, sizeof(msg), "d_dr mismatch at r=%.3f z=%.3f (rel err %.5f)", r0, z0, e_dr);
     TEST_ASSERT_TRUE_MESSAGE(e_dr < 0.01f, msg);
 
-    float e_dz = max_rel_error(ddz0, ddz_num);
+    float e_dz = max_rel_error_mat(ddz0, ddz_num);
     snprintf(msg, sizeof(msg), "d_dz mismatch at r=%.3f z=%.3f (rel err %.5f)", r0, z0, e_dz);
     TEST_ASSERT_TRUE_MESSAGE(e_dz < 0.01f, msg);
 }
@@ -258,7 +258,12 @@ static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
     };
-    ForwardModel fm(SENSOR_POS, magnets);
+    Sensor sensors[3] = {
+        Sensor(SENSOR_POS[0]),
+        Sensor(SENSOR_POS[1]),
+        Sensor(SENSOR_POS[2]),
+    };
+    ForwardModel fm(sensors, magnets);
 
     Eigen::Matrix<float, 9, 1> residual0;
     fm.evaluate(t, R, residual0, J_analytic);
