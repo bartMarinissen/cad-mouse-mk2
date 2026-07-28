@@ -24,6 +24,12 @@ void IdleState::runMotionPipeline(float dt, unsigned long now) {
   float raw[9] = {};
   sensorController.readRaw(raw);
 
+  // Serial.printf(
+  // "s1: %f %f %f \ns2: %f %f %f \ns3: %f %f %f \n", 
+  // raw[0], raw[1], raw[2],
+  // raw[3], raw[4], raw[5],
+  // raw[6], raw[7], raw[8]
+  // );
   float motion[6] = {};
   motionController.compute(raw, sensorController.baseline(), dt, motion);
 

@@ -32,7 +32,7 @@ void Sensor::evaluate(const MagnetModel &magnet, const Vec3& t,
     B_field_global = R_mag * B_local;
 
     // 4. Rotate field back to global frame to get the field as measured by the sensors
-    B_field_global = R *  B_local;
+    B_field_global = R * B_field_global;
     
     // 6. Assemble the Jacobian blocks
     Mat3 M = R * J_local * R_T;

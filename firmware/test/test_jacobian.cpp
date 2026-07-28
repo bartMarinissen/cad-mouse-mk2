@@ -31,8 +31,8 @@
 // cbrt(machine_eps) ~ 5e-3 in relative terms. Pick these relative to the
 // physical scale of your problem (magnet is 6mm, so mm-scale steps of
 // 1e-3 mm are ~1/6000 of the part size - reasonable).
-static constexpr float FD_STEP_LINEAR  = 1.0e-3f;   // mm (or your length unit)
-static constexpr float FD_STEP_ANGULAR = 1.0e-3f;   // radians
+static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm (or your length unit)
+static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
 // Valid domain per BICUBIC_ORIGIN=(0.0,-12.0), BICUBIC_FAR=(6.0,-0.5):
@@ -239,29 +239,29 @@ void test_magnet_model_jacobian_at_origin(void) {
 }
 
 // ======================================================================
-// 3. ForwardModel: check the full 9x6 J against central differences of
-//    the residual itself (not the predicted field). Differencing the
-//    residual directly means we don't need to know or assume the sign
-//    convention (residual = measured - predicted vs predicted - measured)
-//    - whatever convention evaluate() uses internally, J should match
-//    d(residual)/d(pose) exactly.
+// 3. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
-// Shared setup + FD computation for a given (t, R) pose. Fills J_analytic
-// and J_numeric (all 6 columns) so callers can check whichever block(s)
-// they care about.
-static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
-                                             Eigen::Matrix<float, 9, 6>& J_analytic,
-                                             Eigen::Matrix<float, 9, 6>& J_numeric) {
+// Updated to accept hardware calibration states
+static void compute_forward_model_jacobians(
+        const Vec3& t, const Mat3& R,
+        const Mat3 sensor_gains[3],
+        const Mat3 magnet_rotations[3],
+        Eigen::Matrix<float, 9, 6>& J_analytic,
+        Eigen::Matrix<float, 9, 6>& J_numeric) {
+            
     MagnetModel magnets[3] = {
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
+        // Note: Update these constructors or setters to match your actual MagnetModel API
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2]),
     };
+    
     Sensor sensors[3] = {
-        Sensor(SENSOR_POS[0]),
-        Sensor(SENSOR_POS[1]),
-        Sensor(SENSOR_POS[2]),
+        // Note: Update to match your actual Sensor API
+        Sensor(SENSOR_POS[0], sensor_gains[0]),
+        Sensor(SENSOR_POS[1], sensor_gains[1]),
+        Sensor(SENSOR_POS[2], sensor_gains[2]),
     };
     ForwardModel fm(sensors, magnets);
 
@@ -270,7 +270,7 @@ static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
 
     J_numeric = Eigen::Matrix<float, 9, 6>::Zero();
 
-    // Translation columns (0..2): straightforward Euclidean perturbation.
+    // Translation columns (0..2)
     for (int i = 0; i < 3; ++i) {
         Vec3 dt = Vec3::Zero();
         dt[i] = FD_STEP_LINEAR;
@@ -283,7 +283,7 @@ static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
         J_numeric.col(i) = (res_p - res_m) / (2.0f * FD_STEP_LINEAR);
     }
 
-    // Rotation columns (3..5): exact exponential-map perturbation of R.
+    // Rotation columns (3..5)
     for (int i = 0; i < 3; ++i) {
         Vec3 dw = Vec3::Zero();
         dw[i] = FD_STEP_ANGULAR;
@@ -300,46 +300,98 @@ static void compute_forward_model_jacobians(const Vec3& t, const Mat3& R,
     }
 }
 
-void test_forward_model_jacobian_translation(void) {
-    // See BASE_ROTATION_AXIS definition above for why this uses a
-    // non-identity R rather than the true rest pose.
-    Mat3 R = exp_so3(BASE_ROTATION_AXIS);
-    Eigen::Matrix<float, 9, 6> J, J_numeric;
-    compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
-
-    char msg[128];
-    float e = max_rel_error_mat<9, 6>(J, J_numeric);
-    snprintf(msg, sizeof(msg), "J_trans mismatch, max rel err %.5f", e);
-    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
+// Generate a sample sensor gain matrix (diagonal scale + skew)
+static Mat3 make_sensor_gain(float s_xy, float s_z, float skew) {
+    Mat3 G = Mat3::Identity();
+    // Diagonal scaling
+    G(0,0) = s_xy; 
+    G(1,1) = s_xy; 
+    G(2,2) = s_z;
+    // Cross-axis skew
+    G(0,1) = skew; 
+    G(1,2) = skew;
+    return G;
 }
 
-void test_forward_model_jacobian_rotation(void) {
-    Mat3 R = exp_so3(BASE_ROTATION_AXIS);
-    Eigen::Matrix<float, 9, 6> J, J_numeric;
-    compute_forward_model_jacobians(BASE_T, R, J, J_numeric);
+// The Massive Grid Test
+void test_forward_model_jacobian_grid(void) {
+    // 1. Define Calibration Scenarios
+    // Scenario A: Perfect Hardware
+    Mat3 gains_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
+    Mat3 tilts_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
 
-    char msg[128];
-    float e = max_rel_error_mat<9, 6>(J, J_numeric);
-    snprintf(msg, sizeof(msg), "J_rot mismatch, max rel err %.5f", e);
-    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
-}
+    // Scenario B: Realistic Manufacturing Tolerances
+    Mat3 gains_real[3] = {
+        make_sensor_gain(1.05f, 0.95f,  0.02f),
+        make_sensor_gain(0.98f, 1.02f, -0.01f),
+        make_sensor_gain(1.01f, 1.00f,  0.03f)
+    };
+    Mat3 tilts_real[3] = {
+        exp_so3(Vec3( 0.03f, -0.02f,  0.01f)), // ~2 deg tilt
+        exp_so3(Vec3(-0.01f,  0.04f,  0.00f)),
+        exp_so3(Vec3( 0.02f,  0.01f, -0.03f))
+    };
 
-void test_forward_model_jacobian_at_rest_pose(void) {
-    // The true physical rest pose: frames rotationally aligned (R =
-    // Identity), only the 6mm z-standoff as an offset. Checked
-    // separately from the generic-pose tests above because it's a real
-    // configuration the solver starts every tracking session from, not
-    // just a synthetic point chosen for FD-testing convenience.
-    Vec3 t_rest(0.0f, 0.0f, 6.0f);
-    Mat3 R_rest = Mat3::Identity();
+    struct HardwareState {
+        const Mat3* gains;
+        const Mat3* tilts;
+        const char* name;
+    };
+    HardwareState hw_states[] = {
+        { gains_perfect, tilts_perfect, "Ideal Hardware" },
+        { gains_real, tilts_real, "Distorted Hardware" }
+    };
 
-    Eigen::Matrix<float, 9, 6> J, J_numeric;
-    compute_forward_model_jacobians(t_rest, R_rest, J, J_numeric);
+    // 2. Define Pose Grid Bounds
+    // Translations (mm) - kept small to avoid pushing local coordinates out of the [0, 6] r-bounds
+    float t_x_steps[] = { -3.0f, -1.5f, 0.0f, 1.2f };
+    float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
+    // Z is the vertical standoff (rest is 6.0mm)
+    float t_z_steps[] = { 8.0f,  6.0f, 4.3f, 2.5f }; 
+    
+    // Rotations (axis-angle vectors)
+    Vec3 rot_steps[] = {
+        Vec3(0.0f, 0.0f, 0.0f),         // Rest
+        Vec3(0.08f, -0.05f, 0.02f),     // Tilted X/Y, slight Yaw
+        Vec3(-0.04f, 0.07f, -0.06f)     // Opposite tilt
+    };
 
-    char msg[128];
-    float e = max_rel_error_mat<9, 6>(J, J_numeric);
-    snprintf(msg, sizeof(msg), "Full 9x6 J mismatch at rest pose, max rel err %.5f", e);
-    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
+    int total_tests = 0;
+    int passed_tests = 0;
+    char msg[256];
+
+    // 3. Run the Sweep
+    for (const auto& hw : hw_states) {
+        for (float tx : t_x_steps) {
+            for (float ty : t_y_steps) {
+                for (float tz : t_z_steps) {
+                    for (const Vec3& r_vec : rot_steps) {
+                        
+                        Vec3 t(tx, ty, tz);
+                        Mat3 R = exp_so3(r_vec);
+                        
+                        Eigen::Matrix<float, 9, 6> J_analytic, J_numeric;
+                        compute_forward_model_jacobians(t, R, hw.gains, hw.tilts, J_analytic, J_numeric);
+
+                        float e = max_rel_error_mat<9, 6>(J_analytic, J_numeric);
+                        
+                        snprintf(msg, sizeof(msg), 
+                                 "[%s] J mismatch at t=(%.2f, %.2f, %.2f). r=(%.2f, %.2f, %.2f) Max rel err: %.5f", 
+                                 hw.name, tx, ty, tz, r_vec[0], r_vec[1], r_vec[2], e);
+                        
+                        TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg); // slightly looser tolerance for highly skewed combos
+                        
+                        total_tests++;
+                        passed_tests++;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Optional: Print a summary to the serial monitor so you know it actually ran all of them
+    snprintf(msg, sizeof(msg), "Grid sweep complete: %d/%d points passed.", passed_tests, total_tests);
+    TEST_MESSAGE(msg);
 }
 
 // ======================================================================
@@ -355,9 +407,7 @@ void setup() {
     RUN_TEST(test_bicubic_field_derivatives);
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
-    RUN_TEST(test_forward_model_jacobian_translation);
-    RUN_TEST(test_forward_model_jacobian_rotation);
-    RUN_TEST(test_forward_model_jacobian_at_rest_pose);
+    RUN_TEST(test_forward_model_jacobian_grid);
     UNITY_END();
 }
 

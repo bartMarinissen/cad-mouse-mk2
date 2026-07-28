@@ -38,6 +38,13 @@ void solve_knob_pose(
         // 3. Solve the 6x6 linear system
         Vector6f dx = H.ldlt().solve(g);
 
+        if (!dx.allFinite()) {
+            // Math collapsed (NaN or Inf). Reject update and abort solver.
+            Serial.println("NAN ERROR");
+            delay(1000);
+            break; 
+        }
+
         // 4. Check for convergence
         if (dx.norm() < TOLERANCE) {
             break; 

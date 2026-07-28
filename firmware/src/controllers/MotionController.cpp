@@ -6,6 +6,9 @@
 #include <Arduino.h>
 #include <math.h>
 
+// #include <sstream>
+// #include <string>
+
 #include "Config.h"
 #include <magnet_model/solve_pose.h>
 
@@ -120,6 +123,12 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   const Vec3 raw2 = Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]);
   const Vec3 raw3 = Vec3(raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]);
 
+  Eigen::Matrix<float, 3, 3> raw_full;
+  raw_full <<
+    raw[RAW_MAG1_X] , raw[RAW_MAG1_Y], raw[RAW_MAG1_Z] ,
+    raw[RAW_MAG2_X] , raw[RAW_MAG2_Y], raw[RAW_MAG2_Z] , 
+    raw[RAW_MAG3_X] , raw[RAW_MAG3_Y], raw[RAW_MAG3_Z] ;
+
   const Vec3 sens1 = pow_magnitude(raw1, -0.3333333333) - pow_magnitude(baseline1, -0.333333333);
   const Vec3 sens2 = pow_magnitude(raw2, -0.3333333333) - pow_magnitude(baseline2, -0.333333333);
   const Vec3 sens3 = pow_magnitude(raw3, -0.3333333333) - pow_magnitude(baseline3, -0.333333333);
@@ -130,13 +139,21 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   const float ty = sensAvg[1];
   const float tz = sensAvg[2];
 
+  // std::stringstream ss;
+  // ss << std::endl << raw_full << std::endl ;
+  // std::string str = ss.str();
+  // Serial.printf(str.c_str());
+  // delay(500);
   
   Vec3 measured[3] = {raw1, raw2, raw3};
   Vec3 t = Vec3(0.0, 0.0, 5.4);
   Mat3 R = Mat3::Identity();
+  //
+  // Actual solve (not yet used)
+  //
   solve_knob_pose(t, R, forward_model, measured);
   Vec3 rot = extract_angles_robust(R);
-  Serial.printf("pose found: t= %f %f %f r= %f %f %f ", t[0], t[1], t[2], rot[0], rot[1], rot[2]);
+  Serial.printf("\n\npose found: t= %f %f %f r= %f %f %f ", t[0], t[1], t[2], rot[0], rot[1], rot[2]);
 
   forward_model.evaluate(t, R, B_field, J);
 
@@ -145,8 +162,10 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
   B_field.block<3, 1>(6, 0) -= measured[2];
 
 
-
-  Serial.printf("\nResidual field: %3.3f\n", B_field.norm());
+  Serial.printf(
+    "\nResidual field: %3.3f\n, measured field: %3.3f, ratio: %1.4f\n", 
+    B_field.norm(), raw_full.norm(),  B_field.norm()/raw_full.norm()
+  );
 
 
   // Physical PCB layout:
