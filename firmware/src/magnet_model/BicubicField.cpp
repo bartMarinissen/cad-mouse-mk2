@@ -7,10 +7,10 @@
 
 // Value and gradient (d/dr, d/dz, each a Vec2) at (r, z). Never
 // throws; 
-void BicubicField::evaluate(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_dz) const noexcept {
+void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_dz) const noexcept {
     // coordinates within bounding box
-    const float fi = (r - origin_.r) / dr_;
-    const float fj = (z - origin_.z) / dz_;
+    const float fi = (r - origin_.r) * dr_reciprocal_;
+    const float fj = (z - origin_.z) * dz_reciprocal_;
 
     // rounded to integers in the valid range with remainders in t and u
     // note t and u can be outside [0, 1] if (r, z) is outside the bounding box
@@ -29,7 +29,7 @@ void BicubicField::evaluate(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_d
         const Vec2 p3 = point_or_ghost(i0 + 2, jj);
         row[k]       = cubic(p0, p1, p2, p3, t);
         // d_row / dr = d_row / dt * dt / dr = cubic_deriv(...) / dr
-        row_deriv[k] = cubic_deriv(p0, p1, p2, p3, t) / dr_;
+        row_deriv[k] = cubic_deriv(p0, p1, p2, p3, t) * dr_reciprocal_;
     }
     // now do another 1d cubic interpolation in z on the 4 results from above
     value = cubic(row[0], row[1], row[2], row[3], u);
@@ -38,7 +38,7 @@ void BicubicField::evaluate(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_d
     d_dr  = cubic(row_deriv[0], row_deriv[1], row_deriv[2], row_deriv[3], u);
     // row[i] is independent of z so no chain-rule chenanigans
     // dvalue / dz = dvalue / du * du / dz = cubic_deriv(...) / dz
-    d_dz  = cubic_deriv(row[0], row[1], row[2], row[3], u) / dz_;
+    d_dz  = cubic_deriv(row[0], row[1], row[2], row[3], u) * dz_reciprocal_;
 }
 
 // --- small constexpr helpers ------------------------------------

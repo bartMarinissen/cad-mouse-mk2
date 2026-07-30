@@ -20,9 +20,9 @@ MagnetModel magnets[3] = {
   MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_3_knob),
 };
 const Sensor sensors[3] = {
-  Sensor(Positions::sensor_1_world, Config::magnet_gains[0] * Mat3::Identity()),
-  Sensor(Positions::sensor_2_world, Config::magnet_gains[1] * Mat3::Identity()),
-  Sensor(Positions::sensor_3_world, Config::magnet_gains[2] * Mat3::Identity()),
+  Sensor(Positions::sensor_1_world),
+  Sensor(Positions::sensor_2_world),
+  Sensor(Positions::sensor_3_world),
 };
 ForwardModel forward_model(
   sensors, magnets
@@ -59,6 +59,14 @@ void MotionController::reset() {
     filt_[i] = 0.0;
   }
   motionActive_ = false;
+  last_pos = base_pos = Positions::approx_rest_pos;
+  last_rot = base_rot = Vec3::Zero();
+  statistics.reset();
+}
+
+void MotionController::set_base_pose(const Vec3 pos, const Vec3 rot){
+  last_pos = base_pos = pos;
+  last_rot = base_rot = rot;
 }
 
 float MotionController::clampf(float v, float lo, float hi) {
@@ -113,12 +121,8 @@ Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
     return Vec3(pitch, roll, yaw)* (180.0f / M_PI); 
 }
 
-
-void MotionController::compute(const float raw[9], const float baseline[9], float dt,
-                               float out[6]) {
-  const Vec3 baseline1 = Vec3(baseline[RAW_MAG1_X], baseline[RAW_MAG1_Y], baseline[RAW_MAG1_Z]);
-  const Vec3 baseline2 = Vec3(baseline[RAW_MAG2_X], baseline[RAW_MAG2_Y], baseline[RAW_MAG2_Z]);
-  const Vec3 baseline3 = Vec3(baseline[RAW_MAG3_X], baseline[RAW_MAG3_Y], baseline[RAW_MAG3_Z]);
+// Return residual and other quality reports
+float MotionController::read_pose(const float raw[9], Vec3 &position, Vec3 &rot_degrees){
   const Vec3 raw1 = Vec3(raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]);
   const Vec3 raw2 = Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]);
   const Vec3 raw3 = Vec3(raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]);
@@ -129,86 +133,59 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
     raw[RAW_MAG2_X] , raw[RAW_MAG2_Y], raw[RAW_MAG2_Z] , 
     raw[RAW_MAG3_X] , raw[RAW_MAG3_Y], raw[RAW_MAG3_Z] ;
 
-  const Vec3 sens1 = pow_magnitude(raw1, -0.3333333333) - pow_magnitude(baseline1, -0.333333333);
-  const Vec3 sens2 = pow_magnitude(raw2, -0.3333333333) - pow_magnitude(baseline2, -0.333333333);
-  const Vec3 sens3 = pow_magnitude(raw3, -0.3333333333) - pow_magnitude(baseline3, -0.333333333);
-
-  // Translation:
-  const Vec3 sensAvg = (sens1 + sens2 + sens3) * (1.0f / 3.0f);
-  const float tx = sensAvg[0];
-  const float ty = sensAvg[1];
-  const float tz = sensAvg[2];
 
   // std::stringstream ss;
   // ss << std::endl << raw_full << std::endl ;
   // std::string str = ss.str();
   // Serial.printf(str.c_str());
   // delay(500);
+
+  Vector9f *residual_vec_ptr = Config::statistics ? &statistics.last_residual : nullptr;
+  Matrix9x6f *jacobian_ptr   = Config::statistics ? &statistics.last_jacobian : nullptr;
   
   Vec3 measured[3] = {raw1, raw2, raw3};
-  Vec3 t = Vec3(0.0, 0.0, 5.4);
+  // TODO initalize this with the value from rot_degrees
   Mat3 R = Mat3::Identity();
   //
   // Actual solve (not yet used)
   //
-  solve_knob_pose(t, R, forward_model, measured);
-  Vec3 rot = extract_angles_robust(R);
-  Serial.printf("\n\npose found: t= %f %f %f r= %f %f %f ", t[0], t[1], t[2], rot[0], rot[1], rot[2]);
-
-  forward_model.evaluate(t, R, B_field, J);
-
-  B_field.block<3, 1>(0, 0) -= measured[0];
-  B_field.block<3, 1>(3, 0) -= measured[1];
-  B_field.block<3, 1>(6, 0) -= measured[2];
-
-
-  Serial.printf(
-    "\nResidual field: %3.3f\n, measured field: %3.3f, ratio: %1.4f\n", 
-    B_field.norm(), raw_full.norm(),  B_field.norm()/raw_full.norm()
-  );
+  int before = millis();
+  float residual_magnitude = solve_knob_pose(position, R, forward_model, measured, residual_vec_ptr, jacobian_ptr);
+  int after = millis();
+  if (Config::statistics)
+    statistics.update(after - before);
+  // retrieve underlying angles
+  rot_degrees = extract_angles_robust(R);
+  return residual_magnitude;
+}
 
 
-  // Physical PCB layout:
-  // MAG2 = top left, MAG3 = top right, MAG1 = bottom.
-  const float mag2PosX = -0.5;
-  const float mag2PosY = sqrt(3.0) / 6.0;
+float MotionController::compute(const float raw[9], const float baseline[9], float dt,
+                               float out[6]) {
+  // hot start from previous value
 
-  const float mag3PosX = 0.5;
-  const float mag3PosY = sqrt(3.0) / 6.0;
+  // TODO: as a backup if this is a bad result, try the base position from calibration
+  float residual = read_pose(raw, last_pos, last_rot);
 
-  const float mag1PosX = 0.0;
-  const float mag1PosY = -sqrt(3.0) / 3.0;
+  Eigen::Matrix<float, 9, 1> raw_vec = Eigen::Matrix<float, 9, 1>(raw);
+  float residual_percent = 100 * residual / raw_vec.norm();
 
-  // Rotation estimates:
-  //   Ry = mag3z - mag2z
-  //     right sensor minus left sensor
-  //     -> side to side tilt across the top edge
-  //
-  //   Rx = sqrt(3) * (mag2z + mag3z - 2 * mag1z) / 3
-  //     top pair minus bottom sensor
-  //     -> front/back tilt of the triangle
-  const float rx = (sqrt(3.0) * (sens2[2] + sens3[2] - 2.0 * sens1[2])) / 3.0;
-  const float ry = (sens3[2] - sens2[2]);
-
-  //   Rz = sum_i (posXi * magYi - posYi * magXi)
-  // Each sensor contributes according to its x/y position in the triangle.
-  const float swirlNum =
-      (mag2PosX * sens2[1] - mag2PosY * sens2[0]) +
-      (mag3PosX * sens3[1] - mag3PosY * sens3[0]) +
-      (mag1PosX * sens1[1] - mag1PosY * sens1[0]);
-  const float rz = swirlNum;
+  Vec3 t   = last_pos - base_pos;
+  Vec3 rot = last_rot - base_rot;
 
   // Apply sign fixes and gains
   float y[6];
-  y[AXIS_TX] = Config::SIGN_AXIS[AXIS_TX] * tx * Config::GAIN_T[AXIS_TX];
-  y[AXIS_TY] = Config::SIGN_AXIS[AXIS_TY] * ty * Config::GAIN_T[AXIS_TY];
-  y[AXIS_TZ] = Config::SIGN_AXIS[AXIS_TZ] * tz * Config::GAIN_T[AXIS_TZ];
-  y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rx * Config::GAIN_R[AXIS_RX - 3];
-  y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * ry * Config::GAIN_R[AXIS_RY - 3];
-  y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rz * Config::GAIN_R[AXIS_RZ - 3];
+  y[AXIS_TX] = Config::SIGN_AXIS[AXIS_TX] * t[0] * Config::GAIN_T[AXIS_TX];
+  y[AXIS_TY] = Config::SIGN_AXIS[AXIS_TY] * t[1] * Config::GAIN_T[AXIS_TY];
+  y[AXIS_TZ] = Config::SIGN_AXIS[AXIS_TZ] * t[2] * Config::GAIN_T[AXIS_TZ];
+  // TODO: figure out why X and Y rotation here are flipped
+  y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rot[1] * Config::GAIN_R[AXIS_RX - 3];
+  y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * rot[0] * Config::GAIN_R[AXIS_RY - 3];
+  y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rot[2] * Config::GAIN_R[AXIS_RZ - 3];
+
+
   
  
-
   // Filter, clamp to range and dead zones.
   motionActive_ = false;
   for (int i = 0; i < 6; i++) {
@@ -227,6 +204,36 @@ void MotionController::compute(const float raw[9], const float baseline[9], floa
       motionActive_ = true;
     }
   }
+  return residual_percent;
 }
 
 bool MotionController::hasMotionActivity() const { return motionActive_; }
+
+void Statistics::update(int time_last){
+  // Update mean (first moment)
+  avg_residual *= smoothing;
+  avg_residual += (1 - smoothing) * last_residual;
+
+  avg_jacobian *= smoothing;
+  avg_jacobian += (1 - smoothing) * last_jacobian;
+
+  // Update second moment for variance calculation
+  avg_residual_sq *= smoothing;
+  avg_residual_sq += (1 - smoothing) * last_residual.cwiseProduct(last_residual);
+
+  time_tot += time_last;
+  n_time++;
+}
+
+void Statistics::reset(){
+  avg_residual = Vector9f::Zero();
+  avg_jacobian = Matrix9x6f::Zero();
+  avg_residual_sq= Vector9f::Zero();
+  last_residual = Vector9f::Zero();
+  last_jacobian= Matrix9x6f::Zero();
+}
+
+Vector9f Statistics::get_residual_stddev() const {
+  // Variance = E[X²] - E[X]²
+  return (avg_residual_sq - avg_residual.cwiseProduct(avg_residual)).cwiseSqrt();
+}

@@ -1,13 +1,26 @@
 #include "controllers/SensorController.h"
-
+#include "controllers/MotionController.h"
 #include "Config.h"
+// Need motion controller to get pose
+extern MotionController motionController;
+
 
 using namespace ifx::tlx493d;
 
 SensorController::SensorController()
     : mag1Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag2Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
-      mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e) {}
+      mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
+      sensor_gain_{
+        Config::magnet_gains[0] * Mat3::Identity(),
+        Config::magnet_gains[1] * Mat3::Identity(),
+        Config::magnet_gains[2] * Mat3::Identity(),
+      },
+      sensor_offset_mT_{
+        Vec3(Config::sensor_offset_mT[0][0], Config::sensor_offset_mT[0][1], Config::sensor_offset_mT[0][2]),
+        Vec3(Config::sensor_offset_mT[1][0], Config::sensor_offset_mT[1][1], Config::sensor_offset_mT[1][2]),
+        Vec3(Config::sensor_offset_mT[2][0], Config::sensor_offset_mT[2][1], Config::sensor_offset_mT[2][2]),
+      } {}
 
 void SensorController::powerOff(int pin) { digitalWrite(pin, LOW); }
 
@@ -29,7 +42,7 @@ bool SensorController::setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin,
     Serial.println("Failed to set sensor I2C address!");
     return false;
   }
-  res = sensor.setSensitivity(TLx493D_SHORT_RANGE_e);
+  res = sensor.setSensitivity(TLx493D_FULL_RANGE_e);
   if (!res) {
     Serial.println("Failed to set sensor sensitivity!");
     return false;
@@ -85,7 +98,7 @@ bool SensorController::begin() {
   return true;
 }
 
-void SensorController::readRaw(float out[9]) {
+void SensorController::readUncorrected(float out[9]) {
   double mag1x = 0, mag1y = 0, mag1z = 0, temp1 = 0;
   double mag2x = 0, mag2y = 0, mag2z = 0, temp2 = 0;
   double mag3x = 0, mag3y = 0, mag3z = 0, temp3 = 0;
@@ -106,6 +119,19 @@ void SensorController::readRaw(float out[9]) {
   out[8] = mag3z;
 }
 
+void SensorController::read_mT(float out[9]) {
+  float uncorrected[9];
+  readUncorrected(uncorrected);
+
+  for (int i = 0; i < 3; i++) {
+    Vec3 corrected = sensor_gain_[i] * Vec3(uncorrected[i * 3 + 0], uncorrected[i * 3 + 1], uncorrected[i * 3 + 2])
+                      - sensor_offset_mT_[i];
+    out[i * 3 + 0] = corrected[0];
+    out[i * 3 + 1] = corrected[1];
+    out[i * 3 + 2] = corrected[2];
+  }
+}
+
 void SensorController::beginCalibration() {
   calibrationActive_ = true;
   calibrationDone_ = false;
@@ -114,6 +140,8 @@ void SensorController::beginCalibration() {
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] = 0.0;
   }
+  calibration_pos = Vec3::Zero();
+  calibration_rot = Vec3::Zero();
 }
 
 void SensorController::updateCalibration() {
@@ -129,7 +157,19 @@ void SensorController::updateCalibration() {
   lastCalibrationSampleMs_ = now;
 
   float raw[9] = {};
-  readRaw(raw);
+  read_mT(raw);
+
+  Vec3 pos = Positions::approx_rest_pos - Vec3(0.1, 0.1, 0.1);
+  Vec3 rot = Vec3::Zero();
+  // Track pose aswell
+  float res = motionController.read_pose(raw, pos, rot);
+  calibration_pos += pos;
+  calibration_rot += rot;
+  Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f", 
+    pos[0], pos[1], pos[2], 
+    rot[0], rot[1], rot[2],
+    res
+  );
 
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] += raw[i];
@@ -139,6 +179,14 @@ void SensorController::updateCalibration() {
   if (calibrationSamples_ < Config::ZERO_SAMPLES) {
     return;
   }
+  // END OF Calibration RUN, return results
+
+  calibration_pos /= Config::ZERO_SAMPLES;
+  calibration_rot /= Config::ZERO_SAMPLES;
+  Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ", 
+    calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
+  );
+  motionController.set_base_pose(calibration_pos, calibration_rot);
 
   for (int i = 0; i < 9; i++) {
     baseline_[i] = calibrationSum_[i] / Config::ZERO_SAMPLES;

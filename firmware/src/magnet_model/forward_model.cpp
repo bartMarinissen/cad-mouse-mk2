@@ -6,7 +6,7 @@ ForwardModel::ForwardModel(const Sensor (&sensors)[3],
           magnets_{magnets[0], magnets[1], magnets[2]} 
     {}
 
-void ForwardModel::evaluate(const Vec3& t,  
+void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t,  
                             const Mat3& R, 
                             Eigen::Matrix<float, 9, 1> &B_field, 
                             Eigen::Matrix<float, 9, 6> &J) const {

@@ -3,13 +3,18 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <TLx493D_inc.hpp>
+#include "math3D.h"
 
 class SensorController {
  public:
   SensorController();
 
   bool begin();
-  void readRaw(float out[9]);
+  // Gain-corrected reading, in mT. Used by anything feeding the pose solver.
+  void read_mT(float out[9]);
+  // True, uncorrected driver output. Used by the bundle-calibration data
+  // capture path, which needs real sensor counts to fit a gain matrix from.
+  void readUncorrected(float out[9]);
 
   void beginCalibration();
   void updateCalibration();
@@ -32,4 +37,12 @@ class SensorController {
   unsigned long lastCalibrationSampleMs_ = 0;
   float calibrationSum_[9] = {};
   float baseline_[9] = {};
+  Vec3 calibration_pos = {};
+  Vec3 calibration_rot = {};
+
+  // Per-sensor gain/skew correction matrix and mT offset, applied to
+  // readUncorrected()'s output to produce read_mT()'s. Sourced from Config
+  // for now; will eventually come from flash-persisted bundle calibration.
+  Mat3 sensor_gain_[3];
+  Vec3 sensor_offset_mT_[3];
 };

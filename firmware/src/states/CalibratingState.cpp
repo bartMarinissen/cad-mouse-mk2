@@ -17,6 +17,12 @@ void CalibratingState::update() {
   ledController.updateSpinner();
   sensorController.updateCalibration();
 
+  // TODO check serial
+  if (inputController.takeActivity()) {
+    stateMachine.changeState(&StateMachine::bundleState);
+  }
+  
+
   if (sensorController.calibrationDone()) {
     stateMachine.changeState(&StateMachine::idleState);
   }

@@ -1,11 +1,11 @@
 #include "magnet_model/sensor.h"
 
-Sensor::Sensor(Vec3 sensor_pos_global, Mat3 sensor_gain )
-    : sensor_pos_global(sensor_pos_global), sensor_gain(sensor_gain)
+Sensor::Sensor(Vec3 sensor_pos_global)
+    : sensor_pos_global(sensor_pos_global)
     {}
 
 // Evaluate the field a sensor sees from a given magnet, and a given translation from the global frame to the knob frame
-void Sensor::evaluate(const MagnetModel &magnet, const Vec3& t,  
+void __not_in_flash_func(Sensor::evaluate)(const MagnetModel &magnet, const Vec3& t,  
         const Mat3& R, 
         Eigen::Matrix<float, 3, 1> &B_field_global, 
         Eigen::Matrix<float, 3, 6> &J) const {
@@ -36,13 +36,11 @@ void Sensor::evaluate(const MagnetModel &magnet, const Vec3& t,
     
     // 6. Assemble the Jacobian blocks
     Mat3 M = R * J_local * R_T;
-    Mat3 J_trans = M * -1.0f;
+    Mat3 J_trans = -M;
       
     // J_rot = M * [v]_x - [B_field_global]_x
     Mat3 J_rot = (M * skew_matrix(v)) - skew_matrix(B_field_global);
 
-    // 7. Apply the sensor gain
-    B_field_global = sensor_gain * B_field_global;
-    J.block<3, 3>(0, 0) = sensor_gain * J_trans;
-    J.block<3, 3>(0, 3) = sensor_gain * J_rot; 
+    J.block<3, 3>(0, 0) = J_trans;
+    J.block<3, 3>(0, 3) = J_rot;
 }

@@ -3,7 +3,7 @@
 #include <cmath>
 
 
-MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local, const Mat3 magnet_rotation)
+MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local, const Mat3 &magnet_rotation)
     : field_model_(field_model), magnet_pos_knob(m_local), magnet_rotation(magnet_rotation) {}
 
 
@@ -12,10 +12,13 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local, c
  * J_local[out] the jacobian
  * returns the field at p[in] oriented along the magnet axis
  */
-Vec3 MagnetModel::evaluate(const Vec3& p, Mat3& J_local) const {
-
+Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p, Mat3& J_local) const {
+    // return value
+    Vec3 B_local;
     // get radius of the given point compared to the z axis
-    float r = std::sqrt(p[0]*p[0] + p[1]*p[1]);
+    // TODO: possible optimization, do the bicubic interpolation on Z, r^2? Saves a sqrt here.
+    //       it might also spread the grid more nicely.
+    float r = sqrtf(p[0]*p[0] + p[1]*p[1]);
 
     Vec2 B_cylindrical, d_dr, d_dz; 
     field_model_.evaluate(r, p[2], B_cylindrical, d_dr, d_dz);
@@ -31,7 +34,7 @@ Vec3 MagnetModel::evaluate(const Vec3& p, Mat3& J_local) const {
     float dBr_dz = d_dz[0];
     float dBz_dz = d_dz[1];
 
-    Vec3 B_local;
+
     const float EPSILON = 1e-6f;
 
     if (r < EPSILON) {
@@ -44,14 +47,16 @@ Vec3 MagnetModel::evaluate(const Vec3& p, Mat3& J_local) const {
         J_local = Vec3(dBr_dr, dBr_dr, dBz_dz).asDiagonal();
 
     } else {
+        // optimization to avoid 3 divisions;
+        float r_reciprocal = 1.0f/r;
         // Cosines to rotate our 2d vector back to 3d in line with x, y
-        float cx = p[0] / r;
-        float cy = p[1] / r;
+        float cx = p[0] * r_reciprocal;
+        float cy = p[1] * r_reciprocal;
         // Higher order terms for the jacobian
         float cx2 = cx * cx;
         float cy2 = cy * cy;
         float cxcy = cx * cy;
-        float Br_over_r = Br / r;
+        float Br_over_r = Br * r_reciprocal;
 
         B_local = Vec3(Br * cx, Br * cy, Bz);
 

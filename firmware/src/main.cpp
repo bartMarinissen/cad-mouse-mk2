@@ -11,6 +11,7 @@ SensorController sensorController;
 MotionController motionController;
 HIDController hidController;
 TelemetryController telemetryController;
+BundleCalibrationController bundleCalibrationController{};
 
 void setup() {
   // Initialize USB HID first
@@ -27,7 +28,6 @@ void setup() {
     stateMachine.changeState(&StateMachine::errorState);
     return;
   }
-  sensorController.begin();
   motionController.reset();
   telemetryController.begin();
 

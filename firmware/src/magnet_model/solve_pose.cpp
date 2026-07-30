@@ -1,3 +1,4 @@
+#include "magnet_model/solve_pose.h"
 #include <ArduinoEigenDense.h>
 #include <magnet_model/forward_model.h>
 
@@ -6,19 +7,19 @@ using Vector9f = Eigen::Matrix<float, 9, 1>;
 using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
 using Matrix6x6f = Eigen::Matrix<float, 6, 6>;
 
-void solve_knob_pose(
+float __not_in_flash_func(solve_knob_pose)(
     Eigen::Vector3f& t,                // In/Out: Current translation guess
     Eigen::Matrix3f& R,                // In/Out: Current rotation matrix guess
     const ForwardModel& model,         // Your evaluated forward model
-    const Eigen::Vector3f measured_fields[3] // The 9x1 vector of Hall sensor readings
+    const Eigen::Vector3f measured_fields[3], // The 9x1 vector of Hall sensor readings
+    Vector9f *residual_out,
+    Matrix9x6f *Jacobian_out
 ) {
-    const int MAX_ITER = 20;
+    const int MAX_ITER = 10;
     const float TOLERANCE = 3e-3f; // Stop if the update step is smaller than this
     
-    // Safety limits for 1/r^3 magnetic gradients
-    const float MAX_TRANS_STEP = 1.5f; // Max 1.5mm movement per iteration
-    const float MAX_ROT_STEP = 0.15f;  // Max ~8.5 degrees per iteration
-
+    // TODO don't even allocate these if we were passed non-null residual_out / Jacobian_out.
+    //      instead, in that case, pass in those pointers directly
     Vector9f residual;        
     Matrix9x6f jacobian;      
 
@@ -31,12 +32,13 @@ void solve_knob_pose(
 
         // 2. Construct Damped Normal Equations (Levenberg-Marquardt)
         Matrix6x6f H = jacobian.transpose() * jacobian;
-        const float LAMBDA = 0.1f;
+        const float LAMBDA = 0.02f;
         H.diagonal().array() += LAMBDA;
         Vector6f g = -jacobian.transpose() * residual;
 
+        auto ldlt = H.ldlt();
         // 3. Solve the 6x6 linear system
-        Vector6f dx = H.ldlt().solve(g);
+        Vector6f dx = ldlt.solve(g);
 
         if (!dx.allFinite()) {
             // Math collapsed (NaN or Inf). Reject update and abort solver.
@@ -45,8 +47,8 @@ void solve_knob_pose(
             break; 
         }
 
-        // 4. Check for convergence
-        if (dx.norm() < TOLERANCE) {
+        // 4. Check for convergence - use squared norm to save a square root
+        if (dx.squaredNorm() < TOLERANCE * TOLERANCE) {
             break; 
         }
 
@@ -54,31 +56,24 @@ void solve_knob_pose(
         Eigen::Vector3f dt = dx.head<3>();
         Eigen::Vector3f dw = dx.tail<3>();
 
-        // --- NEW: 5b. Step Clamping (Prevents flying out of interpolation bounds) ---
-        float t_norm = dt.norm();
-        if (t_norm > MAX_TRANS_STEP) {
-            dt *= (MAX_TRANS_STEP / t_norm);
-        }
-        
-        float w_norm = dw.norm();
-        if (w_norm > MAX_ROT_STEP) {
-            dw *= (MAX_ROT_STEP / w_norm);
-        }
-        // ------------------------------------------------------------------------
-
         // 6. Apply Updates 
         t += dt;
 
+        float w_norm = dw.norm();
         if (w_norm > 1e-7f) {
             // Recompute angle since we might have clamped dw
-            float angle = dw.norm(); 
+            float angle = w_norm;
             Eigen::AngleAxisf dR(angle, dw / angle);
             
             // Exactly matches your analytic Jacobian derivation: R_new = exp([w]x) * R_old
             R = (dR * R).eval();
         }
     }
-
-    // Optional: Orthonormalize ONCE per frame outside the loop to prevent long-term drift
-    // R = R.householderQr().householderQ(); 
+    if (residual_out != nullptr)
+        *residual_out = residual;
+    if (Jacobian_out != nullptr)
+        *Jacobian_out = jacobian;
+    // TODO check jacobian well-formedness
+    // TODO deal with residual
+    return residual.norm();
 }

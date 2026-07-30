@@ -242,26 +242,27 @@ void test_magnet_model_jacobian_at_origin(void) {
 // 3. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
-// Updated to accept hardware calibration states
+// Updated to accept hardware calibration states.
+// Sensor gain is no longer part of ForwardModel/Sensor - it's applied by
+// SensorController on raw readings before they ever reach the solver - so
+// this only exercises magnet tilt/orientation states now.
 static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
-        const Mat3 sensor_gains[3],
         const Mat3 magnet_rotations[3],
         Eigen::Matrix<float, 9, 6>& J_analytic,
         Eigen::Matrix<float, 9, 6>& J_numeric) {
-            
+
     MagnetModel magnets[3] = {
         // Note: Update these constructors or setters to match your actual MagnetModel API
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0]),
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1]),
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2]),
     };
-    
+
     Sensor sensors[3] = {
-        // Note: Update to match your actual Sensor API
-        Sensor(SENSOR_POS[0], sensor_gains[0]),
-        Sensor(SENSOR_POS[1], sensor_gains[1]),
-        Sensor(SENSOR_POS[2], sensor_gains[2]),
+        Sensor(SENSOR_POS[0]),
+        Sensor(SENSOR_POS[1]),
+        Sensor(SENSOR_POS[2]),
     };
     ForwardModel fm(sensors, magnets);
 
@@ -300,32 +301,15 @@ static void compute_forward_model_jacobians(
     }
 }
 
-// Generate a sample sensor gain matrix (diagonal scale + skew)
-static Mat3 make_sensor_gain(float s_xy, float s_z, float skew) {
-    Mat3 G = Mat3::Identity();
-    // Diagonal scaling
-    G(0,0) = s_xy; 
-    G(1,1) = s_xy; 
-    G(2,2) = s_z;
-    // Cross-axis skew
-    G(0,1) = skew; 
-    G(1,2) = skew;
-    return G;
-}
-
 // The Massive Grid Test
 void test_forward_model_jacobian_grid(void) {
     // 1. Define Calibration Scenarios
+    // Sensor gain/skew is no longer modeled here - see the comment on
+    // compute_forward_model_jacobians(). Only magnet tilt/orientation varies.
     // Scenario A: Perfect Hardware
-    Mat3 gains_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
     Mat3 tilts_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
 
-    // Scenario B: Realistic Manufacturing Tolerances
-    Mat3 gains_real[3] = {
-        make_sensor_gain(1.05f, 0.95f,  0.02f),
-        make_sensor_gain(0.98f, 1.02f, -0.01f),
-        make_sensor_gain(1.01f, 1.00f,  0.03f)
-    };
+    // Scenario B: Realistic Manufacturing Tolerances (magnet tilt)
     Mat3 tilts_real[3] = {
         exp_so3(Vec3( 0.03f, -0.02f,  0.01f)), // ~2 deg tilt
         exp_so3(Vec3(-0.01f,  0.04f,  0.00f)),
@@ -333,13 +317,12 @@ void test_forward_model_jacobian_grid(void) {
     };
 
     struct HardwareState {
-        const Mat3* gains;
         const Mat3* tilts;
         const char* name;
     };
     HardwareState hw_states[] = {
-        { gains_perfect, tilts_perfect, "Ideal Hardware" },
-        { gains_real, tilts_real, "Distorted Hardware" }
+        { tilts_perfect, "Ideal Hardware" },
+        { tilts_real, "Distorted Hardware" }
     };
 
     // 2. Define Pose Grid Bounds
@@ -371,7 +354,7 @@ void test_forward_model_jacobian_grid(void) {
                         Mat3 R = exp_so3(r_vec);
                         
                         Eigen::Matrix<float, 9, 6> J_analytic, J_numeric;
-                        compute_forward_model_jacobians(t, R, hw.gains, hw.tilts, J_analytic, J_numeric);
+                        compute_forward_model_jacobians(t, R, hw.tilts, J_analytic, J_numeric);
 
                         float e = max_rel_error_mat<9, 6>(J_analytic, J_numeric);
                         

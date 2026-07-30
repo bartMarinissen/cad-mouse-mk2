@@ -4,7 +4,8 @@
 
 namespace Config {
 
-const bool ENABLE_TELEMETRY = false;
+const bool ENABLE_TELEMETRY = true;
+const bool statistics = true;
 
 // Hardware pins (XIAO RP2040)
 const int PIN_RIGHT_BTN = D0;
@@ -24,16 +25,18 @@ const int ZERO_SAMPLES = 200;
 // Z axis - vertical        through the centre nob axis of symmetry
 
 // Gains and sign fixes
-// translation gains     X,    Y,    Z                   
-const float GAIN_T[3] = {1200.0, 1200.0, 3500.0};
+// translation gains     X,    Y,    Z      
+// in 'points' per mm             
+const float GAIN_T[3] = {80.0, 80.0, 100.0};
 // rotation gains        Rx,   Ry,   Rz
-const float GAIN_R[3] = {800.0, 1000.0, 900.0};
+// in 'points' per degree
+const float GAIN_R[3] = {15, 15, 15};
 // signs are for:         X,   Y,  Z, Rx, Ry, Rz
-const int SIGN_AXIS[6] = {+1, -1, -1, +1, +1, -1};
+const int SIGN_AXIS[6] = {+1, -1, +1, -1, -1, -1};
 
-// Dead zones
-const float DEAD_T = 10000.0;
-const float DEAD_R = 15000.0;
+// Dead zones in 'points
+const float DEAD_T = 18.0;
+const float DEAD_R = 14.0;
 
 // Smoothing
 const float SMOOTH_TAU_S = 0.08;
@@ -51,6 +54,14 @@ const unsigned long LED_ERROR_COLOR = 0xFF0000;
 // FSM timing
 const long IDLE_SLEEP_TIMEOUT_MS = 2 * 60 * 1000;
 
-const float magnet_gains[3] = {-1.12f, -0.84f, -1.05f};
+const float magnet_gains[3] = {-0.96, -1.2, -0.98};
+
+// Per-sensor XYZ offset, in mT, subtracted after the gain matrix is applied
+// (i.e. in read_mT()'s output space, not raw sensor counts).
+const float sensor_offset_mT[3][3] = {
+  {0.1f,  -1.4f, 0.0f},
+  {-1.6f, -0.2f, 0.0f},
+  {0.0f,   0.0f, 0.0f},
+};
 
 }  // namespace Config

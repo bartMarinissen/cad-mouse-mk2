@@ -5,9 +5,8 @@
 
 struct Sensor {
     Vec3 sensor_pos_global;
-    Mat3 sensor_gain;
 
-    Sensor(Vec3 sensor_pos_global, Mat3 sensor_gain = Mat3::Identity());
+    Sensor(Vec3 sensor_pos_global);
 
     void evaluate(const MagnetModel &magnet, const Vec3& t,  
         const Mat3& R, 
