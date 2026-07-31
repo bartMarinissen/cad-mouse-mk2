@@ -1,5 +1,36 @@
-.pio
-.vscode
+# --- OS ---
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Editors ---
+.vscode
+.idea/
+*.swp
+
+# --- PlatformIO / firmware build ---
+.pio
 .cache
-magnet_field_model/calibration_runs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Project-specific data/output ---
+**/calibration_runs/
+
+# --- CAD backup files ---
+*.FCBak
+*.FCStd1
