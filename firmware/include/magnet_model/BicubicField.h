@@ -8,10 +8,10 @@
 
 
 class BicubicField {
-    
+
 public:
     const Vec2 (&grid_)[NZ][NR]{};
-    Point origin_{}; 
+    Point origin_{};
     Point far_{};
     float dr_{};
     float dz_{};
@@ -26,8 +26,8 @@ public:
                             Point origin, Point far) noexcept
         : grid_(values),
           origin_(origin), far_(far),
-          
-          dr_((far.r - origin.r) / static_cast<float>(NR - 1)), 
+
+          dr_((far.r - origin.r) / static_cast<float>(NR - 1)),
           dz_((far.z - origin.z) / static_cast<float>(NZ - 1)),
           dr_reciprocal_(1.0f/dr_),
           dz_reciprocal_(1.0f/dz_)
@@ -39,22 +39,4 @@ public:
     Vec2 value(float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return v; }
     Vec2 ddr  (float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return a; }
     Vec2 ddz  (float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return b; }
-
-private:
-    // --- small constexpr helpers ------------------------------------
-    static constexpr int iclamp(int v, int lo, int hi) noexcept {
-        return v < lo ? lo : (v > hi ? hi : v);
-    }
-    static constexpr float clampF(float v, float lo, float hi) noexcept {
-        return v < lo ? lo : (v > hi ? hi : v);
-    }
-    static constexpr int ifloor(float x) noexcept {
-        const int xi = static_cast<int>(x);
-        return (x < float(xi)) ? xi - 1 : xi;
-    }
-
-    // 1D Catmull-Rom cubic through 4 points, local param t in [0,1]
-    // between p1 and p2, and its derivative w.r.t. t.
-    static Vec2 cubic(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, float t) noexcept;
-    static Vec2 cubic_deriv(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, float t) noexcept;
 };
