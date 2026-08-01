@@ -53,18 +53,6 @@ private:
         return (x < float(xi)) ? xi - 1 : xi;
     }
 
-    // Plain clamped lookup, no extrapolation.
-    // Belt and suspenders. No calls should pass out or range indices.
-    // But compiler will optmizie this away
-    Vec2 raw(int i, int j) const noexcept;
-
-    // Lookup allowing i in [-1, NR] and j in [-1, NZ] (exactly one step
-    // past the real grid, which is all the 4-point cubic stencil ever
-    // needs at a boundary cell). Out-of-range points are filled by
-    // linear extrapolation from the two nearest real nodes; the corner
-    // case combines both directions additively (planar extrapolation).
-    Vec2 point_or_ghost(int i, int j) const noexcept;
-
     // 1D Catmull-Rom cubic through 4 points, local param t in [0,1]
     // between p1 and p2, and its derivative w.r.t. t.
     static Vec2 cubic(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, float t) noexcept;
