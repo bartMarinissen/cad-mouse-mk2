@@ -45,6 +45,12 @@ static constexpr RZSample BICUBIC_TEST_POINTS[] = {
     { 3.0f, -6.0f },
     { 5.0f, -1.0f },
     { 0.5f, -11.0f },
+    // On the r=0 symmetry axis and just inside the first cell: exercises
+    // the axis_patch mirror stencil in BicubicField::evaluate (and, via
+    // the central-difference d_dr probe at r=0, the graceful handling of
+    // a slightly negative r from the FD step landing just past the axis).
+    { 0.0f, -6.0f },
+    { 0.05f, -6.0f },
 };
 
 // PCB / knob geometry, taken from Positions:: rather than placeholders.

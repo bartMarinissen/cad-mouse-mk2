@@ -18,12 +18,18 @@ static constexpr int ifloor(float x) noexcept {
 }
 
 // The 4-point cubic stencil spans [i0-1, i0+2]. Clamping i0 to
-// [1, NR-3] keeps the stencil entirely inside the real grid, so there
-// are no ghost nodes and no per-fetch bounds checking.
-//
-// The outermost ring of cells is therefore never used as an
-// interpolation interval; it is covered by extrapolation from the
-// nearest usable patch (see below).
+// [1, NR-3] and j0 to [1, NZ-3] would keep the stencil entirely inside
+// the real grid with no ghost nodes and no per-fetch bounds checking -
+// but on the r-axis, r=0 is the field's physical symmetry axis (the
+// grid origin), and the sole caller always queries r=sqrt(x^2+y^2)>=0,
+// so the patch touching the axis (i0=0) is a real, commonly-hit region.
+// Rather than give that patch up to linear extrapolation, i0 is allowed
+// down to 0: the stencil's missing virtual node at column -1 is exactly
+// the mirror of column 1, since the axisymmetric field has Br odd and
+// Bz even in r (Br(-r,z) = -Br(r,z), Bz(-r,z) = Bz(r,z)). See the
+// axis_patch branch in evaluate() below. z has no such symmetry, so j0
+// keeps the [1, NZ-3] clamp and the outermost z ring is still only
+// covered by extrapolation from the nearest usable patch.
 static_assert(NR >= 4, "bicubic stencil needs at least 4 nodes in r");
 static_assert(NZ >= 4, "bicubic stencil needs at least 4 nodes in z");
 
@@ -33,7 +39,7 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
     const float fi = (r - origin_.r) * dr_reciprocal_;
     const float fj = (z - origin_.z) * dz_reciprocal_;
 
-    const int i0 = iclamp(ifloor(fi), 1, int(NR) - 3);
+    const int i0 = iclamp(ifloor(fi), 0, int(NR) - 3);
     const int j0 = iclamp(ifloor(fj), 1, int(NZ) - 3);
 
     // Local parameter, split into an in-patch part and an overshoot.
@@ -89,15 +95,34 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
 
     // --- contract in r, for each of the 4 rows in z ---------------
     Vec2 row[4], row_deriv[4];
-    for (int k = 0; k < 4; ++k) {
-        const int jj = j0 - 1 + k;
-        const Vec2 p0 = grid_[jj][i0 - 1];
-        const Vec2 p1 = grid_[jj][i0    ];
-        const Vec2 p2 = grid_[jj][i0 + 1];
-        const Vec2 p3 = grid_[jj][i0 + 2];
+    const bool axis_patch = (i0 == 0);
+    if (!axis_patch) {
+        for (int k = 0; k < 4; ++k) {
+            const int jj = j0 - 1 + k;
+            const Vec2 p0 = grid_[jj][i0 - 1];
+            const Vec2 p1 = grid_[jj][i0    ];
+            const Vec2 p2 = grid_[jj][i0 + 1];
+            const Vec2 p3 = grid_[jj][i0 + 2];
 
-        row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
-        row_deriv[k] = p0 * b0 + p1 * b1 + p2 * b2 + p3 * b3;
+            row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
+            row_deriv[k] = p0 * b0 + p1 * b1 + p2 * b2 + p3 * b3;
+        }
+    } else {
+        // On-axis patch (r in [0, dr)): the stencil needs a virtual
+        // node at column -1 (r = -dr), which by the field's odd/even
+        // r-symmetry is exactly the mirror of column 1 - not an
+        // approximation. Column 1 is already loaded as p2 elsewhere in
+        // this file, so the mirror costs a sign negate, not a fetch.
+        for (int k = 0; k < 4; ++k) {
+            const int jj = j0 - 1 + k;
+            const Vec2 p1 = grid_[jj][0];
+            const Vec2 p2 = grid_[jj][1];
+            const Vec2 p0(-p2.x(), p2.y());
+            const Vec2 p3 = grid_[jj][2];
+
+            row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
+            row_deriv[k] = p0 * b0 + p1 * b1 + p2 * b2 + p3 * b3;
+        }
     }
 
     // --- contract in z -------------------------------------------
