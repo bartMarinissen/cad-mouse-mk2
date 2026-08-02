@@ -47,6 +47,16 @@ bool SensorController::setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin,
     Serial.println("Failed to set sensor sensitivity!");
     return false;
   }
+  res = sensor.setPowerMode(TLx493D_MASTER_CONTROLLED_MODE_e);
+  if (!res) {
+    Serial.println("Failed to set sensor power mode!");
+    return false;
+  }
+  res = sensor.setTrigger(TLx493D_ADC_ON_READ_AFTER_REG_05_e);
+  if (!res) {
+    Serial.println("Failed to set sensor trigger mode!");
+    return false;
+  }
   delay(10);
   return true;
 }
