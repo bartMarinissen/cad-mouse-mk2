@@ -1,3 +1,8 @@
+// ============================================================================
+// AUTO-GENERATED -- DO NOT EDIT BY HAND.
+// Written directly by cell af552cc7 of magnet_field_model/field_approximation.ipynb.
+// Re-running that cell overwrites this file; manual edits here will be lost.
+// ============================================================================
 
 #include "magnet_model/magnet_model_table.h"
 

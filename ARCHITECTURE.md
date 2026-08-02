@@ -151,12 +151,14 @@ constant: `#include "math3D.h"` for `Vec3`/`Mat3`/`skew_matrix` typedefs
 `magpylib` for ground-truth field simulation of a real 6×6mm N52 cylinder
 magnet) samples the true field on the same 51×91 (r,z) grid defined by `NR`/`NZ`
 in [`magnet_model_table.h`](firmware/include/magnet_model/magnet_model_table.h),
-and hand-emits the hex-float C++ array in
-[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp).
-**This file is generated, not hand-written** — if the magnet spec, grid bounds
-(`BICUBIC_ORIGIN`/`BICUBIC_FAR` in `magnet_model_table.h`), or grid resolution
-change, they need to change in both the notebook and the header in lockstep, by
-hand. There's no build-time codegen step; it's a manual copy-paste pipeline.
+and writes the hex-float C++ array directly into
+[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp)
+(the notebook cell `open()`s both files and writes them itself — no
+copy-paste of printed output). **These files are generated, not
+hand-written** — if the magnet spec, grid bounds (`BICUBIC_ORIGIN`/`BICUBIC_FAR`
+in `magnet_model_table.h`), or grid resolution change, they need to change in
+both the notebook and the header in lockstep, by hand. There's no build-time
+codegen step; what's manual is remembering to re-run the notebook cell at all.
 
 ## Calibration subsystem — two independent layers
 

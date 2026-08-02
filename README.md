@@ -79,7 +79,14 @@ There are none for now. It should work out if you just use the instructions from
 
 At the moment, if you run into issues I'd love to help. Because it would be great to know someone else is using this. I do intend to add documentation 'later'. That is as much of a promise as you probably think it is (not a promise).
 
+## More documentation
 
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the firmware is actually put together: control flow, controllers, the pose pipeline, codegen, calibration subsystem.
+- [`design documentation/context.md`](design%20documentation/context.md) — the project's intent and hardware spec.
+- [`design documentation/Math.md`](design%20documentation/Math.md) — the full closed-form derivation of the forward model and its Jacobian.
+- [`TODO/README.md`](TODO/README.md) — tracked follow-up work.
+- [`firmware/README.md`](firmware/README.md) — firmware-side tuning (gains, dead zones, smoothing).
+- [`magnet_field_model/README.md`](magnet_field_model/README.md) — the Python side: field-table codegen and the bundle-calibration tool.
 
 
 
