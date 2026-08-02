@@ -57,6 +57,12 @@ bool SensorController::setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin,
     Serial.println("Failed to set sensor trigger mode!");
     return false;
   }
+  // No conversion is running yet at this point (Master-Controlled Mode
+  // starts powered down until triggered), so the first real read in the
+  // main loop pays for that first conversion via clock stretching. If that
+  // turns out to be too costly in practice, trigger one conversion here
+  // explicitly (e.g. a throwaway getMagneticFieldAndTemperature() call) so
+  // it's already in flight before the main loop starts reading.
   delay(10);
   return true;
 }
