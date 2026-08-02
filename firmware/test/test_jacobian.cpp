@@ -35,8 +35,8 @@ static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm (or your length unit)
 static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
-// Valid domain per BICUBIC_ORIGIN=(0.0,-12.0), BICUBIC_FAR=(6.0,-0.5):
-//   r in [0, 6], z in [-12, -0.5]  (z is always negative - sensor plane
+// Valid domain per BICUBIC_ORIGIN=(0.0,-20.0), BICUBIC_FAR=(10.0,-0.5):
+//   r in [0, 10], z in [-20, -0.5]  (z is always negative - sensor plane
 //   sits below the magnet). Points below are comfortably interior with
 //   margin >> FD_STEP_LINEAR.
 struct RZSample { float r; float z; };
@@ -63,25 +63,6 @@ static const Vec3 MAGNET_LOCAL[3] = {
     Positions::Magnet_2_knob,
     Positions::Magnet_3_knob,
 };
-
-// Base pose used for the ForwardModel tests.
-// x/y chosen so r = sqrt(t.x^2 + t.y^2) ~ 2.5mm at rest (comfortably
-// inside [0,6], away from both 0 and the outer edge).
-// z = 6.0f is the real standoff: at rest the sensor plane sits 6mm
-// below the magnet plane.
-static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
-
-// NOTE: physically, the two frames are rotationally ALIGNED at rest -
-// R=Identity, with only the 6mm z-standoff as an offset. The non-zero
-// axis below is a synthetic test pose, not an attempt to model rest.
-// It's kept non-identity deliberately: the analytic Jacobian needs to
-// be correct for any R the solver encounters while tracking, not just
-// R=Identity, and testing only at Identity risks masking a bug that
-// only shows up once R^T actually does something (e.g. a transpose or
-// sign error in how R feeds into the local-frame conversion). Kept
-// small purely so the resulting v_l for all three magnet/sensor pairs
-// stays inside the field's r<=6, -12<=z<=-0.5 domain.
-static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 
 // ======================================================================
 // Helpers
@@ -326,11 +307,25 @@ void test_forward_model_jacobian_grid(void) {
     };
 
     // 2. Define Pose Grid Bounds
-    // Translations (mm) - kept small to avoid pushing local coordinates out of the [0, 6] r-bounds
+    // Translations (mm) - kept small to avoid pushing local coordinates out of the [0, 10] r-bounds
     float t_x_steps[] = { -3.0f, -1.5f, 0.0f, 1.2f };
     float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
-    // Z is the vertical standoff (rest is 6.0mm)
-    float t_z_steps[] = { 8.0f,  6.0f, 4.3f, 2.5f }; 
+
+    // Z sweep, derived from Positions:: rather than a hand-picked mm spread:
+    // positions.h's approx_rest_pos doesn't currently include the standoff
+    // (magnet_rest_distance_sensor is defined there but unused), so at
+    // t.z == PIVOT_Z the local z is 0 - right at the field table's edge.
+    // Sweeping t.z in multiples of the standoff past the pivot keeps every
+    // step's local z comfortably interior to [-20, -0.5] instead of
+    // querying the table out of its domain.
+    constexpr float PIVOT_Z  = Positions::magnet_z_pos_from_pivot;      // 14mm
+    constexpr float STANDOFF = Positions::magnet_rest_distance_sensor;  // 6mm
+    float t_z_steps[] = {
+        PIVOT_Z + 2.0f * STANDOFF,  // local z ~ -12mm
+        PIVOT_Z + 1.5f * STANDOFF,  // local z ~  -9mm
+        PIVOT_Z + 1.0f * STANDOFF,  // local z ~  -6mm (nominal rest standoff)
+        PIVOT_Z + 0.5f * STANDOFF,  // local z ~  -3mm
+    };
     
     // Rotations (axis-angle vectors)
     Vec3 rot_steps[] = {
