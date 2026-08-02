@@ -7,11 +7,12 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void CalibratingState::enter() {
   sensorController().beginCalibration();
   motionController().reset();
-  ledController().startSpinner(Config::LED_CALIBRATING_COLOR);
+  ledController().set(SpinnerAnimation(ledController().ring(), Config::LED_CALIBRATING_COLOR));
 
   // Tells the host that its command window is open. This state is the only
   // place CAL_START and CAL_UPLOAD are accepted and it lasts just
@@ -27,7 +28,7 @@ void CalibratingState::update() {
   InputController& input = inputController();
 
   input.update();
-  ledController().updateSpinner();
+  ledController().update();
   sensor.updateCalibration();
 
   // Bundle calibration is entered from the host, not from a gesture. Button

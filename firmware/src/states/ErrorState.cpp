@@ -5,13 +5,14 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void ErrorState::enter() {
-  ledController().startSpinner(Config::LED_ERROR_COLOR);
+  ledController().set(SpinnerAnimation(ledController().ring(), Config::LED_ERROR_COLOR));
 }
 
 void ErrorState::update() {
-  ledController().updateSpinner();
+  ledController().update();
 }
 
 void ErrorState::exit() {}

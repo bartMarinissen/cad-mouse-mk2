@@ -5,11 +5,12 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void IdleState::enter() {
   lastUpdateMs_ = 0;
   lastActivityMs_ = millis();
-  ledController().setSolid(Config::LED_IDLE_COLOR);
+  ledController().set(SolidAnimation(ledController().ring(), Config::LED_IDLE_COLOR));
 }
 
 bool IdleState::handleCalibrationRequest() {

@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include "CalibrationStorage.h"
+#include "Config.h"
+#include "Controllers.h"
+#include "animations/Animations.h"
 
 // Constants
 constexpr uint32_t COUNTDOWN_MS = 1000;
@@ -27,8 +30,13 @@ uint32_t BundleCalibrationController::get_duration_for_step(CalibStep step) {
 void BundleCalibrationController::change_phase(CalibPhase new_phase) {
     current_phase = new_phase;
     phase_start_time = millis();
-    
-    // Notify PC of state change (and theoretically update LED ring here)
+
+    // Placeholder: same spinner for every phase. The real per-phase/per-step
+    // look (see the LED RING comments below and TODO/calibration-led-animations.md)
+    // is still undesigned.
+    ledController().set(SpinnerAnimation(ledController().ring(), Config::LED_CALIBRATING_COLOR));
+
+    // Notify PC of state change
     Serial.printf("CAL_STATE %d %d\n", (int)current_step, (int)current_phase);
 }
 
@@ -113,14 +121,16 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
 
     switch (current_phase) {
         case CalibPhase::WAIT_FOR_START_BTN:
-            // LED RING: animating the step with its specific animation
+            // LED RING: placeholder spinner set in change_phase(); intended
+            // look is a per-step identifying animation, still undesigned.
             if (elapsed >= BUTTON_GRACE_MS && btn_left_pressed) {
                 change_phase(CalibPhase::COUNTDOWN);
             }
             break;
 
         case CalibPhase::COUNTDOWN:
-            // LED RING: filling up clockwise
+            // LED RING: placeholder spinner set in change_phase(); intended
+            // look is a clockwise fill, still undesigned.
             if (elapsed >= COUNTDOWN_MS) {
                 expected_samples = 0;
                 change_phase(CalibPhase::RECORDING);
@@ -128,7 +138,8 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
             break;
 
         case CalibPhase::RECORDING:
-            // LED RING: animating the step with its specific animation
+            // LED RING: placeholder spinner set in change_phase(); intended
+            // look is a per-step identifying animation, still undesigned.
             if (now - last_frame_time >= FRAME_INTERVAL_MS) {
                 // TODO consider 2 quick reads in succession for smoothing
 
@@ -145,7 +156,8 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
             break;
 
         case CalibPhase::WAIT_FOR_ACK:
-            // LED RING: dead
+            // LED RING: placeholder spinner set in change_phase(); intended
+            // look is "dead" (off), still undesigned.
             // Waiting for handle_serial_command to process "CAL_ACK"
             // Add a timeout just in case the PC script crashed
 
