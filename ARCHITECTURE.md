@@ -239,8 +239,3 @@ Tracked as of the initial read-through. Status as of the follow-up pass:
 
 10. **`firmware/README.md` documents the old, replaced motion model** — left
     open, tracked in [`TODO/readme-refresh.md`](TODO/readme-refresh.md).
-
-11. **`SensorController` never sets a power mode, so the sensors sit in their
-    power-on-reset Low Power Mode** (10 Hz or 160 Hz internal update, a hard
-    ceiling on read freshness regardless of poll rate) — tracked in
-    [`TODO/sensor-read-speed.md`](TODO/sensor-read-speed.md).
