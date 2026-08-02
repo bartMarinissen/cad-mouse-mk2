@@ -69,6 +69,39 @@ and `forward_model` as members, constructed from whatever config/calibration
 source is decided, with `J`/`B_field` either wired to an actual use or
 deleted.
 
+## Problem 3: `BundleCalibrationController` mixes both access patterns
+
+Every controller is reached through its own accessor function (`ledController()`,
+`sensorController()`, ...) declared in `Controllers.h` — that's the project's
+one consistent access pattern, and all five `State` subclasses use it. But
+`BundleCalibrationController` mixes two different ways of getting at its
+dependencies: it calls `ledController()` directly from inside `change_phase()`,
+while `SensorController` instead comes in as an explicit parameter —
+`BundleCalibrationController::update(uint16_t button_bits, SensorController
+&sensorController)`, passed in by `BundleState::update()`
+(`firmware/src/states/BundleState.cpp`) — even though `sensorController()` is
+sitting right there and would work exactly the same way `ledController()`
+does. So within this one class the access pattern is inconsistent, with no
+apparent reason for the split (e.g. `LEDController` isn't more "shared" or
+`SensorController` more "test-isolated" in any way that's evident from the
+code).
+
+(An earlier version of this section also flagged `SensorController.cpp`
+reaching `MotionController` via its own inline `extern MotionController
+motionController;` instead of going through `Controllers.h` like everyone
+else. That's now fixed — `SensorController.cpp` includes `Controllers.h` and
+calls `motionController()` like everything else does, as part of the same
+accessor-function migration that resolved Problem 2.)
+
+Likely fix shape: pick one pattern and apply it consistently within
+`BundleCalibrationController` — either it calls `sensorController()` itself
+and drops the `SensorController&` parameter from `update()`, or it takes
+`LEDController` as an explicit dependency too instead of reaching for
+`ledController()`. This is the same kind of question as Problem 1
+(should `SensorController` reach into `MotionController` directly, or should
+that dependency be passed in), so worth deciding alongside it rather than
+picking a third inconsistent pattern for this one class.
+
 ## Note
 
 These two problems are linked: fixing #2 (giving the forward model a real
@@ -81,4 +114,6 @@ In the event #2 was resolved without touching #1. Giving the model an owner
 turned out not to require deciding who may call into the solver — the call in
 `updateCalibration()` just got re-spelled as `motionController().read_pose()`
 and is as coupled as it ever was. #1 remains open and still belongs with the
-tare redesign.
+tare redesign. Problem 3 is a smaller, separable cleanup, but touches the
+same question of "how should controllers reach each other" — worth deciding
+alongside #1 rather than picking a third inconsistent pattern.
