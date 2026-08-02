@@ -1,6 +1,14 @@
 #pragma once
 #include <cmath>
-#include <ArduinoEigenDense.h>
+#ifdef ARDUINO
+    #include <ArduinoEigenDense.h>
+#else
+    // Native (non-Arduino) test builds: reach past ArduinoEigenDense.h's
+    // unconditional #include <Arduino.h> and pull the vendored plain Eigen
+    // headers straight from the same ArduinoEigen package.
+    #define EIGEN_MPL2_ONLY
+    #include <ArduinoEigen/Eigen/Dense>
+#endif
 
 using Vec3 = Eigen::Vector3f;
 using Vec2 = Eigen::Vector2f;

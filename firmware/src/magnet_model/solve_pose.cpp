@@ -1,5 +1,5 @@
 #include "magnet_model/solve_pose.h"
-#include <ArduinoEigenDense.h>
+#include "math3D.h"
 #include <magnet_model/forward_model.h>
 
 using Vector6f = Eigen::Matrix<float, 6, 1>;
@@ -42,9 +42,8 @@ float __not_in_flash_func(solve_knob_pose)(
 
         if (!dx.allFinite()) {
             // Math collapsed (NaN or Inf). Reject update and abort solver.
-            Serial.println("NAN ERROR");
-            delay(1000);
-            break; 
+            // TODO: portable diagnostic/logging hook for this case.
+            break;
         }
 
         // 4. Check for convergence - use squared norm to save a square root

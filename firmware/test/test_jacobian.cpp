@@ -384,14 +384,26 @@ void test_forward_model_jacobian_grid(void) {
 void setUp(void) {}
 void tearDown(void) {}
 
-void setup() {
-    delay(2000); // let serial monitor attach
-    UNITY_BEGIN();
+static void run_all_tests() {
     RUN_TEST(test_bicubic_field_derivatives);
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
     RUN_TEST(test_forward_model_jacobian_grid);
+}
+
+#ifdef ARDUINO
+void setup() {
+    delay(2000); // let serial monitor attach
+    UNITY_BEGIN();
+    run_all_tests();
     UNITY_END();
 }
 
 void loop() {}
+#else
+int main(int, char**) {
+    UNITY_BEGIN();
+    run_all_tests();
+    return UNITY_END();
+}
+#endif

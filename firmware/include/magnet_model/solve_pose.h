@@ -1,4 +1,4 @@
-#include <ArduinoEigenDense.h>
+#include "math3D.h"
 #include <magnet_model/forward_model.h>
 
 

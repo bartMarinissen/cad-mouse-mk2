@@ -1,7 +1,14 @@
 #pragma once
 
 #include <cstddef>
-#include <Arduino.h>
+#ifdef ARDUINO
+    #include <Arduino.h>
+#else
+    // __not_in_flash_func is an RP2040/earlephilhower-core macro that only
+    // exists once Arduino.h (transitively pico/platform.h) is available.
+    // It's a no-op outside that build.
+    #define __not_in_flash_func(func_name) func_name
+#endif
 
 #include "math3D.h"
 #include "magnet_model_table.h"
