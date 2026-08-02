@@ -27,6 +27,11 @@ file per combined issue.
   each sensor's field contribution from the two magnets it isn't paired with,
   via a cheap dipole approximation. Hopefully unnecessary — check the error
   magnitude first.
+- [sensor-read-speed.md](sensor-read-speed.md) — `SensorController` never
+  sets a sensor power mode, so all three sensors sit in power-on-reset Low
+  Power Mode (10/160 Hz update ceiling); switch to Master-Controlled Mode
+  with a staggered trigger-then-read scheme, within the constraints of a
+  fixed PCB (shared SCL/INT line across all three sensors).
 - [multicore.md](multicore.md) — empty, reserved.
 - [Performance.md](Performance.md) — `solve_pose` is taking ~10ms of the 20ms
   50Hz budget; assembly-verified hypotheses on where the time goes (soft
