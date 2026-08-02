@@ -33,6 +33,16 @@ static constexpr int ifloor(float x) noexcept {
 static_assert(NR >= 4, "bicubic stencil needs at least 4 nodes in r");
 static_assert(NZ >= 4, "bicubic stencil needs at least 4 nodes in z");
 
+// The axis_patch mirror below is only correct if grid column 0 sits
+// exactly on the physical symmetry axis (r=0) - it mirrors column 1
+// into the missing virtual column -1, which is only the true field
+// value there because r=0 and index 0 coincide. If the grid's r-origin
+// ever moves off 0, this assumption breaks silently (wrong, not a
+// crash), so pin it down here.
+static_assert(BICUBIC_ORIGIN.r == 0.0f,
+              "BicubicField's r=0 axis-symmetry mirror assumes the grid's "
+              "r-axis origin is exactly 0");
+
 // Value and gradient (d/dr, d/dz, each a Vec2) at (r, z). Never throws.
 void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_dz) const noexcept {
     // --- cell location -------------------------------------------
