@@ -77,6 +77,18 @@ There is heavy AI assistance. A lot of it for the tedium of getting the Jacobian
 ## Build instructions
 There are none for now. It should work out if you just use the instructions from the original.
 
+### Running the tests
+`pio test -e seeed_xiao_rp2040_test` builds and runs on real hardware. There's
+also `pio test -e native`, which runs the same pose-model tests on your own
+machine instead, via PlatformIO's `platform = native`. Unlike the RP2040 env,
+PlatformIO doesn't provision a compiler for this one — it just shells out to
+whatever `gcc`/`g++` it finds on `PATH`. On Linux/macOS that's normally
+already there; on Windows you'll need to install one yourself first (e.g.
+[w64devkit](https://github.com/skeeto/w64devkit/releases) — unzip, add its
+`bin/` folder to `PATH`, open a new terminal). The RP2040 toolchain
+PlatformIO already installed for you doesn't count — it's an ARM
+cross-compiler, not a native one.
+
 At the moment, if you run into issues I'd love to help. Because it would be great to know someone else is using this. I do intend to add documentation 'later'. That is as much of a promise as you probably think it is (not a promise).
 
 
