@@ -31,6 +31,11 @@ class SensorController {
   ifx::tlx493d::TLx493D_A2B6 mag2Sensor_;
   ifx::tlx493d::TLx493D_A2B6 mag3Sensor_;
 
+  // millis() timestamp of the most recent readUncorrected() call. Used to
+  // detect a gap since the last read -- see readUncorrected() in the .cpp
+  // for why that matters with Master-Controlled Mode's trigger-on-read setup.
+  unsigned long lastReadMs_ = 0;
+
   bool calibrationActive_ = false;
   bool calibrationDone_ = false;
   int calibrationSamples_ = 0;
