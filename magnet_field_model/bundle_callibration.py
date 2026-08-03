@@ -25,8 +25,7 @@ from rich.prompt import IntPrompt
 from rich.table import Table
 
 from calibration import collector
-from calibration.bundle_geometry import N_MAGNETS
-from calibration.bundle_params import N_SHARED_PARAMS_PER_PAIR
+from calibration.bundle_geometry import MAGNET_POS_NOMINAL_KNOB, N_MAGNETS
 from calibration.calibration_algorithm import BundleCalibrationResult, run_bundle_calibration
 from calibration.protocol import CalibStep
 from calibration.serial_link import SerialLink, list_available_ports
@@ -54,26 +53,28 @@ def _load_raw_datasets(path: Path) -> dict[CalibStep, list[list[float]]]:
 
 def _print_calibration_summary(console: Console, result: BundleCalibrationResult) -> None:
     status = "[green]converged[/]" if result.success else "[red]did NOT converge[/]"
-    console.print(f"\nBundle calibration {status} ({result.message}); final cost: {result.cost:.4f}")
+    console.print(
+        f"\nBundle calibration {status} ({result.message}); final cost: {result.cost:.4f}; "
+        f"RMS field residual: {result.field_residual_rms_mT:.4f} mT"
+    )
 
     table = Table(title="Fitted calibration offsets (from nominal)")
     table.add_column("Pair")
-    table.add_column("Sensor pos offset (mm)")
     table.add_column("Magnet pos offset (mm)")
-    table.add_column("Magnet rot offset (deg)")
-    table.add_column("Gain")
+    table.add_column("Magnet rot offset (deg, rotvec xyz)")
+    table.add_column("Gain matrix")
+    table.add_column("Strength")
 
+    geometry = result.geometry
     for i in range(N_MAGNETS):
-        pair = result.shared_offsets[i * N_SHARED_PARAMS_PER_PAIR : (i + 1) * N_SHARED_PARAMS_PER_PAIR]
-        sensor_pos_offset, magnet_pos_offset, magnet_rotvec_offset = pair[0:3], pair[3:6], pair[6:9]
-        gain = 1.0 + pair[9]
-        rot_deg = np.degrees(np.linalg.norm(magnet_rotvec_offset))
+        pos_offset = geometry.magnet_pos_knob[i] - MAGNET_POS_NOMINAL_KNOB[i]
+        rot_deg = geometry.magnet_rotation[i].as_rotvec(degrees=True)
         table.add_row(
             str(i + 1),
-            np.array2string(sensor_pos_offset, precision=3),
-            np.array2string(magnet_pos_offset, precision=3),
-            f"{rot_deg:.2f}",
-            f"{gain:.4f}",
+            np.array2string(pos_offset, precision=3),
+            np.array2string(rot_deg, precision=2),
+            np.array2string(geometry.gain[i], precision=3),
+            f"{geometry.magnet_strength[i]:.4f}",
         )
 
     console.print(table)
@@ -112,6 +113,7 @@ def main() -> None:
     if args.replay:
         result = run_bundle_calibration(_load_raw_datasets(args.replay))
         _print_calibration_summary(console, result)
+        print(result)
         return
 
     port = args.port or _pick_port(console)

@@ -30,6 +30,7 @@ venv/
 
 # --- Project-specific data/output ---
 **/calibration_runs/
+**/calibration_result.json
 
 # --- CAD backup files ---
 *.FCBak

@@ -2,45 +2,56 @@
 
 A joint (bundle-adjustment-style) nonlinear least-squares fit over:
 
-  - 30 shared calibration parameters (per magnet/sensor pair: sensor
-    position offset, magnet position offset, magnet rotation offset,
-    sensor gain offset) - each ridge-regularized around its nominal/
-    expected value (0) using a per-parameter expected stddev, and
+  - 36 shared calibration parameters (per magnet/sensor pair: magnet
+    position offset, magnet rotation offset, a 5-free-entry upper-triangular
+    gain matrix, magnet strength offset) - each ridge-regularized around its
+    nominal/expected value (0) using a per-parameter expected stddev, and
   - one 6-DOF knob pose (translation + rotation vector) per captured
     frame - free, unregularized.
 
-against the raw field measurements collected for all 7 poses. The
-combined residual vector is [field residuals / sigma_field] followed by
-[shared offsets / their sigma] - minimizing its sum of squares is a MAP
-estimate under those priors. Solved with scipy.optimize.least_squares
-using its default finite-difference Jacobian: this runs offline, once, so
-there's no need to hand-derive an analytic one.
+against the raw field measurements collected for all 7 poses. See
+bundle_params.py (BundleCalibrationProblem) for how the combined, scaled
+residual/Jacobian is built - minimizing its sum of squares is a MAP estimate
+under the regularization priors. The Jacobian is hand-assembled from
+per-frame finite-difference blocks (bundle_geometry.full_jacobian) rather
+than left to scipy's own dense finite-difference fallback, since a global
+dense Jacobian would re-evaluate every frame's residual for every one of the
+~2,350 unknowns (O(n_frames^2)) - this runs offline, once, so there's no
+need for anything fancier than finite differences, just not a dense global
+sweep.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import functools
 import multiprocessing
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
 
-from .bundle_geometry import APPROX_REST_T_MM, BundleGeometry
-from .bundle_params import N_SHARED_PARAMS, RegularizationSigmas, unpack_shared
+from .bundle_geometry import (
+    APPROX_REST_T_MM,
+    N_POSE_PARAMS,
+    N_SHARED_PARAMS,
+    BundleGeometry,
+    unpack_shared,
+)
+from .bundle_params import BundleCalibrationProblem, RegularizationSigmas
 from .protocol import CalibStep
-
-N_POSE_PARAMS = 6  # translation (3) + rotation vector (3)
 
 
 @dataclass(frozen=True)
 class BundleCalibrationResult:
     geometry: BundleGeometry                            # fitted (nominal + offset) bundle geometry
-    shared_offsets: NDArray[np.float64]                  # the raw 30 fitted offsets, for reporting
+    shared_offsets: NDArray[np.float64]                  # the raw 36 fitted offsets, for reporting
     frame_poses: NDArray[np.float64]                     # (n_frames, 6) fitted [t, rotvec] per frame
     cost: float                                          # scipy's final 0.5 * sum(residuals**2)
     success: bool
     message: str
+    field_residual_rms_mT: float                         # unscaled RMS field residual, for sanity-checking the fit
 
 
 def _solve_single_frame_pose(
@@ -62,39 +73,45 @@ def _solve_single_frame_pose(
     return result.x[:3], result.x[3:]
 
 
-def _initial_frame_poses(
-    measured_by_step: dict[CalibStep, NDArray[np.float64]],
+def _solve_step_poses(
+    measured_frames: NDArray[np.float64],
     nominal_geometry: BundleGeometry,
 ) -> NDArray[np.float64]:
-    """Seed per-frame pose guesses via independent single-frame solves.
+    """Warm-started chain of single-frame solves for one calibration step.
 
-    Warm-started frame-to-frame within each step (adjacent frames are
-    ~50ms apart during RECORDING, so the true pose barely moves) rather
-    than resetting to the rest pose every time - this matters a lot for
-    the dynamic steps (PITCH/ROLL/TWIST/HEAVE/RANDOM), where a plain
-    rest-pose guess would be far from the true pose.
+    Warm-started frame-to-frame (adjacent frames are ~50ms apart during
+    RECORDING, so the true pose barely moves) rather than resetting to the
+    rest pose every time - this matters a lot for the dynamic steps
+    (PITCH/ROLL/TWIST/HEAVE/RANDOM), where a plain rest-pose guess would be
+    far from the true pose. This makes the chain inherently sequential
+    within a step - see _initial_frame_poses for the parallel axis instead.
     """
     poses = []
-    for step in sorted(measured_by_step, key=int):
-        t_guess, rotvec_guess = APPROX_REST_T_MM, np.zeros(3)
-        for measured_field in measured_by_step[step]:
-            t_guess, rotvec_guess = _solve_single_frame_pose(measured_field, nominal_geometry, t_guess, rotvec_guess)
-            poses.append(np.concatenate([t_guess, rotvec_guess]))
+    t_guess, rotvec_guess = APPROX_REST_T_MM, np.zeros(3)
+    for measured_field in measured_frames:
+        t_guess, rotvec_guess = _solve_single_frame_pose(measured_field, nominal_geometry, t_guess, rotvec_guess)
+        poses.append(np.concatenate([t_guess, rotvec_guess]))
     return np.array(poses)
 
 
-def residuals(x: NDArray[np.float64], *, measured: np.array, n_frames: int, sigma_vector: NDArray[np.float64], sigma_field_mT: float,) -> NDArray[np.float64]:
-    shared = x[:N_SHARED_PARAMS]
-    frame_params = x[N_SHARED_PARAMS:].reshape(n_frames, N_POSE_PARAMS)
-    geometry = unpack_shared(shared)
+def _initial_frame_poses(
+    measured_by_step: dict[CalibStep, NDArray[np.float64]],
+    nominal_geometry: BundleGeometry,
+    *,
+    workers: Callable[[Callable, Iterable], Iterable] = map,
+) -> NDArray[np.float64]:
+    """Seed per-frame pose guesses via independent single-frame solves.
 
-    field_residuals = np.empty(9 * n_frames)
-    for i in range(n_frames):
-        t, rotvec = frame_params[i, :3], frame_params[i, 3:]
-        field_residuals[9 * i : 9 * i + 9] = (geometry.predict_field(t, rotvec) - measured[i]) / sigma_field_mT
+    Each step's warm-started chain (see _solve_step_poses) is sequential,
+    but the 7 steps are fully independent of each other - each starts fresh
+    from the rest pose - so `workers` (e.g. a multiprocessing.Pool's .map)
+    parallelizes across steps instead.
+    """
+    steps = sorted(measured_by_step, key=int)
+    task = functools.partial(_solve_step_poses, nominal_geometry=nominal_geometry)
+    step_poses = workers(task, (measured_by_step[step] for step in steps))
+    return np.concatenate(list(step_poses))
 
-    reg_residuals = shared / sigma_vector
-    return np.concatenate([field_residuals, reg_residuals])
 
 def run_bundle_calibration(
     datasets: dict[CalibStep, list[list[float]]],
@@ -113,26 +130,35 @@ def run_bundle_calibration(
     # actually gets any frames, and an empty array would break the
     # concatenation below.
     measured_by_step = {
-        step: np.array(frames, dtype=float) for step, frames in datasets.items() if frames
+        step: np.array(frames[::8], dtype=float) for step, frames in datasets.items() if frames
     }
     measured = np.concatenate([measured_by_step[step] for step in sorted(measured_by_step, key=int)])
     n_frames = len(measured)
 
     nominal_geometry = unpack_shared(np.zeros(N_SHARED_PARAMS))
-    frame_x0 = _initial_frame_poses(measured_by_step, nominal_geometry)
-    x0 = np.concatenate([np.zeros(N_SHARED_PARAMS), frame_x0.ravel()])
 
-    sigma_vector = sigmas.as_vector()
-
-    params = {
-        "measured": measured,
-        "n_frames": n_frames,
-        "sigma_vector": sigma_vector,
-        "sigma_field_mT": sigma_field_mT,
-    }
-
+    # One pool, reused for both the initial-pose seeding (parallel across
+    # steps - see _initial_frame_poses) and the Jacobian (parallel across
+    # frames - see bundle_geometry.poses_jacobian). The Jacobian is supplied
+    # explicitly below (jac=), so scipy never falls back to its own dense
+    # finite-difference path at all.
     with multiprocessing.Pool() as pool:
-        result = least_squares(residuals, x0, verbose=2, xtol=1e-4, kwargs=params, workers=pool.map)
+        frame_x0 = _initial_frame_poses(measured_by_step, nominal_geometry, workers=pool.map)
+        x0 = np.concatenate([np.zeros(N_SHARED_PARAMS), frame_x0.ravel()])
+
+        problem = BundleCalibrationProblem(
+            measured=measured, sigma_field_mT=sigma_field_mT, sigmas=sigmas, workers=pool.map
+        )
+        result = least_squares(
+            problem.residual, x0, jac=problem.jacobian, x_scale="jac", verbose=2, tr_solver='lsmr',
+            xtol=1e-5, ftol=1e-6, gtol=1e-5,
+            max_nfev=1000,
+            tr_options={'regularize': False}
+        )
+    print(result)
+
+    unscaled = problem.unscale_residual(result.fun)
+    field_residual_rms_mT = float(np.sqrt(np.mean(unscaled[: 9 * n_frames] ** 2)))
 
     return BundleCalibrationResult(
         geometry=unpack_shared(result.x[:N_SHARED_PARAMS]),
@@ -141,4 +167,5 @@ def run_bundle_calibration(
         cost=result.cost,
         success=result.success,
         message=result.message,
+        field_residual_rms_mT=field_residual_rms_mT,
     )
