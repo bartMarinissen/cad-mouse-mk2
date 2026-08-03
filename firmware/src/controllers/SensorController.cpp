@@ -58,11 +58,10 @@ bool SensorController::setup_sensor(ifx::tlx493d::TLx493D_A2B6& sensor, int pin,
     return false;
   }
   // No conversion is running yet at this point (Master-Controlled Mode
-  // starts powered down until triggered), so the first real read in the
-  // main loop pays for that first conversion via clock stretching. If that
-  // turns out to be too costly in practice, trigger one conversion here
-  // explicitly (e.g. a throwaway getMagneticFieldAndTemperature() call) so
-  // it's already in flight before the main loop starts reading.
+  // starts powered down until triggered). That's fine: readUncorrected()
+  // detects the gap since its last call and re-triggers before reading for
+  // real whenever it's been more than 100ms, which covers this first-ever
+  // read too.
   delay(10);
   return true;
 }
@@ -114,7 +113,32 @@ bool SensorController::begin() {
   return true;
 }
 
+// The sensors run in Master-Controlled Mode with trigger-on-read (set up
+// once per sensor in setup_sensor() via setPowerMode()/setTrigger()): every
+// getMagneticFieldAndTemperature() call both returns the previous
+// measurement and re-arms the next conversion as a side effect. Clock
+// stretching (the driver's default CA=0/INT=1 config) makes a read block
+// for as long as its conversion is still running, so cycling through the 3
+// sensors back-to-back keeps each one's data fresh with no manual delay --
+// see TODO/sensor-read-speed.md for the full design.
+//
+// That self-triggering only works if reads keep happening often enough. If
+// nobody has called this in a while, the sensor's last-armed conversion
+// finished long ago and is just sitting there stale. So if it's been more
+// than 100ms since the last call (including never, at first boot), throw
+// away one round of reads first purely to re-trigger a fresh conversion per
+// sensor, then read for real below -- clock stretching makes that second
+// read wait for the fresh conversion instead of returning the stale one.
 void SensorController::readUncorrected(float out[9]) {
+  const unsigned long now = millis();
+  if (now - lastReadMs_ > 100) {
+    double dx = 0, dy = 0, dz = 0, dt = 0;
+    mag1Sensor_.getMagneticFieldAndTemperature(&dx, &dy, &dz, &dt);
+    mag2Sensor_.getMagneticFieldAndTemperature(&dx, &dy, &dz, &dt);
+    mag3Sensor_.getMagneticFieldAndTemperature(&dx, &dy, &dz, &dt);
+  }
+  lastReadMs_ = now;
+
   double mag1x = 0, mag1y = 0, mag1z = 0, temp1 = 0;
   double mag2x = 0, mag2y = 0, mag2z = 0, temp2 = 0;
   double mag3x = 0, mag3y = 0, mag3z = 0, temp3 = 0;
