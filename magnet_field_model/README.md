@@ -38,7 +38,8 @@ Calibration recovers, per unit:
 |---|---|---|
 | `magnet_pos` | 3x3 | knob-frame magnet position offset (mm) |
 | `magnet_tilt` | 3x2 | magnet axis tilt (rad) |
-| `magnet_strength` | 3x1 | polarization multiplier |
+| `magnet_strength_mean` | 1 | common-mode polarization multiplier |
+| `magnet_strength_diff` | 2 | how much individual magnets differ from it |
 | `sensor_offset` | 3x3 | DC offset on the raw reading (mT) |
 | `gain_iso` | 3x1 | isotropic sensor gain error |
 | `gain_aniso` | 3x2 | per-axis sensitivity spread |
@@ -46,8 +47,8 @@ Calibration recovers, per unit:
 | `gain_rot` | 3x3 | sensor frame misalignment |
 
 54 shared parameters, plus one free 6-DOF pose per captured frame — a
-bundle adjustment, in the photogrammetry sense. `gain_iso` and
-`magnet_strength` are never free at the same time; see the gauge note below.
+bundle adjustment, in the photogrammetry sense. `gain_iso` and the magnet
+strength groups are never free at the same time; see the gauge note below.
 
 ## Package layout
 
@@ -99,6 +100,15 @@ via the determinant. It is a *gauge choice*, not a measurement: it
 re-attributes scale rather than discovering where it belongs. Pass
 `estimate_strength=False` to skip it and keep scale in the gain.
 
+**Pose solving.** Every frame's pose is solved in one batched
+Levenberg-Marquardt rather than a Python loop, since the frames are
+independent. A cold start occasionally drops a single frame into the wrong
+basin — near a magnet and well tilted, the residual surface has a second
+minimum a few degrees away — so any frame ending far worse than its peers is
+retried from a spread of starting orientations. `converged` reflects the final
+residual, not the damping factor, because `frame_selection.py` gates on it:
+a frame that silently failed would otherwise be selected and poison the fit.
+
 **Reported uncertainty.** Each frame's 6 pose parameters touch only that
 frame's 9 residuals, so the pose block of the normal equations is
 block-diagonal and can be eliminated frame by frame (the Schur complement, in
@@ -130,16 +140,21 @@ Recorded explicitly, because several are load-bearing:
 3. **Sensor positions are fixed, not calibrated.** They define the world
    frame. Real sensor placement error is absorbed by the magnet position
    offsets, which are related to it by a per-frame pose anyway.
-4. **Magnet strength is reported under a gauge, and is only weakly measured.**
-   See the det(G) = 1 note above for why it cannot be separated from sensor
-   gain scale on its own. Even under the gauge it reaches only ~11%
-   information gain on real captures, because anisotropic gain and magnet
-   z-position can absorb much of a scale change (the field is Bz-dominated,
-   and HEAVE gives only ~3mm of travel to distinguish "stronger" from
-   "closer"). Treat the reported strengths as an attribution, not a
-   measurement. `tests/test_calibration.py` pins this down in both
-   directions: weakly identified with realistic motion, recovered to <0.01
-   when nothing competes.
+4. **Magnet strength is split into common mode and differential, with very
+   different priors, and is reported under a gauge.** See the det(G) = 1 note
+   above for why the overall scale cannot be separated from sensor gain on its
+   own; it reaches only ~7% information gain even under the gauge, because
+   anisotropic gain and magnet z-position absorb much of a scale change (the
+   field is Bz-dominated, and HEAVE gives ~3mm of travel to distinguish
+   "stronger" from "closer"). The *differential* part gets a ~15x tighter
+   prior (1%), on the grounds that magnets cut from one batch are graded to
+   about that of each other while their common remanence is not pinned at all.
+   Empirically that constraint is free: sweeping the differential prior from
+   0.2 down to 0.0002 moves the field residual by 0.001 percentage points, so
+   the per-magnet differences were never explaining anything - the apparent
+   per-sensor spread is accounted for by magnet position and DC offset
+   instead. Treat the reported strengths as an attribution, not a
+   measurement.
 5. **DC offset is applied on the raw side, after gain.** It is a property of
    the raw reading (Hall zero-point plus ambient field), not of the modelled
    field, so `pred = G @ B_model + offset`. The firmware subtracts its offset
@@ -195,8 +210,13 @@ what distinguishes the two.
   in `sensor.cpp`. What it would need is that reduction driving the solve
   rather than only the covariance, plus the persistence layer above.
 - Magnet strength and the `magnet_pos` z-offsets are both weakly determined
-  (~11% and ~15% information gain). Scaling a magnet and moving it closer both
+  (~7% and ~15% information gain). Scaling a magnet and moving it closer both
   scale |B|; only the shape of |B| versus distance separates them, and the
   HEAVE step supplies ~3mm of travel to do it with. More Z range would help,
   but the mechanism limits how much is available before the magnet leaves the
-  modelled region.
+  modelled region — past a few mm the magnet passes the sensor plane entirely
+  and the model stops applying, so this is not simply a "capture more" fix.
+- The fitted common-mode strength lands consistently around 1.04-1.05, which
+  says the nominal 600mT polarization in `local_field.py` is a few percent
+  low. Worth folding back into the notebook (and hence the firmware table) at
+  some point, rather than carrying it as a calibration offset forever.

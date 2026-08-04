@@ -20,6 +20,8 @@ from calibration.bundle_geometry import (
     N_SHARED_PARAMS,
     NOMINAL_GEOMETRY,
     renormalize_gauge,
+    set_strength_vector,
+    strength_vector,
     unpack_shared,
 )
 from calibration.calibration_algorithm import run_bundle_calibration
@@ -181,7 +183,7 @@ def test_renormalize_gauge_gives_unit_determinant():
     for group in ("gain_iso", "gain_aniso", "gain_sym", "gain_rot"):
         sl = GROUP_SLICES[group]
         x[sl] = rng.normal(0.0, 0.06, sl.stop - sl.start)
-    x[GROUP_SLICES["magnet_strength"]] = rng.normal(0.0, 0.02, 3)
+    set_strength_vector(x, rng.normal(0.0, 0.02, 3))
 
     geom = unpack_shared(renormalize_gauge(x))
     assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0, atol=1e-10)
@@ -211,7 +213,7 @@ def test_gauge_moves_scale_from_gain_into_strength():
     y = renormalize_gauge(x)
     assert np.abs(y[GROUP_SLICES["gain_iso"]]).max() < 1e-10
     # to first order det(G)^(1/3) == 1 + gain_iso, so strength picks it up
-    assert np.allclose(y[GROUP_SLICES["magnet_strength"]], [0.05, -0.03, 0.04], atol=2e-3)
+    assert np.allclose(strength_vector(y), [0.05, -0.03, 0.04], atol=2e-3)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,7 +312,7 @@ def test_gauge_stage_holds_det_one_and_fits_the_field():
     """Whatever the gauge does to attribution, it must not damage the fit."""
     rng = np.random.default_rng(22)
     truth = np.zeros(N_SHARED_PARAMS)
-    truth[GROUP_SLICES["magnet_strength"]] = [0.07, -0.05, 0.03]
+    set_strength_vector(truth, [0.07, -0.05, 0.03])
     geom = unpack_shared(truth)
     assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0)  # truth is in-gauge
 
@@ -333,13 +335,44 @@ def test_magnet_strength_is_weakly_identified_at_realistic_z_travel():
     """
     rng = np.random.default_rng(23)
     truth = np.zeros(N_SHARED_PARAMS)
-    truth[GROUP_SLICES["magnet_strength"]] = [0.07, -0.05, 0.03]
+    set_strength_vector(truth, [0.07, -0.05, 0.03])
 
     result = run_bundle_calibration(
         _synthetic_datasets(unpack_shared(truth), rng), n_frames=60, verbose=False
     )
-    info = result.information_gain[GROUP_SLICES["magnet_strength"]].mean()
+    info = result.information_gain[GROUP_SLICES["magnet_strength_mean"]].mean()
     assert info < 0.35, f"strength claims {info:.0%} information gain - too confident"
+
+
+def test_tight_differential_prior_makes_magnets_equal():
+    """The default differential prior is ~15x tighter than the common-mode one,
+    which is a deliberate statement that magnets from one batch are near
+    identical. Check it actually binds: the fitted strengths should come out
+    the same to well under a percent even when the truth says otherwise."""
+    rng = np.random.default_rng(25)
+    truth = np.zeros(N_SHARED_PARAMS)
+    set_strength_vector(truth, [0.06, -0.04, 0.02])
+
+    result = run_bundle_calibration(
+        _synthetic_datasets(unpack_shared(truth), rng), n_frames=60, verbose=False
+    )
+    strengths = result.geometry.magnet_strength
+    assert np.ptp(strengths) < 0.01, f"magnets not pulled together: {strengths}"
+
+
+def test_loosening_the_differential_prior_lets_magnets_differ():
+    """The companion: the constraint is the prior, not the parameterization."""
+    from calibration.bundle_params import RegularizationSigmas
+
+    rng = np.random.default_rng(26)
+    truth = np.zeros(N_SHARED_PARAMS)
+    set_strength_vector(truth, [0.06, -0.04, 0.02])
+
+    result = run_bundle_calibration(
+        _synthetic_datasets(unpack_shared(truth), rng), n_frames=60,
+        sigmas=RegularizationSigmas(magnet_strength_diff=0.2), verbose=False,
+    )
+    assert np.ptp(result.geometry.magnet_strength) > 0.03
 
 
 def test_magnet_strength_is_recoverable_when_nothing_competes():
@@ -355,22 +388,25 @@ def test_magnet_strength_is_recoverable_when_nothing_competes():
 
     rng = np.random.default_rng(24)
     truth = np.zeros(N_SHARED_PARAMS)
-    truth[GROUP_SLICES["magnet_strength"]] = [0.07, -0.05, 0.03]
+    set_strength_vector(truth, [0.07, -0.05, 0.03])
 
     result = run_bundle_calibration(
         _synthetic_datasets(unpack_shared(truth), rng),
         n_frames=60,
-        stages=(SolveStage("strength only", ("magnet_strength",)),),
+        stages=(SolveStage("strength only",
+                           ("magnet_strength_mean", "magnet_strength_diff")),),
         estimate_strength=False,
         verbose=False,
     )
-    err = np.abs(result.shared_offsets[GROUP_SLICES["magnet_strength"]]
-                 - truth[GROUP_SLICES["magnet_strength"]])
-    assert err.max() < 0.01, f"strength not recovered even unopposed: {err}"
+    err = strength_vector(result.shared_offsets) - strength_vector(truth)
+    # The differential part is held near zero by its (deliberately tight)
+    # prior, so only the common mode is expected to come back - hence the
+    # signed mean of the error, not its magnitude.
+    assert abs(err.mean()) < 0.01, f"mean strength not recovered: {err}"
     # Not ~100%: the per-frame poses can still absorb a little of a scale
     # change by shifting the knob. But comfortably above the ~10% a real
     # capture manages once gain and geometry are competing for the same effect.
-    info = result.information_gain[GROUP_SLICES["magnet_strength"]].mean()
+    info = result.information_gain[GROUP_SLICES["magnet_strength_mean"]].mean()
     assert info > 0.6, f"strength only reached {info:.0%} information gain"
 
 

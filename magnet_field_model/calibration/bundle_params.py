@@ -58,10 +58,17 @@ class RegularizationSigmas:
     magnet_pos_mm: float = 0.3
     # Magnet axis tilt, ~1.7 deg.
     magnet_tilt_rad: float = 0.03
-    # Magnet remanence spread. Sintered NdFeB is typically graded to a few
-    # percent, and this carries the whole scale once the det(G)=1 gauge is
-    # applied, so it is given room comparable to gain_iso's.
-    magnet_strength: float = 0.15
+    # Common-mode magnet strength: the absolute field scale. Loose, because
+    # the nominal 600mT polarization is itself only an estimate, and this
+    # carries the whole scale once the det(G)=1 gauge is applied.
+    magnet_strength_mean: float = 0.15
+    # How much individual magnets differ from that mean. Deliberately ~15x
+    # tighter: magnets cut from one batch are graded to about a percent of
+    # each other, whereas their common absolute remanence is not pinned at
+    # all. Setting this very small approaches "assume all magnets identical",
+    # which pushes per-sensor scale differences into geometry and gain
+    # instead - see the note in the README about that trade.
+    magnet_strength_diff: float = 0.01
     # DC offset on the raw reading: Hall zero-point plus ambient field. The
     # firmware's own hand-tuned Config::sensor_offset_mT reaches 1.6 mT, so
     # this is deliberately loose enough not to fight it.
@@ -81,7 +88,8 @@ class RegularizationSigmas:
         per_group = {
             "magnet_pos": self.magnet_pos_mm,
             "magnet_tilt": self.magnet_tilt_rad,
-            "magnet_strength": self.magnet_strength,
+            "magnet_strength_mean": self.magnet_strength_mean,
+            "magnet_strength_diff": self.magnet_strength_diff,
             "sensor_offset": self.sensor_offset_mT,
             "gain_iso": self.gain_iso,
             "gain_aniso": self.gain_aniso,
@@ -150,7 +158,7 @@ DEFAULT_STAGES: tuple[SolveStage, ...] = (
 # the gauge transfer only approximate.
 GAUGE_STAGE = SolveStage(
     "magnet strength",
-    ("magnet_strength", "sensor_offset", "magnet_pos", "magnet_tilt",
+    ("magnet_strength_mean", "magnet_strength_diff", "sensor_offset", "magnet_pos", "magnet_tilt",
      "gain_aniso", "gain_sym", "gain_rot"),
 )
 

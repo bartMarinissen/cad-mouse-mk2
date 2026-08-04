@@ -97,9 +97,20 @@ NOMINAL_GAIN_SIGN = +1.0
 #                                   own polarization axis, so spin about that
 #                                   axis changes nothing measurable - carrying
 #                                   it would add an exactly-dead column.
-#   magnet_strength (1 per magnet)  multiplier on the magnet's polarization.
-#                                   Degenerate with gain_iso up to cross-talk -
-#                                   see renormalize_gauge().
+#   magnet_strength_mean (1)        common-mode polarization multiplier: the
+#                                   absolute field scale, which the nominal
+#                                   600mT figure only guesses at.
+#   magnet_strength_diff (2)        how much individual magnets differ from
+#                                   that mean, as a traceless triple
+#                                   (d0, d1, -(d0+d1)). Split from the mean
+#                                   because the two deserve very different
+#                                   priors: magnets cut from one batch are
+#                                   graded to ~1% of each other even though
+#                                   the batch's absolute remanence is much
+#                                   less certain. The differential part is
+#                                   also the part that causes Phantom Tilt,
+#                                   so it is worth being able to say "these
+#                                   magnets are near-identical" strongly.
 #   sensor_offset   (3 per sensor)  DC offset in raw sensor units (mT), added
 #                                   *after* gain, since it is a property of the
 #                                   raw reading (Hall zero-point + ambient
@@ -119,7 +130,8 @@ NOMINAL_GAIN_SIGN = +1.0
 PARAM_GROUPS: tuple[tuple[str, int], ...] = (
     ("magnet_pos", 3 * N_MAGNETS),
     ("magnet_tilt", 2 * N_MAGNETS),
-    ("magnet_strength", 1 * N_MAGNETS),
+    ("magnet_strength_mean", 1),
+    ("magnet_strength_diff", 2),
     ("sensor_offset", 3 * N_SENSORS),
     ("gain_iso", 1 * N_SENSORS),
     ("gain_aniso", 2 * N_SENSORS),
@@ -313,13 +325,16 @@ class BundleGeometry:
                 "niab,bc->niac", dtilt[:, :, j], jl[:, :2]
             )
 
-        # --- magnet strength: linear in the field, so d/d(ds_j) = G polarity B_j ---
-        sl = GROUP_SLICES["magnet_strength"]
+        # --- magnet strength: linear in the field, so d/d(ds_j) = G polarity B_j.
+        # The mean moves all three magnets together; each differential moves one
+        # magnet against the third (the triple is traceless by construction).
         dstrength = MAGNET_POLARITY * np.einsum(
             "iab,nijb->nija", gain, g["b_world_unit"]
         )
-        for j in range(N_MAGNETS):
-            j_shared[..., sl.start + j] = dstrength[:, :, j]
+        j_shared[..., GROUP_SLICES["magnet_strength_mean"].start] = dstrength.sum(axis=2)
+        sl = GROUP_SLICES["magnet_strength_diff"]
+        for k in range(2):
+            j_shared[..., sl.start + k] = dstrength[:, :, k] - dstrength[:, :, 2]
 
         # --- sensor DC offset: added straight onto the prediction ---
         sl = GROUP_SLICES["sensor_offset"]
@@ -342,6 +357,29 @@ class BundleGeometry:
         )
 
 
+def strength_vector(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
+    """The 3 per-magnet strength *offsets* implied by (mean, diff) parameters."""
+    x = np.asarray(x_shared, dtype=float)
+    mean = x[GROUP_SLICES["magnet_strength_mean"]][0]
+    d0, d1 = x[GROUP_SLICES["magnet_strength_diff"]]
+    return mean + np.array([d0, d1, -(d0 + d1)])
+
+
+def set_strength_vector(
+    x_shared: NDArray[np.float64], strength_offsets: NDArray[np.float64]
+) -> None:
+    """Inverse of strength_vector(): write 3 offsets back as (mean, diff), in place.
+
+    Exact - any 3-vector splits uniquely into its mean plus a zero-sum
+    remainder, which is what makes the gauge transfer in renormalize_gauge()
+    lossless even under this reparameterization.
+    """
+    s = np.asarray(strength_offsets, dtype=float)
+    mean = s.mean()
+    x_shared[GROUP_SLICES["magnet_strength_mean"]] = mean
+    x_shared[GROUP_SLICES["magnet_strength_diff"]] = (s - mean)[:2]
+
+
 def unpack_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
     """Build a concrete BundleGeometry from the flat shared-parameter vector.
 
@@ -362,7 +400,7 @@ def unpack_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
     return BundleGeometry(
         magnet_pos_knob=MAGNET_POS_NOMINAL_KNOB + magnet_pos_offset,
         magnet_tilt=magnet_tilt,
-        magnet_strength=1.0 + x[GROUP_SLICES["magnet_strength"]],
+        magnet_strength=1.0 + strength_vector(x),
         gain=gain,
         sensor_offset=x[GROUP_SLICES["sensor_offset"]].reshape(N_SENSORS, 3),
     )
@@ -422,7 +460,7 @@ def renormalize_gauge(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
 
     # Sensor i's scale goes to magnet i - each sensor is dominated by the
     # magnet it sits under, which is exactly why the two were degenerate.
-    x[GROUP_SLICES["magnet_strength"]] = (1.0 + x[GROUP_SLICES["magnet_strength"]]) * scale - 1.0
+    set_strength_vector(x, (1.0 + strength_vector(x)) * scale - 1.0)
     return x
 
 
