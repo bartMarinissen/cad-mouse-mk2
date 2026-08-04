@@ -215,13 +215,13 @@ values exactly.
 
 Two caveats on the exported numbers:
 
-- `MagnetModel::evaluate` still does **not** consume `magnet_strength`. Since
-  the fit's `det(G) = 1` gauge parks the entire field scale there, `export.py`
-  divides the strengths back into the exported gain and offset
-  (`fold_strength_into_gain()`) and emits `magnet_strength = 1.0f`. Emitting the
-  det(G)=1 gain with the fitted strengths beside it would produce a struct that
-  cannot be used at all: the strengths would do nothing and the modelled field
-  would be wrong by exactly that factor.
+- `MagnetModel` now carries a `magnet_strength` and applies it in `evaluate()`,
+  scaling the six cylindrical quantities before the x/y decomposition (exact,
+  since the field enters linearly downstream). This is the last piece of the
+  fitted set to get a consumer, so `export.py` emits the fit's numbers directly.
+  Gain and strength are one degree of freedom split by the `det(G) = 1` gauge —
+  the gain carries no field scale and the strengths carry all of it — so the two
+  must be pasted together or not at all.
 - `Sensor` no longer carries a gain; correction happens entirely in
   `SensorController::read_mT()`, which is what
   `TODO/sensor-gain-calibration.md` asked for.

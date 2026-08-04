@@ -46,24 +46,22 @@ struct CalibrationParams {
   // passed identity until now.
   Mat3 magnet_rotation[3];
 
-  // Per-magnet polarization multiplier.
+  // Per-magnet polarization multiplier, relative to the single magnet the
+  // bicubic table models. Consumed by MagnetModel::evaluate, which scales the
+  // six cylindrical field quantities by it before the x/y decomposition.
   //
-  // NOT YET CONSUMED: MagnetModel::evaluate does not scale its output by this,
-  // so these must stay at 1.0 for now -- which is consistent rather than a
-  // placeholder, because today's Config::magnet_gains still carries the whole
-  // field scale. It is carried here so the on-flash format does not need a
-  // version bump when it does get wired up.
+  // These are only meaningful together with sensor_gain, under the det(G)=1
+  // gauge that produced them (calibration/bundle_geometry.py's
+  // renormalize_gauge). Gain scale and magnet strength are the same degree of
+  // freedom -- a sensor reading 5% high and its magnet being 5% strong differ
+  // only through cross-talk -- and the fit deliberately moves that freedom out
+  // of the gain and into here, leaving det(G) == 1. So do not take a
+  // sensor_gain from one calibration and a magnet_strength from another, and do
+  // not "normalize" one without the other.
   //
-  // When it does: it belongs in MagnetModel::evaluate, scaling Br, Bz and the
-  // four derivatives before the x/y decomposition (6 multiplies, exact, since
-  // the field enters linearly). Folding it into sensor_gain instead is free
-  // today -- ForwardModel pairs sensor i with magnet i one-to-one, so scaling
-  // magnet i by s_i is identical to scaling sensor i by 1/s_i -- but that
-  // equivalence dies the moment cross-magnet interference is modelled (see
-  // TODO/cross-magnet-interference.md), and it muddles MagnetModel's units in
-  // the meantime. Note also that these values are only meaningful under the
-  // det(G)=1 gauge that produced them (calibration/bundle_geometry.py's
-  // renormalize_gauge): gain scale and magnet strength are the same degree of
-  // freedom, and the fit deliberately moved it out of the gain and into here.
+  // Config::defaultCalibration() sets these to 1.0, which is the consistent
+  // value for it rather than a placeholder: Config::magnet_gains is a
+  // hand-tuned scalar per sensor that still carries the whole field scale, so
+  // it is in the gain-carries-scale gauge, not the fit's.
   float magnet_strength[3];
 };

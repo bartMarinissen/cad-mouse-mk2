@@ -39,12 +39,18 @@ being owned/reachable anywhere either).
   `firmware/src/Controllers.cpp` decides where that struct comes from: today
   always `Config::defaultCalibration()`, and that function is the single seam a
   LittleFS read gets added behind.
-- Does `Sensor::sensor_gain` (in the solver's forward model) become redundant
-  once `SensorController` pre-corrects readings, or does it stay for a
-  different purpose (e.g. modeling sensor placement/orientation error vs. raw
-  gain error)? If raw readings are already corrected before reaching
-  `MotionController`, `Sensor::sensor_gain` may end up dead weight — worth
-  deciding explicitly rather than leaving both paths half-active.
+- ~~Does `Sensor::sensor_gain` become redundant once `SensorController`
+  pre-corrects readings?~~ **Moot.** `Sensor` no longer has that field at all —
+  it holds only `sensor_pos_global`. Gain lives solely in `SensorController`,
+  and the solver never sees an uncorrected reading, so there is no half-active
+  second path. The "Current state" section above is stale on this point.
+- ~~Where does per-magnet strength live?~~ **Answered.** `MagnetModel` owns a
+  `magnet_strength` and applies it in `evaluate()`. Sensor-side correction would
+  have been numerically identical while `ForwardModel` pairs sensor *i* with
+  magnet *i* one-to-one, but that stops holding once cross-magnet interference
+  is modelled (`TODO/cross-magnet-interference.md`), and strength is a property
+  of the magnet. Note gain and strength are one degree of freedom split by the
+  fit's `det(G)=1` gauge — neither is meaningful without the other.
 - How this connects to the bundle-calibration effort (`TODO/tare-and-calibration.md`)
   once that design lands — bundle calibration is the thing that would actually
   produce these gain values.

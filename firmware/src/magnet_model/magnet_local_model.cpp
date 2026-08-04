@@ -3,8 +3,10 @@
 #include <cmath>
 
 
-MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local, const Mat3 &magnet_rotation)
-    : field_model_(field_model), magnet_pos_knob(m_local), magnet_rotation(magnet_rotation) {}
+MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
+                         const Mat3 &magnet_rotation, float magnet_strength)
+    : field_model_(field_model), magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
+      magnet_strength(magnet_strength) {}
 
 
 /**
@@ -20,19 +22,25 @@ Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p, Mat3& J_local) co
     //       it might also spread the grid more nicely.
     float r = sqrtf(p[0]*p[0] + p[1]*p[1]);
 
-    Vec2 B_cylindrical, d_dr, d_dz; 
+    Vec2 B_cylindrical, d_dr, d_dz;
     field_model_.evaluate(r, p[2], B_cylindrical, d_dr, d_dz);
+
+    // Apply this magnet's polarization multiplier here, on the six cylindrical
+    // quantities, rather than on the assembled B_local and J_local below: the
+    // field enters everything downstream linearly, so scaling here is exact and
+    // costs 6 multiplies instead of the 12 the 3-vector plus 3x3 matrix would.
+    const float s = magnet_strength;
 
     // Decompose the measured field
     // Because we need to reconsitute the magnetic field in the x and y direction based on Br
-    float Br = B_cylindrical[0];
+    float Br = B_cylindrical[0] * s;
     // skip y which is stupidly zero
-    float Bz = B_cylindrical[1];
-    
-    float dBr_dr = d_dr[0];
-    float dBz_dr = d_dr[1];
-    float dBr_dz = d_dz[0];
-    float dBz_dz = d_dz[1];
+    float Bz = B_cylindrical[1] * s;
+
+    float dBr_dr = d_dr[0] * s;
+    float dBz_dr = d_dr[1] * s;
+    float dBr_dz = d_dz[0] * s;
+    float dBz_dz = d_dz[1] * s;
 
 
     const float EPSILON = 1e-6f;
