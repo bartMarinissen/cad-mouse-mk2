@@ -255,9 +255,10 @@ what distinguishes the two.
 - The `magnet_pos` prior is now optional rather than load-bearing. With the
   gauge fixed explicitly, dropping it entirely costs almost nothing: cross-run
   spread goes from 0.0041mm to 0.0053mm and the residual is unchanged. It is
-  kept at 0.3mm because press-fit assembly tolerance is a defensible belief
-  about the parts, unlike the 600mT figure - but it is now a belief the fit
-  could do without, which is the point of fixing the gauge properly.
+  kept at 0.3mm because the knob is 3D printed and a few tenths of a
+  millimetre is a well-founded statement about that process - unlike the 600mT
+  figure. It is now a belief the fit could do without, which is the point of
+  fixing the gauge properly, but it earns its place.
 - The absolute field scale is not measurable from this capture (±0.43 on a
   multiplier of 1). If it is worth knowing — and it would tighten the z
   sensitivity of the whole pose solve — it needs either much more heave travel

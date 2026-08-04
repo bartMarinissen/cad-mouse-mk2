@@ -59,7 +59,12 @@ class RegularizationSigmas:
     stands behind quietly pulls the answer toward it.
     """
 
-    # Magnet placement in the knob: press-fit/glued, so a few tenths of a mm.
+    # Magnet placement in the knob. Kept deliberately: the knob is 3D printed
+    # (see ../enclosure/), and a few tenths of a millimetre is a well-founded
+    # statement about that process - unlike the 600mT figure below, this is a
+    # real belief about the parts rather than a round number nobody stands
+    # behind. Since the pose gauge is now fixed explicitly, this prior is no
+    # longer load-bearing and only has to be defensible on its own merits.
     magnet_pos_mm: float | None = 0.3
     # Magnet axis tilt, ~1.7 deg.
     magnet_tilt_rad: float | None = 0.03
