@@ -36,7 +36,7 @@ Calibration recovers, per unit:
 
 | Group | Count | Meaning |
 |---|---|---|
-| `magnet_pos` | 3x3 | knob-frame magnet position offset (mm) |
+| `magnet_pos` | 3 | in-plane shape of the magnet triangle (mm) |
 | `magnet_tilt` | 3x2 | magnet axis tilt (rad) |
 | `magnet_strength_mean` | 1 | common-mode polarization multiplier |
 | `magnet_strength_diff` | 2 | how much individual magnets differ from it |
@@ -46,7 +46,7 @@ Calibration recovers, per unit:
 | `gain_sym` | 3x3 | cross-axis skew |
 | `gain_rot` | 3x3 | sensor frame misalignment |
 
-54 shared parameters, plus one free 6-DOF pose per captured frame — a
+48 shared parameters, plus one free 6-DOF pose per captured frame — a
 bundle adjustment, in the photogrammetry sense. `gain_iso` and the magnet
 strength groups are never free at the same time; see the gauge note below.
 
@@ -83,7 +83,7 @@ the fit toward shrinking |B|.
 
 **Staging.** Parameters are freed a group at a time (gain scale and DC offset
 → magnet geometry → the weak cross-axis gain terms), each stage warm-starting
-from the last, rather than throwing all 54 at a cold start. DC offset is freed
+from the last, rather than throwing all 48 at a cold start. DC offset is freed
 first because it is a pure constant across every pose — both easy to separate
 and badly corrupting if left until later, since the geometry stages would
 otherwise contort themselves to absorb it.
@@ -174,27 +174,37 @@ Recorded explicitly, because several are load-bearing:
    axially-polarized cylinder is a solid of revolution, so that rotation is
    unobservable for *any* dataset — a structurally dead direction rather than
    a poorly-measured one. Tilt carries 2 DOF, not 3.
-7. **Pose gauge fixing is done softly, by the priors.** A global translation
-   or rotation of all magnets is exactly degenerate with a compensating
-   per-frame pose change. Ridge priors on the magnet offsets anchor them.
+7. **The pose gauge is fixed explicitly, not by priors.** A global
+   translation or rotation of the magnet trio is exactly cancelled by a
+   compensating per-frame pose change — `mⱼ → Q mⱼ` with `R_n → R_n Qᵀ`
+   leaves `R_n Qᵀ Q mⱼ = R_n mⱼ` untouched — so 6 of the 9 raw magnet
+   coordinates carry no information whatsoever. Measured: 6 eigenvalues at
+   machine zero in the reduced Hessian, identically at 60, 120 and 387
+   frames. No dataset fixes this; each new frame brings 9 equations but also
+   6 new pose unknowns.
 
-   This is not optional, and no amount of data replaces it. Removing every
-   prior and looking at the spectrum of the reduced Hessian gives **exactly 6
-   eigenvalues at machine zero** — at 60, 120 and 387 frames alike, condition
-   number 1e17 or worse in every case. 99.8% of that null space lies in
-   `magnet_pos` (the rest in `magnet_tilt`), which is the predicted
-   translation+rotation gauge. Adding frames cannot help: each new frame
-   brings 9 equations but also 6 new pose unknowns, so the null direction
-   survives untouched. The practical damage is visible too — unregularized,
-   magnet offsets wander to 1.6-1.8mm and their cross-run spread degrades
-   from 0.007mm to 0.26mm, while the residual does not change at all (by
-   definition: motion along a gauge direction is invisible to the data).
+   `MAGNET_POS_BASIS` removes them by construction, via three constraints:
+   zero mean offset (kills translation), all z offsets equal (makes the
+   triangle's plane horizontal, killing pitch and roll), and zero net yaw
+   moment (kills twist, symmetrically rather than by pinning an edge). The
+   flat constraint costs nothing — three points are always coplanar, so any
+   arrangement can be rotated flat and the plane's tilt is pure gauge.
 
-   The tidier fix is an explicit mean-zero constraint on the magnet offsets
-   and tilts, which removes those 6 DOF without asserting anything about how
-   large the remaining offsets should be. That would let the other priors be
-   loosened or dropped on their own merits, rather than carrying gauge-fixing
-   duty they were never meant to have.
+   What survives is 3 parameters: the triangle's in-plane shape, i.e. its
+   three side lengths, which is the only part that can cause Phantom Tilt.
+   Magnet tilts keep all 6 DOF, measured against the frame the flat triangle
+   defines. (The rotation gauge is *shared* between positions and tilts, so
+   it can be spent on either — fixing roll/pitch via mean tilt instead would
+   give 5 position + 4 tilt. Total observable is 9 either way; only the
+   presentation differs.)
+
+   Two things this bought. Conditioning: the reduced Hessian's condition
+   number drops from 2e305 (numerically singular) to 2e6. And frame count
+   starts to matter — with all priors off, cross-run spread now improves
+   2.1x going from 60 to 387 frames, against the √6.45 = 2.5 that pure
+   averaging predicts, where before the gauge fix it was flat. Null
+   directions cannot be out-voted by data; merely weak ones can.
+
 8. **Gain is fitted on the model side, exported inverted.** See
    `export.py` — the firmware applies gain to the raw measurement, this fit
    applies it to the model, so the exported matrix is the inverse (with
@@ -237,13 +247,17 @@ what distinguishes the two.
   a fixed-size accumulator — and the firmware already has the same chain rule
   in `sensor.cpp`. What it would need is that reduction driving the solve
   rather than only the covariance, plus the persistence layer above.
-- Magnet strength and the `magnet_pos` z-offsets are both weakly determined
-  (~7% and ~15% information gain). Scaling a magnet and moving it closer both
-  scale |B|; only the shape of |B| versus distance separates them, and the
-  HEAVE step supplies ~3mm of travel to do it with. More Z range would help,
-  but the mechanism limits how much is available before the magnet leaves the
-  modelled region — past a few mm the magnet passes the sensor plane entirely
-  and the model stops applying, so this is not simply a "capture more" fix.
+- Magnet strength stays weakly determined (~7% information gain). Scaling a
+  magnet and moving it closer both scale |B|; only the shape of |B| versus
+  distance separates them, and HEAVE supplies ~3mm of travel to do it with.
+  More Z range would help, but the mechanism limits how much is available
+  before the magnet leaves the modelled region.
+- The `magnet_pos` prior is now optional rather than load-bearing. With the
+  gauge fixed explicitly, dropping it entirely costs almost nothing: cross-run
+  spread goes from 0.0041mm to 0.0053mm and the residual is unchanged. It is
+  kept at 0.3mm because press-fit assembly tolerance is a defensible belief
+  about the parts, unlike the 600mT figure - but it is now a belief the fit
+  could do without, which is the point of fixing the gauge properly.
 - The absolute field scale is not measurable from this capture (±0.43 on a
   multiplier of 1). If it is worth knowing — and it would tighten the z
   sensitivity of the whole pose solve — it needs either much more heave travel

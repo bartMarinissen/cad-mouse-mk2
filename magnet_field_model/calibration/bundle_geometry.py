@@ -91,7 +91,15 @@ NOMINAL_GAIN_SIGN = +1.0
 # Grouped (not interleaved) so a hierarchical solve can free one group at a
 # time with a simple boolean mask - see bundle_params.SolveStage.
 #
-#   magnet_pos      (3 per magnet)  knob-frame bottom-face position offset, mm
+#   magnet_pos      (3 total)       in-plane shape of the magnet triangle, mm.
+#                                   NOT 3 per magnet: 9 raw coordinates minus
+#                                   the 6 rigid-body DOF that are pure gauge
+#                                   (see MAGNET_POS_BASIS) leaves exactly 3 -
+#                                   the triangle's three side lengths, which
+#                                   is the only part that can cause Phantom
+#                                   Tilt. Where the trio sits and how it is
+#                                   oriented is absorbed by the per-frame pose
+#                                   and is not measurable by any dataset.
 #   magnet_tilt     (2 per magnet)  magnet axis tilt, rad. Only 2 DOF: the
 #                                   magnet is a solid of revolution about its
 #                                   own polarization axis, so spin about that
@@ -128,7 +136,7 @@ NOMINAL_GAIN_SIGN = +1.0
 # an offset from nominal with expected value 0 - which is what lets the ridge
 # priors in bundle_params.py read as "how many prior stddevs from nominal".
 PARAM_GROUPS: tuple[tuple[str, int], ...] = (
-    ("magnet_pos", 3 * N_MAGNETS),
+    ("magnet_pos", 3),
     ("magnet_tilt", 2 * N_MAGNETS),
     ("magnet_strength_mean", 1),
     ("magnet_strength_diff", 2),
@@ -145,6 +153,78 @@ for _name, _size in PARAM_GROUPS:
     GROUP_SLICES[_name] = slice(_offset, _offset + _size)
     _offset += _size
 N_SHARED_PARAMS = _offset  # 42
+
+
+def _magnet_pos_gauge_basis() -> NDArray[np.float64]:
+    """Orthonormal basis (9x3) for magnet position offsets that fixes the gauge.
+
+    A global translation or rotation of the magnet trio is exactly cancelled by
+    a compensating per-frame pose change, so 6 of the 9 raw coordinates carry
+    no information at all - measured as 6 eigenvalues at machine zero in the
+    reduced Hessian, invariant to how many frames are captured. Rather than
+    leaning on priors to hold those directions down, they are removed from the
+    parameterization outright by three constraints:
+
+      1. sum of offsets == 0            - fixes the trio's position (3 DOF)
+      2. all z offsets equal            - makes the triangle's plane
+                                          horizontal, fixing pitch and roll
+                                          (2 DOF). This costs nothing: three
+                                          points are always coplanar, so any
+                                          arrangement can be rotated flat, and
+                                          the plane's tilt is pure gauge.
+      3. zero net yaw moment            - fixes twist (1 DOF), symmetrically in
+                                          all three magnets rather than by
+                                          pinning one edge.
+
+    Constraints 1 and 2 together force every z offset to exactly zero, so the
+    three survivors are purely in-plane - the shape of the triangle.
+    """
+    constraints = []
+
+    for axis in range(3):                                   # 1. zero mean offset
+        row = np.zeros(9)
+        row[axis::3] = 1.0
+        constraints.append(row)
+
+    for j in range(N_MAGNETS - 1):                          # 2. equal z => plane horizontal
+        row = np.zeros(9)
+        row[3 * j + 2] = 1.0
+        row[3 * (j + 1) + 2] = -1.0
+        constraints.append(row)
+
+    row = np.zeros(9)                                       # 3. zero net yaw moment
+    for j in range(N_MAGNETS):
+        row[3 * j + 0] = -MAGNET_POS_NOMINAL_KNOB[j, 1]
+        row[3 * j + 1] = MAGNET_POS_NOMINAL_KNOB[j, 0]
+    constraints.append(row)
+
+    # The nullspace of the constraint matrix is the admissible subspace.
+    _, _, vt = np.linalg.svd(np.array(constraints))
+    basis = vt[len(constraints):].T
+    assert basis.shape == (9, 3), f"expected 3 free shape DOF, got {basis.shape}"
+    return basis
+
+
+MAGNET_POS_BASIS: NDArray[np.float64] = _magnet_pos_gauge_basis()
+
+
+def magnet_pos_offsets(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
+    """(3, 3) per-magnet position offsets implied by the 3 shape parameters."""
+    x = np.asarray(x_shared, dtype=float)
+    return (MAGNET_POS_BASIS @ x[GROUP_SLICES["magnet_pos"]]).reshape(N_MAGNETS, 3)
+
+
+def set_magnet_pos_offsets(
+    x_shared: NDArray[np.float64], offsets: NDArray[np.float64]
+) -> None:
+    """Write (3, 3) offsets back as shape parameters, in place.
+
+    Projects onto the gauge-fixed subspace: any rigid-body component of
+    `offsets` is silently dropped, which is correct - it was never observable,
+    and dropping it is exactly what choosing a gauge representative means.
+    """
+    flat = np.asarray(offsets, dtype=float).ravel()
+    x_shared[GROUP_SLICES["magnet_pos"]] = MAGNET_POS_BASIS.T @ flat
 
 
 def _skew(v: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -304,12 +384,17 @@ class BundleGeometry:
 
         j_shared = np.zeros((n, N_SENSORS, 3, N_SHARED_PARAMS))
 
-        # --- magnet position: d(field)/dm_j = -M R ---
+        # --- magnet position: d(field)/dm_j = -M R, then projected onto the
+        # gauge-fixed shape basis (the 6 rigid-body directions are dropped
+        # rather than fitted - see MAGNET_POS_BASIS).
         dm = -np.einsum("nijab,nbc->nijac", m, r_knob)               # (n,i,j,3,3)
         dm = np.einsum("iab,nijbc->nijac", gain, dm)
-        sl = GROUP_SLICES["magnet_pos"]
+        dm_raw = np.empty((n, N_SENSORS, 3, 3 * N_MAGNETS))
         for j in range(N_MAGNETS):
-            j_shared[..., sl.start + 3 * j : sl.start + 3 * j + 3] = dm[:, :, j]
+            dm_raw[..., 3 * j : 3 * j + 3] = dm[:, :, j]
+        j_shared[..., GROUP_SLICES["magnet_pos"]] = np.einsum(
+            "nirc,ck->nirk", dm_raw, MAGNET_POS_BASIS
+        )
 
         # --- magnet tilt: d(field)/d(eps_j) = M R skew(d) - R skew(B_knob) ---
         mr = np.einsum("nijab,nbc->nijac", m, r_knob)
@@ -387,7 +472,7 @@ def unpack_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
     """
     x = np.asarray(x_shared, dtype=float)
 
-    magnet_pos_offset = x[GROUP_SLICES["magnet_pos"]].reshape(N_MAGNETS, 3)
+    magnet_pos_offset = magnet_pos_offsets(x)
     tilt_xy = x[GROUP_SLICES["magnet_tilt"]].reshape(N_MAGNETS, 2)
     magnet_tilt = np.concatenate([tilt_xy, np.zeros((N_MAGNETS, 1))], axis=1)
 

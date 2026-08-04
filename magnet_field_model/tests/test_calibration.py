@@ -19,7 +19,9 @@ from calibration.bundle_geometry import (
     GROUP_SLICES,
     N_SHARED_PARAMS,
     NOMINAL_GEOMETRY,
+    magnet_pos_offsets,
     renormalize_gauge,
+    set_magnet_pos_offsets,
     set_strength_vector,
     strength_vector,
     unpack_shared,
@@ -261,9 +263,11 @@ def test_synthetic_round_trip_recovers_gain_and_geometry():
     rng = np.random.default_rng(7)
     truth = np.zeros(N_SHARED_PARAMS)
     truth[GROUP_SLICES["gain_iso"]] = [0.06, -0.04, 0.02]
-    truth[GROUP_SLICES["magnet_pos"]] = [0.15, -0.20, 0.05,
-                                         -0.10, 0.12, -0.04,
-                                         0.08, 0.18, 0.03]
+    # Projected onto the gauge-fixed subspace on the way in, so the "truth"
+    # compared against below is the gauge representative, not the raw numbers.
+    set_magnet_pos_offsets(truth, [[0.15, -0.20, 0.05],
+                                   [-0.10, 0.12, -0.04],
+                                   [0.08, 0.18, 0.03]])
     truth[GROUP_SLICES["magnet_tilt"]] = [0.01, -0.008, 0.006, 0.012, -0.011, 0.004]
     geom = unpack_shared(truth)
 
@@ -279,7 +283,7 @@ def test_synthetic_round_trip_recovers_gain_and_geometry():
 
     got = result.shared_offsets
     gain_err = np.abs(got[GROUP_SLICES["gain_iso"]] - truth[GROUP_SLICES["gain_iso"]])
-    pos_err = got[GROUP_SLICES["magnet_pos"]] - truth[GROUP_SLICES["magnet_pos"]]
+    pos_err = magnet_pos_offsets(got) - magnet_pos_offsets(truth)
     assert gain_err.max() < 0.04, f"gain not recovered: {gain_err}"
 
     # Magnet offsets are checked in aggregate, not per-component: the knob
@@ -423,7 +427,7 @@ def test_synthetic_round_trip_at_nominal_stays_near_zero():
     )
     assert result.field_rms_mT < 0.2
     assert np.abs(result.shared_offsets[GROUP_SLICES["gain_iso"]]).max() < 0.03
-    assert np.abs(result.shared_offsets[GROUP_SLICES["magnet_pos"]]).max() < 0.15
+    assert np.abs(magnet_pos_offsets(result.shared_offsets)).max() < 0.15
 
 
 # --------------------------------------------------------------------------- #
@@ -489,7 +493,7 @@ def test_real_run_stays_physically_plausible():
     assert np.abs(np.abs(fw_diag) - 1.0).max() < 0.2
 
     offsets = result.shared_offsets
-    assert np.abs(offsets[GROUP_SLICES["magnet_pos"]]).max() < 1.0
+    assert np.abs(magnet_pos_offsets(offsets)).max() < 1.0
     assert np.degrees(np.abs(offsets[GROUP_SLICES["magnet_tilt"]])).max() < 3.0
     # Magnet strength carries no prior, and the data barely constrains the
     # absolute field scale, so the right check is consistency with nominal
