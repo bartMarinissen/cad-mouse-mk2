@@ -7,8 +7,6 @@
 #ifndef PIO_UNIT_TESTING
 InputController inputController;
 LEDController ledController;
-SensorController sensorController;
-MotionController motionController;
 HIDController hidController;
 TelemetryController telemetryController;
 BundleCalibrationController bundleCalibrationController{};
@@ -24,11 +22,19 @@ void setup() {
 
   inputController.begin();
   ledController.begin();
-  if (!sensorController.begin()) {
+
+  // Builds the calibrated controllers, from resolveCalibration(). Done here,
+  // explicitly, rather than being left to whichever call site happens to touch
+  // calibrated() first -- in Stage 2 this is the point at which the filesystem
+  // gets read, and it needs to be after Serial is up so a failed load can say
+  // so, and before anything starts solving poses.
+  CalibratedControllers& c = calibrated();
+
+  if (!c.sensor.begin()) {
     stateMachine.changeState(&StateMachine::errorState);
     return;
   }
-  motionController.reset();
+  c.motion.reset();
   telemetryController.begin();
 
   stateMachine.changeState(&StateMachine::calibratingState);

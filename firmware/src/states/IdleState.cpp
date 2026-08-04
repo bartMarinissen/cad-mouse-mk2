@@ -21,8 +21,10 @@ bool IdleState::handleCalibrationRequest() {
 }
 
 void IdleState::runMotionPipeline(float dt, unsigned long now) {
+  CalibratedControllers& c = calibrated();
+
   float raw[9] = {};
-  sensorController.read_mT(raw);
+  c.sensor.read_mT(raw);
 
   // Serial.printf(
   // "s1: %f %f %f \ns2: %f %f %f \ns3: %f %f %f \n", 
@@ -31,9 +33,9 @@ void IdleState::runMotionPipeline(float dt, unsigned long now) {
   // raw[6], raw[7], raw[8]
   // );
   float motion[6] = {};
-  float res_percent = motionController.compute(raw, sensorController.baseline(), dt, motion);
+  float res_percent = c.motion.compute(raw, c.sensor.baseline(), dt, motion);
 
-  if (motionController.hasMotionActivity()) {
+  if (c.motion.hasMotionActivity()) {
     lastActivityMs_ = now;
   }
 
@@ -41,12 +43,12 @@ void IdleState::runMotionPipeline(float dt, unsigned long now) {
   const bool hidReportSent = hidController.sendReports(motion, buttonBits);
   if (telemetryController.enabled()) {
     // we have the raw field as raw
-    // we can get the pose from motionController.last_pos and motionCOntroller.last_rot 
+    // we can get the pose from c.motion.last_pos and c.motion.last_rot
 
-    //auto eig_vals = motionController.statistics.last_jacobian.jacobiSvd().singularValues();
+    //auto eig_vals = c.motion.statistics.last_jacobian.jacobiSvd().singularValues();
     float rcond = 1.0;
     telemetryController.publish(
-      motion, res_percent, buttonBits, hidReportSent, motionController.statistics, raw, motionController.last_pos, motionController.last_rot, rcond);
+      motion, res_percent, buttonBits, hidReportSent, c.motion.statistics, raw, c.motion.last_pos, c.motion.last_rot, rcond);
   }
 } 
 

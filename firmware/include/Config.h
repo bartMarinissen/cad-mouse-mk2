@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "CalibrationParams.h"
+
 namespace Config {
 
 const bool ENABLE_TELEMETRY = true;
@@ -63,5 +65,16 @@ const float sensor_offset_mT[3][3] = {
   {-1.6f, -0.2f, 0.0f},
   {0.0f,   0.0f, 0.0f},
 };
+
+// The constants above, assembled into the struct the rest of the firmware
+// actually consumes. This is the fallback used when there is no calibration
+// stored on the device, so it has to stand on its own as a working (if
+// uncalibrated) unit -- identity magnet rotations and unit magnet strengths,
+// with magnet positions taken from the nominal CAD geometry in positions.h.
+//
+// A function rather than a constant on purpose: CalibrationParams holds Eigen
+// types, and a namespace-scope instance would be built during static init, in
+// an order nothing here controls.
+CalibrationParams defaultCalibration();
 
 }  // namespace Config

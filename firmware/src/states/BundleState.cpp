@@ -24,7 +24,7 @@ void BundleState::update() {
 
     uint16_t button_bits = inputController.takeActivity();
     // We pass the sensorController so the callibrator can be selective in when it wants to read the sensor.
-    bundleCalibrationController.update(button_bits, sensorController);
+    bundleCalibrationController.update(button_bits, calibrated().sensor);
 
    if (bundleCalibrationController.is_done()){
        stateMachine.changeState(&StateMachine::idleState);

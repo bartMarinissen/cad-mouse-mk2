@@ -31,10 +31,14 @@ being owned/reachable anywhere either).
 
 ## Open questions
 
-- Where do the calibration coefficients come from at runtime — hardcoded
+- ~~Where do the calibration coefficients come from at runtime — hardcoded
   `Config` values (as today, just relocated), or loaded from somewhere
-  persistent (there is currently no flash/EEPROM persistence anywhere in this
-  firmware at all)?
+  persistent?~~ **Answered.** They come from a `CalibrationParams`
+  (`firmware/include/CalibrationParams.h`), which `SensorController` is
+  constructed from and holds const. `resolveCalibration()` in
+  `firmware/src/Controllers.cpp` decides where that struct comes from: today
+  always `Config::defaultCalibration()`, and that function is the single seam a
+  LittleFS read gets added behind.
 - Does `Sensor::sensor_gain` (in the solver's forward model) become redundant
   once `SensorController` pre-corrects readings, or does it stay for a
   different purpose (e.g. modeling sensor placement/orientation error vs. raw
