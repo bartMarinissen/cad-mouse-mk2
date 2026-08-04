@@ -176,8 +176,25 @@ Recorded explicitly, because several are load-bearing:
    a poorly-measured one. Tilt carries 2 DOF, not 3.
 7. **Pose gauge fixing is done softly, by the priors.** A global translation
    or rotation of all magnets is exactly degenerate with a compensating
-   per-frame pose change (6 dead directions). Ridge priors on the magnet
-   offsets anchor them. An explicit mean-zero constraint would be tidier.
+   per-frame pose change. Ridge priors on the magnet offsets anchor them.
+
+   This is not optional, and no amount of data replaces it. Removing every
+   prior and looking at the spectrum of the reduced Hessian gives **exactly 6
+   eigenvalues at machine zero** — at 60, 120 and 387 frames alike, condition
+   number 1e17 or worse in every case. 99.8% of that null space lies in
+   `magnet_pos` (the rest in `magnet_tilt`), which is the predicted
+   translation+rotation gauge. Adding frames cannot help: each new frame
+   brings 9 equations but also 6 new pose unknowns, so the null direction
+   survives untouched. The practical damage is visible too — unregularized,
+   magnet offsets wander to 1.6-1.8mm and their cross-run spread degrades
+   from 0.007mm to 0.26mm, while the residual does not change at all (by
+   definition: motion along a gauge direction is invisible to the data).
+
+   The tidier fix is an explicit mean-zero constraint on the magnet offsets
+   and tilts, which removes those 6 DOF without asserting anything about how
+   large the remaining offsets should be. That would let the other priors be
+   loosened or dropped on their own merits, rather than carrying gauge-fixing
+   duty they were never meant to have.
 8. **Gain is fitted on the model side, exported inverted.** See
    `export.py` — the firmware applies gain to the raw measurement, this fit
    applies it to the model, so the exported matrix is the inverse (with
