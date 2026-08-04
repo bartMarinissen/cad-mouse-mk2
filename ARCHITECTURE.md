@@ -200,10 +200,31 @@ Two things are worth knowing before touching it:
 There is still no path for calibration *results* to reach the firmware
 automatically: no flash/EEPROM write anywhere in this firmware, so
 `bundle_callibration.py --emit-cpp` prints a pasteable C++ snippet and that is
-as far as it goes. `Sensor`'s per-axis gain (`Mat3 sensor_gain`) and
-`MagnetModel`'s per-magnet `magnet_rotation` are wired up in the math but
-still constructed once from hardcoded `Config` values at static-init time in
-`MotionController.cpp`.
+as far as it goes.
+
+What changed is that there is now somewhere for a result to *land*. The whole
+fitted parameter set is one struct,
+[`CalibrationParams`](firmware/include/CalibrationParams.h). `SensorController`
+and `MotionController` are constructed from it and hold their
+calibration-derived state `const`, which is why they are no longer static-init
+globals — they live in `CalibratedControllers`, built once by `calibrated()`
+(see [`Controllers.h`](firmware/include/Controllers.h)). `resolveCalibration()`
+in `Controllers.cpp` is the single seam a flash loader plugs into; today it
+returns `Config::defaultCalibration()`, reproducing the previously hardcoded
+values exactly.
+
+Two caveats on the exported numbers:
+
+- `MagnetModel::evaluate` still does **not** consume `magnet_strength`. Since
+  the fit's `det(G) = 1` gauge parks the entire field scale there, `export.py`
+  divides the strengths back into the exported gain and offset
+  (`fold_strength_into_gain()`) and emits `magnet_strength = 1.0f`. Emitting the
+  det(G)=1 gain with the fitted strengths beside it would produce a struct that
+  cannot be used at all: the strengths would do nothing and the modelled field
+  would be wrong by exactly that factor.
+- `Sensor` no longer carries a gain; correction happens entirely in
+  `SensorController::read_mT()`, which is what
+  `TODO/sensor-gain-calibration.md` asked for.
 
 ## Quick file index
 
