@@ -72,12 +72,18 @@ APPROX_REST_T_MM: NDArray[np.float64] = np.array(
     [0.0, 0.0, _MAGNET_Z_FROM_PIVOT_MM + _MAGNET_REST_DISTANCE_MM]
 )
 
-# The raw sensors read the opposite sign to the modelled field (the capture
-# path streams readUncorrected(), i.e. before any correction). The firmware
-# carries this as Config::magnet_gains ~ {-0.96, -1.2, -0.98}; here it is the
-# nominal gain, so a *fitted* gain offset of 0 means "exactly -I" and the
-# priors below are centred on something physically reachable.
-NOMINAL_GAIN_SIGN = -1.0
+# The raw sensors read the opposite sign to the field local_field.py models
+# (the capture path streams readUncorrected(), i.e. before any correction).
+# The firmware carries that flip in Config::magnet_gains ~ {-0.96, -1.2, -0.98}.
+#
+# Here it is attributed to the *magnet* instead: the magnets are installed with
+# the opposite polarity to the one field_approximation.ipynb assumed, so
+# local_field.py stays a byte-for-byte counterpart of the firmware's table
+# (polarization -600) and this constant flips it. The payoff is that both
+# fitted quantities then read naturally - sensor gain sits near +I and magnet
+# strength near +1, instead of a sign hiding inside the gain.
+MAGNET_POLARITY = -1.0
+NOMINAL_GAIN_SIGN = +1.0
 
 
 # --- Shared parameter vector layout -----------------------------------------
@@ -85,17 +91,27 @@ NOMINAL_GAIN_SIGN = -1.0
 # Grouped (not interleaved) so a hierarchical solve can free one group at a
 # time with a simple boolean mask - see bundle_params.SolveStage.
 #
-#   magnet_pos   (3 per magnet)  knob-frame bottom-face position offset, mm
-#   magnet_tilt  (2 per magnet)  magnet axis tilt, rad. Only 2 DOF: the magnet
-#                                is a solid of revolution about its own
-#                                polarization axis, so spin about that axis
-#                                changes nothing measurable - carrying it
-#                                would add an exactly-dead Jacobian column.
-#   gain_iso     (1 per sensor)  isotropic gain error (the dominant term)
-#   gain_aniso   (2 per sensor)  traceless diagonal, i.e. per-axis sensitivity
-#                                spread at fixed overall scale
-#   gain_sym     (3 per sensor)  symmetric off-diagonal (cross-axis skew)
-#   gain_rot     (3 per sensor)  antisymmetric, i.e. sensor frame misalignment
+#   magnet_pos      (3 per magnet)  knob-frame bottom-face position offset, mm
+#   magnet_tilt     (2 per magnet)  magnet axis tilt, rad. Only 2 DOF: the
+#                                   magnet is a solid of revolution about its
+#                                   own polarization axis, so spin about that
+#                                   axis changes nothing measurable - carrying
+#                                   it would add an exactly-dead column.
+#   magnet_strength (1 per magnet)  multiplier on the magnet's polarization.
+#                                   Degenerate with gain_iso up to cross-talk -
+#                                   see renormalize_gauge().
+#   sensor_offset   (3 per sensor)  DC offset in raw sensor units (mT), added
+#                                   *after* gain, since it is a property of the
+#                                   raw reading (Hall zero-point + ambient
+#                                   field) rather than of the modelled field.
+#   gain_iso        (1 per sensor)  isotropic gain error. To first order this
+#                                   is exactly the log-determinant direction of
+#                                   G_i, which is what makes "det(G) = 1" the
+#                                   same statement as "gain_iso = 0".
+#   gain_aniso      (2 per sensor)  traceless diagonal, i.e. per-axis
+#                                   sensitivity spread at fixed overall scale
+#   gain_sym        (3 per sensor)  symmetric off-diagonal (cross-axis skew)
+#   gain_rot        (3 per sensor)  antisymmetric, i.e. sensor frame misalignment
 #
 # Gain is assembled as  G_i = NOMINAL_GAIN_SIGN * (I + A_i), so every entry is
 # an offset from nominal with expected value 0 - which is what lets the ridge
@@ -103,6 +119,8 @@ NOMINAL_GAIN_SIGN = -1.0
 PARAM_GROUPS: tuple[tuple[str, int], ...] = (
     ("magnet_pos", 3 * N_MAGNETS),
     ("magnet_tilt", 2 * N_MAGNETS),
+    ("magnet_strength", 1 * N_MAGNETS),
+    ("sensor_offset", 3 * N_SENSORS),
     ("gain_iso", 1 * N_SENSORS),
     ("gain_aniso", 2 * N_SENSORS),
     ("gain_sym", 3 * N_SENSORS),
@@ -189,7 +207,9 @@ class BundleGeometry:
 
     magnet_pos_knob: NDArray[np.float64]  # (3, 3) knob-frame bottom-face positions, mm
     magnet_tilt: NDArray[np.float64]      # (3, 3) magnet tilt rotation vectors (z component always 0)
-    gain: NDArray[np.float64]             # (3, 3, 3) per-sensor gain matrix, nominal -I
+    magnet_strength: NDArray[np.float64]  # (3,) polarization multiplier, nominal 1
+    gain: NDArray[np.float64]             # (3, 3, 3) per-sensor gain matrix, nominal +I
+    sensor_offset: NDArray[np.float64]    # (3, 3) per-sensor DC offset in raw units (mT)
 
     @property
     def magnet_rotation(self) -> Rotation:
@@ -214,12 +234,21 @@ class BundleGeometry:
 
         b_loc, j_loc = local_field_and_gradient(p_mag)              # (n,i,j,3), (n,i,j,3,3)
 
+        # Strength (and the installed polarity) scale the field linearly, so
+        # they scale the gradient identically - fold them in here and every
+        # downstream derivative stays correct. The unscaled world field is kept
+        # because it *is* d(prediction)/d(strength), up to the polarity factor.
+        factor = MAGNET_POLARITY * self.magnet_strength             # (3,)
+        b_loc = b_loc * factor[None, None, :, None]
+        j_loc = j_loc * factor[None, None, :, None, None]
+
         b_knob = np.einsum("jab,nijb->nija", r_mag, b_loc)          # R_j B_loc
         b_world = np.einsum("nab,nijb->nija", r_knob, b_knob)       # R B_knob
+        b_world_unit = b_world / factor[None, None, :, None]
         s = b_world.sum(axis=2)                                     # (n,i,3) summed over magnets
-        pred = np.einsum("iab,nib->nia", self.gain, s)
+        pred = np.einsum("iab,nib->nia", self.gain, s) + self.sensor_offset[None, :, :]
         return dict(n=n, r_knob=r_knob, r_mag=r_mag, v=v, d=d, j_loc=j_loc,
-                    b_knob=b_knob, b_world=b_world, s=s,
+                    b_knob=b_knob, b_world=b_world, b_world_unit=b_world_unit, s=s,
                     pred=pred.reshape(n, 3 * N_SENSORS), rotvecs=rotvecs)
 
     def predict(self, ts, rotvecs) -> NDArray[np.float64]:
@@ -284,6 +313,19 @@ class BundleGeometry:
                 "niab,bc->niac", dtilt[:, :, j], jl[:, :2]
             )
 
+        # --- magnet strength: linear in the field, so d/d(ds_j) = G polarity B_j ---
+        sl = GROUP_SLICES["magnet_strength"]
+        dstrength = MAGNET_POLARITY * np.einsum(
+            "iab,nijb->nija", gain, g["b_world_unit"]
+        )
+        for j in range(N_MAGNETS):
+            j_shared[..., sl.start + j] = dstrength[:, :, j]
+
+        # --- sensor DC offset: added straight onto the prediction ---
+        sl = GROUP_SLICES["sensor_offset"]
+        for i in range(N_SENSORS):
+            j_shared[:, i, :, sl.start + 3 * i : sl.start + 3 * i + 3] = np.eye(3)
+
         # --- gain: pred_i = sign * (I + A_i) s_i, so d/d(param) = sign * basis @ s ---
         for group, basis_idx in _GAIN_GROUP_BASIS.items():
             sl = GROUP_SLICES[group]
@@ -320,8 +362,68 @@ def unpack_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
     return BundleGeometry(
         magnet_pos_knob=MAGNET_POS_NOMINAL_KNOB + magnet_pos_offset,
         magnet_tilt=magnet_tilt,
+        magnet_strength=1.0 + x[GROUP_SLICES["magnet_strength"]],
         gain=gain,
+        sensor_offset=x[GROUP_SLICES["sensor_offset"]].reshape(N_SENSORS, 3),
     )
+
+
+def gain_matrix_to_params(a: NDArray[np.float64]) -> dict[str, NDArray[np.float64]]:
+    """Project a (3, 3, 3) stack of gain *offset* matrices back onto the groups.
+
+    The exact inverse of the assembly in unpack_shared - needed by
+    renormalize_gauge(), which has to rescale a whole gain matrix and then
+    express the result in the group parameterization again.
+    """
+    a = np.asarray(a, dtype=float)
+    diag = np.einsum("iaa->ia", a)
+    iso = diag.mean(axis=1)
+    traceless = diag - iso[:, None]
+    sym = 0.5 * np.stack([a[:, 0, 1] + a[:, 1, 0],
+                          a[:, 0, 2] + a[:, 2, 0],
+                          a[:, 1, 2] + a[:, 2, 1]], axis=1)
+    anti = 0.5 * (a - np.transpose(a, (0, 2, 1)))
+    rot = np.stack([-anti[:, 1, 2], anti[:, 0, 2], -anti[:, 0, 1]], axis=1)
+    return {
+        "gain_iso": iso,
+        "gain_aniso": traceless[:, :2],
+        "gain_sym": sym,
+        "gain_rot": rot,
+    }
+
+
+def renormalize_gauge(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Move each sensor's overall gain scale into its paired magnet's strength,
+    leaving det(G_i) == 1.
+
+    Sensor gain scale and magnet strength describe the same thing from opposite
+    ends - a sensor reading 5% high and its magnet being 5% strong differ only
+    through cross-talk, which is about 1% of the signal here and so comparable
+    to the model error. They are therefore not meaningfully separable, and
+    freeing both at once just leaves the split to the priors.
+
+    Fixing det(G_i) = 1 is a clean way to choose: it says "sensors are
+    volume-preserving, magnets carry the scale", after which strength is
+    genuinely identifiable (nothing else can absorb overall scale). To first
+    order det(G) = 1 + 3*gain_iso, so this really is just "zero out gain_iso
+    and put it in strength" - done exactly, via the determinant.
+
+    Note this is a *gauge choice*, not a measurement: it re-attributes scale
+    rather than discovering where it belongs. The transfer is also only exact
+    in the absence of cross-talk, so the caller should refit afterwards.
+    """
+    x = np.asarray(x_shared, dtype=float).copy()
+    geom = unpack_shared(x)
+
+    scale = np.cbrt(np.abs(np.linalg.det(geom.gain)))       # (3,) per sensor
+    a_new = geom.gain / (NOMINAL_GAIN_SIGN * scale[:, None, None]) - np.eye(3)
+    for group, vals in gain_matrix_to_params(a_new).items():
+        x[GROUP_SLICES[group]] = vals.ravel()
+
+    # Sensor i's scale goes to magnet i - each sensor is dominated by the
+    # magnet it sits under, which is exactly why the two were degenerate.
+    x[GROUP_SLICES["magnet_strength"]] = (1.0 + x[GROUP_SLICES["magnet_strength"]]) * scale - 1.0
+    return x
 
 
 NOMINAL_GEOMETRY = unpack_shared(np.zeros(N_SHARED_PARAMS))

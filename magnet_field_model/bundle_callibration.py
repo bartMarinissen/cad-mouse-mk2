@@ -97,22 +97,25 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
     magnets.add_column("dz (mm)", justify="right")
     magnets.add_column("tilt x (deg)", justify="right")
     magnets.add_column("tilt y (deg)", justify="right")
+    magnets.add_column("strength", justify="right")
     for i in range(N_MAGNETS):
         d = geometry.magnet_pos_knob[i] - MAGNET_POS_NOMINAL_KNOB[i]
         tilt = np.degrees(geometry.magnet_tilt[i][:2])
         magnets.add_row(str(i + 1), f"{d[0]:+.3f}", f"{d[1]:+.3f}", f"{d[2]:+.3f}",
-                        f"{tilt[0]:+.3f}", f"{tilt[1]:+.3f}")
+                        f"{tilt[0]:+.3f}", f"{tilt[1]:+.3f}",
+                        f"{geometry.magnet_strength[i]:.4f}")
     console.print(magnets)
 
-    sensors = Table(title="Fitted sensor gain (model side; nominal is -I)")
+    sensors = Table(title="Fitted sensor gain and DC offset (model side; nominal gain is +I)")
     sensors.add_column("Sensor")
     sensors.add_column("Gain matrix", justify="left")
-    sensors.add_column("Scale", justify="right")
+    sensors.add_column("det", justify="right")
+    sensors.add_column("DC offset (mT)", justify="right")
     for i in range(N_SENSORS):
         g = geometry.gain[i]
         rows = "\n".join("  ".join(f"{v:+.4f}" for v in row) for row in g)
-        # Mean diagonal magnitude: the one number worth reading at a glance.
-        sensors.add_row(str(i + 1), rows, f"{np.abs(np.diag(g)).mean():.4f}")
+        off = "\n".join(f"{v:+.3f}" for v in geometry.sensor_offset[i])
+        sensors.add_row(str(i + 1), rows, f"{np.linalg.det(g):.4f}", off)
     console.print(sensors)
 
     # How much each group was actually pinned down by the data, as opposed to

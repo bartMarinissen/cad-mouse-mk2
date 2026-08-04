@@ -3,18 +3,22 @@
 The one genuinely subtle part is the gain convention, so it is worth stating
 plainly:
 
-    This calibration applies gain to the **model**   :  pred = G_fit @ B_model
-    The firmware applies gain to the **measurement** :  corrected = G_fw @ raw
+    This calibration applies gain to the **model**   :  pred = G_fit @ B_model + o_fit
+    The firmware applies gain to the **measurement** :  corrected = G_fw @ raw - o_fw
 
-Both want `corrected ~ B_model`, so **G_fw = inv(G_fit)** - the exported
-matrix is the inverse of the fitted one, not the fitted one.
+Both want `corrected ~ B_model`, so with the installed magnet polarity folded
+in (see bundle_geometry.MAGNET_POLARITY):
+
+    G_fw = inv(MAGNET_POLARITY * G_fit)      -> lands near -I, matching Config
+    o_fw = G_fw @ o_fit
 
 Fitting on the model side is deliberate. Scaling the measurement instead
 would put a fitted parameter on the same side of the residual as the noise,
 which lets the optimizer shrink the residual by shrinking the gain rather
 than by explaining the data. Keeping the measurement untouched keeps the
 residual in raw sensor units, which is exactly what ResidualWeights' sigma
-model describes.
+model describes - and the DC offset genuinely belongs on that side, since it
+is a property of the raw reading rather than of the modelled field.
 """
 
 from __future__ import annotations
@@ -22,12 +26,26 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from .bundle_geometry import MAGNET_POS_NOMINAL_KNOB, N_MAGNETS, BundleGeometry
+from .bundle_geometry import (
+    MAGNET_POLARITY,
+    MAGNET_POS_NOMINAL_KNOB,
+    N_MAGNETS,
+    BundleGeometry,
+)
 
 
 def firmware_sensor_gain(geometry: BundleGeometry) -> NDArray[np.float64]:
-    """(3, 3, 3) per-sensor gain matrices for SensorController, i.e. inv(fitted)."""
-    return np.linalg.inv(geometry.gain)
+    """(3, 3, 3) per-sensor gain matrices for SensorController.
+
+    Inverse of the fitted model-side gain, with the installed magnet polarity
+    folded back in so the result lands near -I like Config::magnet_gains.
+    """
+    return np.linalg.inv(MAGNET_POLARITY * geometry.gain)
+
+
+def firmware_sensor_offset(geometry: BundleGeometry) -> NDArray[np.float64]:
+    """(3, 3) per-sensor offsets in read_mT()'s output space, i.e. G_fw @ o_fit."""
+    return np.einsum("iab,ib->ia", firmware_sensor_gain(geometry), geometry.sensor_offset)
 
 
 def format_cpp(geometry: BundleGeometry) -> str:
@@ -38,6 +56,7 @@ def format_cpp(geometry: BundleGeometry) -> str:
     delivery mechanism until one exists.
     """
     gain = firmware_sensor_gain(geometry)
+    offset = firmware_sensor_offset(geometry)
     pos = geometry.magnet_pos_knob
     rot = geometry.magnet_rotation.as_matrix()
     off = pos - MAGNET_POS_NOMINAL_KNOB
@@ -57,6 +76,19 @@ def format_cpp(geometry: BundleGeometry) -> str:
     for i in range(N_MAGNETS):
         lines.append("    " + mat3(gain[i], "    ") + ("," if i < 2 else ""))
     lines.append("};")
+    lines.append("")
+    lines.append("// Per-sensor DC offset, subtracted after the gain matrix (read_mT's space).")
+    lines.append("const float sensor_offset_mT[3][3] = {")
+    for i in range(N_MAGNETS):
+        lines.append("    {" + ", ".join(f"{v: .4f}f" for v in offset[i]) + "},")
+    lines.append("};")
+    lines.append("")
+    lines.append("// Per-magnet polarization multiplier. NOTE: the firmware has no such")
+    lines.append("// multiplier yet - MagnetModel::evaluate would need to scale its result")
+    lines.append("// by this. Values are only meaningful under the det(G)=1 gauge that")
+    lines.append("// produced them (see calibration/bundle_geometry.renormalize_gauge).")
+    lines.append("const float magnet_strength[3] = { "
+                 + ", ".join(f"{v:.6f}f" for v in geometry.magnet_strength) + " };")
     lines.append("")
     lines.append("// Knob-frame magnet positions (BOTTOM-FACE reference, as in positions.h).")
     lines.append("// Offsets from nominal: " + ", ".join(

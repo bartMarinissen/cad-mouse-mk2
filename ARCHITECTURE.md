@@ -176,10 +176,10 @@ streams `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 ACKs frame counts back over the same link.
 
 **Status: capture and fit both work; the result has nowhere to go.** The
-Python side fits 42 shared parameters (per-magnet position and tilt,
-per-sensor gain matrix) jointly with one free 6-DOF pose per captured frame,
-and takes the field residual from ~1.8% at nominal geometry down to ~0.35%,
-in about a second. See
+Python side fits 54 shared parameters (per-magnet position, tilt and strength;
+per-sensor gain matrix and DC offset) jointly with one free 6-DOF pose per
+captured frame, and takes the field residual from ~1.8% at nominal geometry
+down to ~0.33%, in about a second. See
 [`magnet_field_model/README.md`](magnet_field_model/README.md) for the
 architecture, the load-bearing frame conventions, and the measured numbers.
 
@@ -188,8 +188,14 @@ Two things are worth knowing before touching it:
 - The magnet position reference is the magnet's **bottom face**, not its
   centre — that is what `positions.h` means and what the notebook baked into
   the bicubic table. magpylib positions cylinders by their centre.
-- The raw capture path streams `readUncorrected()`, so the **nominal sensor
-  gain is `-I`**, matching `Config::magnet_gains` (`{-0.96, -1.2, -0.98}`).
+- The raw capture path streams `readUncorrected()`, so the sensors read the
+  **opposite sign** to the modelled field — matching `Config::magnet_gains`
+  (`{-0.96, -1.2, -0.98}`). The fit attributes that flip to magnet polarity,
+  so fitted gains read near `+I` while the *exported* ones land near `-I`.
+- Sensor gain scale and magnet strength are not separable (only ~1%
+  cross-talk distinguishes them), so the fit picks a gauge: `det(G) = 1`, with
+  magnet strength carrying the scale. The reported strengths are an
+  attribution, not a measurement — the fit's information-gain column says so.
 
 There is still no path for calibration *results* to reach the firmware
 automatically: no flash/EEPROM write anywhere in this firmware, so

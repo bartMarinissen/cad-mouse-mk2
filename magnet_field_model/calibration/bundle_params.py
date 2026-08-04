@@ -58,9 +58,17 @@ class RegularizationSigmas:
     magnet_pos_mm: float = 0.3
     # Magnet axis tilt, ~1.7 deg.
     magnet_tilt_rad: float = 0.03
+    # Magnet remanence spread. Sintered NdFeB is typically graded to a few
+    # percent, and this carries the whole scale once the det(G)=1 gauge is
+    # applied, so it is given room comparable to gain_iso's.
+    magnet_strength: float = 0.15
+    # DC offset on the raw reading: Hall zero-point plus ambient field. The
+    # firmware's own hand-tuned Config::sensor_offset_mT reaches 1.6 mT, so
+    # this is deliberately loose enough not to fight it.
+    sensor_offset_mT: float = 1.5
     # Isotropic sensor gain. Deliberately loose: the firmware's own hand-tuned
     # Config::magnet_gains span -0.96..-1.2, i.e. offsets up to 0.2 from the
-    # nominal -1, so a tight prior here would fight known-real hardware spread.
+    # nominal, so a tight prior here would fight known-real hardware spread.
     gain_iso: float = 0.15
     # Per-axis sensitivity spread at fixed overall scale.
     gain_aniso: float = 0.05
@@ -73,6 +81,8 @@ class RegularizationSigmas:
         per_group = {
             "magnet_pos": self.magnet_pos_mm,
             "magnet_tilt": self.magnet_tilt_rad,
+            "magnet_strength": self.magnet_strength,
+            "sensor_offset": self.sensor_offset_mT,
             "gain_iso": self.gain_iso,
             "gain_aniso": self.gain_aniso,
             "gain_sym": self.gain_sym,
@@ -118,13 +128,30 @@ class SolveStage:
 
 
 # The default ladder. Each stage inherits everything the previous one freed.
+#
+# Two things to note about the ordering. `sensor_offset` is freed immediately:
+# a DC offset is a pure constant across every pose, so it is both easy to
+# separate and badly corrupting if left for later - the geometry stages would
+# otherwise contort themselves to absorb it. And `gain_iso` carries scale
+# throughout, with `magnet_strength` frozen; the final stage swaps them, after
+# renormalize_gauge() has moved the scale across (see GAUGE_STAGE).
 DEFAULT_STAGES: tuple[SolveStage, ...] = (
-    SolveStage("gain scale", ("gain_iso",)),
-    SolveStage("magnet geometry", ("gain_iso", "magnet_pos", "magnet_tilt")),
-    SolveStage(
-        "full gain",
-        ("gain_iso", "magnet_pos", "magnet_tilt", "gain_aniso", "gain_sym", "gain_rot"),
-    ),
+    SolveStage("gain scale + offset", ("gain_iso", "sensor_offset")),
+    SolveStage("magnet geometry",
+               ("gain_iso", "sensor_offset", "magnet_pos", "magnet_tilt")),
+    SolveStage("full gain",
+               ("gain_iso", "sensor_offset", "magnet_pos", "magnet_tilt",
+                "gain_aniso", "gain_sym", "gain_rot")),
+)
+
+# Run after renormalize_gauge(): identical to the last default stage except
+# gain_iso is frozen (det(G) == 1) and magnet_strength is free in its place.
+# This both re-optimizes strength and cleans up the cross-talk term that makes
+# the gauge transfer only approximate.
+GAUGE_STAGE = SolveStage(
+    "magnet strength",
+    ("magnet_strength", "sensor_offset", "magnet_pos", "magnet_tilt",
+     "gain_aniso", "gain_sym", "gain_rot"),
 )
 
 

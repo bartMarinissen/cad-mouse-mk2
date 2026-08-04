@@ -38,13 +38,16 @@ Calibration recovers, per unit:
 |---|---|---|
 | `magnet_pos` | 3x3 | knob-frame magnet position offset (mm) |
 | `magnet_tilt` | 3x2 | magnet axis tilt (rad) |
+| `magnet_strength` | 3x1 | polarization multiplier |
+| `sensor_offset` | 3x3 | DC offset on the raw reading (mT) |
 | `gain_iso` | 3x1 | isotropic sensor gain error |
 | `gain_aniso` | 3x2 | per-axis sensitivity spread |
 | `gain_sym` | 3x3 | cross-axis skew |
 | `gain_rot` | 3x3 | sensor frame misalignment |
 
-42 shared parameters, plus one free 6-DOF pose per captured frame — a
-bundle adjustment, in the photogrammetry sense.
+54 shared parameters, plus one free 6-DOF pose per captured frame — a
+bundle adjustment, in the photogrammetry sense. `gain_iso` and
+`magnet_strength` are never free at the same time; see the gauge note below.
 
 ## Package layout
 
@@ -77,9 +80,24 @@ close-to-the-magnet frames dominate. `ResidualWeights` uses
 **measured** magnitude — a weight that depended on the prediction would bias
 the fit toward shrinking |B|.
 
-**Staging.** Parameters are freed a group at a time (gain scale → magnet
-geometry → the weak cross-axis gain terms), each stage warm-starting from the
-last, rather than throwing all 42 at a cold start.
+**Staging.** Parameters are freed a group at a time (gain scale and DC offset
+→ magnet geometry → the weak cross-axis gain terms), each stage warm-starting
+from the last, rather than throwing all 54 at a cold start. DC offset is freed
+first because it is a pure constant across every pose — both easy to separate
+and badly corrupting if left until later, since the geometry stages would
+otherwise contort themselves to absorb it.
+
+**The det(G) = 1 gauge.** Sensor gain scale and magnet strength describe the
+same thing from opposite ends: a sensor reading 5% high and its magnet being
+5% strong differ only through cross-talk, which is ~1% of the signal here and
+so comparable to the model error. Freeing both would just leave the split to
+the priors. Instead a final pass fixes `det(G_i) = 1` ("sensors are
+volume-preserving, magnets carry the scale") and lets strength take the scale,
+after which nothing else can absorb it. To first order `det(G) = 1 + 3*gain_iso`,
+so this is close to "zero out `gain_iso`, put it in strength" — done exactly,
+via the determinant. It is a *gauge choice*, not a measurement: it
+re-attributes scale rather than discovering where it belongs. Pass
+`estimate_strength=False` to skip it and keep scale in the gain.
 
 **Reported uncertainty.** Each frame's 6 pose parameters touch only that
 frame's 9 residuals, so the pose block of the normal equations is
@@ -99,42 +117,59 @@ Recorded explicitly, because several are load-bearing:
    magnet positions mean. magpylib positions a cylinder by its centre, so
    `local_field.py` adds the half-height. Getting this wrong shifts the model
    3mm and inflates the predicted field roughly 3x at rest.
-2. **Nominal sensor gain is `-I`.** The capture path streams
-   `readUncorrected()`, and the raw sensors read the opposite sign to the
-   modelled field. The firmware carries this as `Config::magnet_gains`
-   (`{-0.96, -1.2, -0.98}`). Whether the physical cause is magnet orientation
-   or sensor axis convention does not matter to the fit — a global sign is
-   equivalent either way — but the *nominal* value must be reachable, or the
-   priors fight the data.
+2. **The raw sensors' sign flip is attributed to magnet polarity, not gain.**
+   The capture path streams `readUncorrected()`, and the raw sensors read the
+   opposite sign to the field `local_field.py` models. The firmware carries
+   that in `Config::magnet_gains` (`{-0.96, -1.2, -0.98}`); here
+   `MAGNET_POLARITY = -1` carries it instead, so `local_field.py` stays a
+   direct counterpart of the firmware's table and both fitted quantities read
+   naturally (gain near `+I`, strength near `1`). The exported firmware gain
+   still lands near `-I`. Which physical cause is the real one — magnets
+   installed north-down, or an inverted sensor axis convention — does not
+   matter to the fit, since a global sign is equivalent either way.
 3. **Sensor positions are fixed, not calibrated.** They define the world
    frame. Real sensor placement error is absorbed by the magnet position
    offsets, which are related to it by a per-frame pose anyway.
-4. **Per-magnet strength is not a free parameter.** It is very nearly
-   degenerate with per-sensor gain: each sensor is dominated by its own
-   magnet, and the cross-talk that would separate them is only about 1% of
-   the signal, comparable to the model error. The firmware has no per-magnet
-   strength multiplier either. Sensor gain owns scale.
-5. **Magnet spin about its own axis is not a parameter.** A uniformly
+4. **Magnet strength is reported under a gauge, and is only weakly measured.**
+   See the det(G) = 1 note above for why it cannot be separated from sensor
+   gain scale on its own. Even under the gauge it reaches only ~11%
+   information gain on real captures, because anisotropic gain and magnet
+   z-position can absorb much of a scale change (the field is Bz-dominated,
+   and HEAVE gives only ~3mm of travel to distinguish "stronger" from
+   "closer"). Treat the reported strengths as an attribution, not a
+   measurement. `tests/test_calibration.py` pins this down in both
+   directions: weakly identified with realistic motion, recovered to <0.01
+   when nothing competes.
+5. **DC offset is applied on the raw side, after gain.** It is a property of
+   the raw reading (Hall zero-point plus ambient field), not of the modelled
+   field, so `pred = G @ B_model + offset`. The firmware subtracts its offset
+   *after* gain instead, so the export maps `o_fw = G_fw @ o_fit`.
+6. **Magnet spin about its own axis is not a parameter.** A uniformly
    axially-polarized cylinder is a solid of revolution, so that rotation is
    unobservable for *any* dataset — a structurally dead direction rather than
    a poorly-measured one. Tilt carries 2 DOF, not 3.
-6. **Gauge fixing is done softly, by the priors.** A global translation or
-   rotation of all magnets is exactly degenerate with a compensating
+7. **Pose gauge fixing is done softly, by the priors.** A global translation
+   or rotation of all magnets is exactly degenerate with a compensating
    per-frame pose change (6 dead directions). Ridge priors on the magnet
    offsets anchor them. An explicit mean-zero constraint would be tidier.
-7. **Gain is fitted on the model side, exported inverted.** See
+8. **Gain is fitted on the model side, exported inverted.** See
    `export.py` — the firmware applies gain to the raw measurement, this fit
-   applies it to the model, so the exported matrix is the inverse.
+   applies it to the model, so the exported matrix is the inverse (with
+   `MAGNET_POLARITY` folded back in, landing near `-I`).
 
 ## Measured behaviour
 
 Against the three captured runs in `calibration_runs/` (same hardware):
 
-- Field residual: **1.6-1.9% at nominal geometry → 0.34-0.37% fitted**.
-- Runtime: **~1.3s** at the default 60 frames, all three stages converging on
-  `ftol`.
-- Cross-run agreement: magnet positions reproduce to ~0.01mm, and every
-  parameter group's run-to-run spread is well inside its own prior.
+- Field residual: **1.6-1.9% at nominal geometry → 0.33-0.36% fitted**.
+- Runtime: **~1.3s** at the default 60 frames, all stages converging on `ftol`.
+- Cross-run agreement: magnet positions reproduce to ~0.007mm, and every
+  parameter group's run-to-run spread is a fraction of its posterior sd.
+- Sensor DC offsets are real and worth fitting: adding them took the first
+  stage from 1.53% to 0.97% and the final result from 0.37% to 0.33%. They are
+  also the best-determined group in the whole fit (~65% information gain),
+  which is what you would expect of a constant that does not move with pose.
+  The fitted values reach ~1 mT, mostly on z.
 - Frame count barely matters: 30, 60, 120, 200 and all 387 frames land within
   0.03 percentage points of each other. The limit is systematic model error,
   not sample noise — so capturing more frames buys nothing, and the value is
@@ -151,10 +186,17 @@ what distinguishes the two.
 - No persistence path into the firmware. There is no flash/EEPROM storage
   anywhere in this firmware yet, so `--emit-cpp` printing a pasteable snippet
   is as far as a result can travel.
+- The firmware has no per-magnet strength multiplier, so the fitted strengths
+  cannot be consumed as-is — `MagnetModel::evaluate` would need to scale its
+  result. `--emit-cpp` emits them with that caveat attached.
 - Running the fit on the knob itself. The reduction that makes this plausible
   is already here — analytic Jacobians and a per-frame Schur elimination with
   a fixed-size accumulator — and the firmware already has the same chain rule
   in `sensor.cpp`. What it would need is that reduction driving the solve
   rather than only the covariance, plus the persistence layer above.
-- The `magnet_pos` z-offsets sit at ~2% information gain. Separating them
-  from gain scale needs more Z travel than the current HEAVE step provides.
+- Magnet strength and the `magnet_pos` z-offsets are both weakly determined
+  (~11% and ~15% information gain). Scaling a magnet and moving it closer both
+  scale |B|; only the shape of |B| versus distance separates them, and the
+  HEAVE step supplies ~3mm of travel to do it with. More Z range would help,
+  but the mechanism limits how much is available before the magnet leaves the
+  modelled region.

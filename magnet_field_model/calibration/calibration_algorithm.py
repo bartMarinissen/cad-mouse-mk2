@@ -39,10 +39,12 @@ from .bundle_geometry import (
     N_SHARED_PARAMS,
     NOMINAL_GEOMETRY,
     BundleGeometry,
+    renormalize_gauge,
     unpack_shared,
 )
 from .bundle_params import (
     DEFAULT_STAGES,
+    GAUGE_STAGE,
     BundleCalibrationProblem,
     RegularizationSigmas,
     ResidualWeights,
@@ -123,6 +125,7 @@ def run_bundle_calibration(
     sigmas: RegularizationSigmas | None = None,
     weights: ResidualWeights | None = None,
     stages: tuple[SolveStage, ...] = DEFAULT_STAGES,
+    estimate_strength: bool = True,
     verbose: bool = True,
 ) -> BundleCalibrationResult:
     """Fit the magnet bundle model from collected calibration data.
@@ -130,6 +133,11 @@ def run_bundle_calibration(
     datasets maps each CalibStep to the list of 9-float frames recorded during
     that pose. n_frames caps how many frames the joint fit actually uses,
     chosen for pose diversity rather than by decimation.
+
+    estimate_strength adds a final pass that fixes det(G_i) = 1 and lets
+    per-magnet strength carry the scale instead of the sensor gain. That is a
+    gauge choice rather than a new measurement (the two are degenerate up to
+    cross-talk) - see bundle_geometry.renormalize_gauge.
     """
     sigmas = sigmas or RegularizationSigmas()
     weights = weights or ResidualWeights()
@@ -161,7 +169,17 @@ def run_bundle_calibration(
     problem: BundleCalibrationProblem | None = None
     x: NDArray[np.float64] | None = None
 
-    for stage in stages:
+    all_stages = list(stages)
+    if estimate_strength:
+        all_stages.append(GAUGE_STAGE)
+
+    for stage in all_stages:
+        # Hand the accumulated gain scale over to magnet strength before the
+        # gauge stage runs, so it starts from the right place rather than
+        # rediscovering the scale from zero with gain_iso now frozen.
+        if stage is GAUGE_STAGE:
+            x_shared = renormalize_gauge(x_shared)
+
         t0 = time.monotonic()
         problem = BundleCalibrationProblem(
             measured=measured, x_shared_base=x_shared, stage=stage,
@@ -203,9 +221,19 @@ def run_bundle_calibration(
         if verbose:
             print("  (posterior covariance is singular - reporting no uncertainties)")
 
-    resid = problem.field_residual_mT(x)
+    # The gauge stage leaves gain_iso at zero, but the traceless/antisymmetric
+    # groups it *does* fit only make det(G) == 1 to first order - the remaining
+    # second-order term is a couple of tenths of a percent. Re-apply the gauge
+    # once at the end so the reported result satisfies det(G) == 1 exactly, as
+    # advertised. The transfer is far too small to disturb the fit, but the
+    # residual below is recomputed from the final values rather than assumed.
+    if estimate_strength:
+        x_shared = renormalize_gauge(x_shared)
+
+    geometry = unpack_shared(x_shared)
+    resid = geometry.predict(poses[:, :3], poses[:, 3:]) - measured
     return BundleCalibrationResult(
-        geometry=unpack_shared(x_shared),
+        geometry=geometry,
         shared_offsets=x_shared,
         posterior_sigma=posterior,
         prior_sigma=sigmas.as_vector(),
