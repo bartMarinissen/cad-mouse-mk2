@@ -175,17 +175,29 @@ streams `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 [`bundle_callibration.py`](magnet_field_model/bundle_callibration.py), which
 ACKs frame counts back over the same link.
 
-**Status: data-capture only.** The Python script collects the datasets per
-step and stops — it imports `scipy.optimize.least_squares` but never calls it;
-the actual bundle-adjustment fit (solving for per-magnet strength / per-sensor
-gain and tilt) isn't implemented yet. There's also currently no path for
-calibration *results* to get back into the firmware at all: no flash/EEPROM
-write, and `Sensor`'s per-axis gain (`Mat3 sensor_gain`) and `MagnetModel`'s
-per-magnet `magnet_rotation` are both wired up in the math but only ever
-constructed once from hardcoded `Config::magnet_gains` (currently
-`{-1,-1,-1}` scalars — see Issues) at static-init time in `MotionController.cpp`.
-So: capture pipeline exists, fit doesn't, and even a finished fit has nowhere
-to plug in yet.
+**Status: capture and fit both work; the result has nowhere to go.** The
+Python side fits 42 shared parameters (per-magnet position and tilt,
+per-sensor gain matrix) jointly with one free 6-DOF pose per captured frame,
+and takes the field residual from ~1.8% at nominal geometry down to ~0.35%,
+in about a second. See
+[`magnet_field_model/README.md`](magnet_field_model/README.md) for the
+architecture, the load-bearing frame conventions, and the measured numbers.
+
+Two things are worth knowing before touching it:
+
+- The magnet position reference is the magnet's **bottom face**, not its
+  centre — that is what `positions.h` means and what the notebook baked into
+  the bicubic table. magpylib positions cylinders by their centre.
+- The raw capture path streams `readUncorrected()`, so the **nominal sensor
+  gain is `-I`**, matching `Config::magnet_gains` (`{-0.96, -1.2, -0.98}`).
+
+There is still no path for calibration *results* to reach the firmware
+automatically: no flash/EEPROM write anywhere in this firmware, so
+`bundle_callibration.py --emit-cpp` prints a pasteable C++ snippet and that is
+as far as it goes. `Sensor`'s per-axis gain (`Mat3 sensor_gain`) and
+`MagnetModel`'s per-magnet `magnet_rotation` are wired up in the math but
+still constructed once from hardcoded `Config` values at static-init time in
+`MotionController.cpp`.
 
 ## Quick file index
 
