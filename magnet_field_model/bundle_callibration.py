@@ -8,8 +8,11 @@ See calibration/ for the actual implementation:
   - session.py: the PC-side state machine (pure, no I/O)
   - collector.py: runs a session end to end (serial thread + main loop)
   - tui.py: draws a session as a Rich Live display (no I/O of its own)
-  - bundle_geometry.py / bundle_params.py / calibration_algorithm.py:
-    the bundle calibration math itself
+  - nominal_geometry.py: pure nominal/CAD constants
+  - parameterization.py: what the calibration parameter vector means
+  - bundle_geometry.py: the physical forward model + analytic Jacobian
+  - bundle_params.py / calibration_algorithm.py: the fit itself
+  - export.py: fitted geometry -> firmware constants
 """
 
 from __future__ import annotations
@@ -25,19 +28,14 @@ from rich.prompt import IntPrompt
 from rich.table import Table
 
 from calibration import collector
-from calibration.bundle_geometry import (
-    GROUP_SLICES,
-    MAGNET_POS_NOMINAL_KNOB,
-    N_MAGNETS,
-    N_SENSORS,
-    PARAM_GROUPS,
-)
+from calibration.bundle_geometry import MAGNET_POS_NOMINAL_KNOB, N_MAGNETS, N_SENSORS
 from calibration.calibration_algorithm import (
     DEFAULT_N_FRAMES,
     BundleCalibrationResult,
     run_bundle_calibration,
 )
 from calibration.export import format_cpp
+from calibration.parameterization import BLOCKS, GROUP_SLICES
 from calibration.protocol import CalibStep
 from calibration.serial_link import SerialLink, list_available_ports
 
@@ -72,16 +70,21 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         f"over {len(result.selected_indices)} frames."
     )
 
-    stages = Table(title="Solve stages")
-    stages.add_column("Stage")
-    stages.add_column("Free params", justify="right")
-    stages.add_column("Residual (mT)", justify="right")
-    stages.add_column("Residual (%)", justify="right")
-    stages.add_column("Time (s)", justify="right")
-    for s in result.stages:
-        stages.add_row(s.name, str(s.n_free_shared), f"{s.field_rms_mT:.3f}",
-                       f"{s.field_rel_pct:.2f}", f"{s.seconds:.1f}")
-    console.print(stages)
+    # Solving is a single joint fit by default (see calibration_algorithm.py's
+    # module docstring) - a "stages" breakdown is only interesting when the
+    # caller explicitly passed more than one, e.g. to isolate a parameter
+    # subset for debugging.
+    if len(result.stages) > 1:
+        stages = Table(title="Solve stages")
+        stages.add_column("Stage")
+        stages.add_column("Free params", justify="right")
+        stages.add_column("Residual (mT)", justify="right")
+        stages.add_column("Residual (%)", justify="right")
+        stages.add_column("Time (s)", justify="right")
+        for s in result.stages:
+            stages.add_row(s.name, str(s.n_free_shared), f"{s.field_rms_mT:.3f}",
+                           f"{s.field_rel_pct:.2f}", f"{s.seconds:.1f}")
+        console.print(stages)
 
     geometry = result.geometry
 
@@ -143,7 +146,8 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
     info.add_column("Prior sd", justify="right")
     info.add_column("Posterior sd", justify="right")
     info.add_column("Information gain", justify="right")
-    for name, _ in PARAM_GROUPS:
+    for block in BLOCKS:
+        name = block.name
         sl = GROUP_SLICES[name]
         prior = result.prior_sigma[sl].mean()
         post = result.posterior_sigma[sl]
@@ -198,9 +202,11 @@ def main() -> None:
         type=int,
         default=DEFAULT_N_FRAMES,
         metavar="N",
-        help=f"How many frames the fit uses, chosen for pose diversity rather than "
-             f"by decimation (default {DEFAULT_N_FRAMES}). More than ~60 measurably "
-             f"buys nothing - the limit is model error, not sample noise.",
+        help=f"Cap on how many converged frames the fit uses, evenly decimated "
+             f"if more were captured (default {DEFAULT_N_FRAMES}). More than "
+             f"~60 measurably buys nothing - the limit is model error, not "
+             f"sample noise - but solving all ~387 frames unstaged does cost "
+             f"real time (40+s vs ~4s), which is the actual reason for the cap.",
     )
     parser.add_argument(
         "--emit-cpp",
@@ -228,7 +234,7 @@ def main() -> None:
         link.open()
     except Exception as e:
         console.print(f"[red]Failed to open {port}: {e}[/]")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     try:
         # Blocks for the whole calibration session - sending CAL_START,

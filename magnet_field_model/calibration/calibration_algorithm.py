@@ -1,65 +1,75 @@
-"""The bundle calibration itself: a staged, regularized least-squares fit.
+"""The bundle calibration itself: a regularized least-squares fit.
 
-Structure of the fit, and why it is shaped this way:
+Structure of the fit:
 
-  frames  ->  approximate poses  ->  diverse subset  ->  staged joint fit
+  frames  ->  approximate poses (seed)  ->  one joint solve  ->  result
 
-It is still a bundle adjustment - a joint fit over a small set of *shared*
+It is a bundle adjustment - a joint fit over a small set of *shared*
 parameters (the per-magnet geometry and per-sensor gain that describe this
-particular unit) and one free 6-DOF pose per captured frame - but with four
-changes over the previous version that mattered in practice:
+particular unit) and one free 6-DOF pose per captured frame. Four things
+about how it is actually solved are worth knowing:
 
-1. The forward model's frame convention now matches the firmware's, and the
-   nominal sensor gain is -I rather than +I (see bundle_geometry.py). Those
-   two were the actual reason the old fit returned nonsense: it was trying to
-   explain a field roughly 3x too strong and of the wrong sign using
-   parameters that could not express either.
-2. The Jacobian is analytic (bundle_geometry.predict_and_jacobians) instead
-   of finite-differenced per frame over every shared parameter.
+1. The forward model's frame convention matches the firmware's exactly (see
+   bundle_geometry.py's "Frame conventions" note and parameterization.py's
+   gauge notes for magnet position and gain/strength).
+2. The Jacobian is analytic (bundle_geometry.predict_and_jacobians), not
+   finite-differenced.
 3. Residuals are weighted by a per-observation sigma that grows with the
-   measured field magnitude, so near-magnet frames no longer dominate.
-4. Parameters are freed in stages rather than all at once.
+   measured field magnitude, so near-magnet frames don't dominate.
+4. Every shared parameter is solved for jointly, in a single
+   least_squares call - NOT in stages. An earlier version froze parameters
+   in a ladder on the theory that a cold start needed the help; ablated
+   against real and synthetic data, a single unstaged solve converges to the
+   same optimum every time (see bundle_params.SolveStage's docstring for the
+   measurement). SolveStage/the `stages` parameter still exist, but only as
+   a way to isolate a parameter subset for testing.
 
-The result carries a posterior sigma per parameter, computed through the
-Schur complement, so it is visible which parameters the data actually
-determined and which just sat at their prior.
+The result carries a posterior sigma per parameter, computed from the fit's
+own Jacobian, so it is visible which parameters the data actually determined
+and which just sat at their prior.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
 
-from .bundle_geometry import (
-    N_POSE_PARAMS,
-    N_SHARED_PARAMS,
-    NOMINAL_GEOMETRY,
-    BundleGeometry,
-    renormalize_gauge,
-    unpack_shared,
-)
+from .bundle_geometry import NOMINAL_GEOMETRY, BundleGeometry
 from .bundle_params import (
-    DEFAULT_STAGES,
-    GAUGE_STAGE,
+    ALL_STAGE,
     BundleCalibrationProblem,
     RegularizationSigmas,
     ResidualWeights,
     SolveStage,
 )
-from .frame_selection import diversity_report, select_diverse_frames
+from .parameterization import N_SHARED_PARAMS
 from .pose_solver import solve_poses
 from .protocol import CalibStep
 
 # Measured sweep over the captured runs: 30, 60, 120, 200 and all 387 frames
 # all land within 0.03 percentage points of the same residual, and the
-# run-to-run spread of the fitted parameters does not improve past ~60 either.
-# The limit is systematic model error, not sample noise, so there is nothing
-# to buy by fitting every frame - 60 keeps a comfortable margin at ~5s.
+# run-to-run spread of the fitted parameters does not improve past ~60 either
+# - the limit is systematic model error, not sample noise, so there is
+# nothing to buy by fitting every frame. An earlier version therefore picked
+# a diverse subset by farthest-point sampling; that machinery is gone now -
+# *which* frames survive barely matters (see the measurement above), so
+# _decimate() below just thins evenly. The cap itself still earns its keep,
+# though, for a different reason than accuracy: solving all ~387 frames
+# unstaged takes 40+ seconds (more least_squares iterations at ~6x the
+# problem dimension), against ~4s at 60.
 DEFAULT_N_FRAMES = 60
+
+
+def _decimate(indices: NDArray[np.int_], n_max: int) -> NDArray[np.int_]:
+    """Evenly thin `indices` down to at most n_max entries."""
+    if len(indices) <= n_max:
+        return indices
+    pick = np.linspace(0, len(indices) - 1, n_max).round().astype(np.int_)
+    return indices[pick]
 
 
 @dataclass(frozen=True)
@@ -86,7 +96,6 @@ class BundleCalibrationResult:
     field_rms_mT: float
     field_rel_pct: float
     stages: tuple[StageReport, ...] = ()
-    diversity: dict[str, float] = field(default_factory=dict)
     initial_rms_mT: float = float("nan")
     initial_rel_pct: float = float("nan")
 
@@ -130,27 +139,22 @@ def run_bundle_calibration(
     n_frames: int = DEFAULT_N_FRAMES,
     sigmas: RegularizationSigmas | None = None,
     weights: ResidualWeights | None = None,
-    stages: tuple[SolveStage, ...] = DEFAULT_STAGES,
-    estimate_strength: bool = True,
+    stages: tuple[SolveStage, ...] = ALL_STAGE,
     verbose: bool = True,
 ) -> BundleCalibrationResult:
     """Fit the magnet bundle model from collected calibration data.
 
     datasets maps each CalibStep to the list of 9-float frames recorded during
-    that pose. n_frames caps how many frames the joint fit actually uses,
-    chosen for pose diversity rather than by decimation.
-
-    estimate_strength adds a final pass that fixes det(G_i) = 1 and lets
-    per-magnet strength carry the scale instead of the sensor gain. That is a
-    gauge choice rather than a new measurement (the two are degenerate up to
-    cross-talk) - see bundle_geometry.renormalize_gauge.
+    that pose. n_frames caps how many converged frames the joint fit actually
+    uses (evenly decimated if there are more) - see DEFAULT_N_FRAMES for why
+    a cap exists at all despite frame choice barely affecting the result.
     """
     sigmas = sigmas or RegularizationSigmas()
     weights = weights or ResidualWeights()
 
     measured_all, _labels = flatten_datasets(datasets)
 
-    # --- 1. approximate poses against nominal geometry, for frame selection ---
+    # --- 1. approximate poses against nominal geometry, to seed the real fit ---
     seed = solve_poses(NOMINAL_GEOMETRY, measured_all)
     initial_rms = float(np.sqrt(np.mean(seed.residual_mT**2)))
     initial_rel = _rel_pct(seed.residual_mT, measured_all)
@@ -159,38 +163,26 @@ def run_bundle_calibration(
               f"({seed.converged.sum()}/{len(measured_all)} converged); "
               f"nominal residual {initial_rms:.3f} mT ({initial_rel:.2f}%)")
 
-    # --- 2. pick a diverse subset ---
-    idx = select_diverse_frames(seed.poses, n_frames, valid=seed.converged)
+    # --- 2. use every converged frame, capped for runtime (see _decimate) ---
+    idx = _decimate(np.flatnonzero(seed.converged), n_frames)
     measured = measured_all[idx]
     poses = seed.poses[idx]
-    div = diversity_report(seed.poses, idx)
+    rot_deg = np.degrees(np.linalg.norm(poses[:, 3:], axis=1))
     if verbose:
-        print(f"selected {len(idx)} of {len(measured_all)} frames "
-              f"(t span {div['t_span_x_mm']:.2f}/{div['t_span_y_mm']:.2f}/"
-              f"{div['t_span_z_mm']:.2f} mm, rotation up to {div['rot_max_deg']:.1f} deg)")
+        print(f"using {len(idx)} of {len(measured_all)} frames "
+              f"(t span {np.ptp(poses[:, 0]):.2f}/{np.ptp(poses[:, 1]):.2f}/"
+              f"{np.ptp(poses[:, 2]):.2f} mm, rotation up to {rot_deg.max():.1f} deg)")
 
-    # --- 3. staged fit ---
+    # --- 3. the fit ---
     x_shared = np.zeros(N_SHARED_PARAMS)
     reports: list[StageReport] = []
     problem: BundleCalibrationProblem | None = None
     x: NDArray[np.float64] | None = None
 
-    all_stages = list(stages)
-    if estimate_strength:
-        all_stages.append(GAUGE_STAGE)
-
-    for stage in all_stages:
-        # Hand the accumulated gain scale over to magnet strength before the
-        # gauge stage runs, so it starts from the right place rather than
-        # rediscovering the scale from zero with gain_iso now frozen.
-        if stage is GAUGE_STAGE:
-            x_shared = renormalize_gauge(x_shared)
-
+    geometry = NOMINAL_GEOMETRY
+    for stage in stages:
         t0 = time.monotonic()
-        problem = BundleCalibrationProblem(
-            measured=measured, x_shared_base=x_shared, stage=stage,
-            sigmas=sigmas, weights=weights,
-        )
+        problem = stage.build_problem(measured, x_shared, sigmas, weights)
         x0 = problem.pack(x_shared, poses)
         # Tolerances are deliberately not tighter than this: the model itself
         # carries ~2% systematic error, so chasing parameter changes below
@@ -202,7 +194,7 @@ def run_bundle_calibration(
             xtol=1e-8, ftol=1e-8, gtol=1e-8, max_nfev=400,
         )
         x = result.x
-        x_shared, poses = problem.unpack(x)
+        x_shared, geometry, poses = problem.unpack(x)
 
         resid = problem.field_residual_mT(x)
         rms = float(np.sqrt(np.mean(resid**2)))
@@ -227,16 +219,6 @@ def run_bundle_calibration(
         if verbose:
             print("  (posterior covariance is singular - reporting no uncertainties)")
 
-    # The gauge stage leaves gain_iso at zero, but the traceless/antisymmetric
-    # groups it *does* fit only make det(G) == 1 to first order - the remaining
-    # second-order term is a couple of tenths of a percent. Re-apply the gauge
-    # once at the end so the reported result satisfies det(G) == 1 exactly, as
-    # advertised. The transfer is far too small to disturb the fit, but the
-    # residual below is recomputed from the final values rather than assumed.
-    if estimate_strength:
-        x_shared = renormalize_gauge(x_shared)
-
-    geometry = unpack_shared(x_shared)
     resid = geometry.predict(poses[:, :3], poses[:, 3:]) - measured
     return BundleCalibrationResult(
         geometry=geometry,
@@ -249,7 +231,6 @@ def run_bundle_calibration(
         field_rms_mT=float(np.sqrt(np.mean(resid**2))),
         field_rel_pct=_rel_pct(resid, measured),
         stages=tuple(reports),
-        diversity=div,
         initial_rms_mT=initial_rms,
         initial_rel_pct=initial_rel,
     )

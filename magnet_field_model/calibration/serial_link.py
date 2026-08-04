@@ -47,4 +47,4 @@ class SerialLink:
 
     def send(self, line: str) -> None:
         assert self._ser is not None, "SerialLink.open() must be called first"
-        self._ser.write(f"{line}\n".encode("utf-8"))
+        self._ser.write(f"{line}\n".encode())

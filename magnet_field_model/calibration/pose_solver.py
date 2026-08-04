@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from .bundle_geometry import APPROX_REST_T_MM, BundleGeometry, N_POSE_PARAMS
+from .bundle_geometry import APPROX_REST_T_MM, N_POSE_PARAMS, BundleGeometry
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,12 @@ def _retry_seeds(centre: NDArray[np.float64]) -> list[NDArray[np.float64]]:
     return seeds
 
 
-def _frame_residual(geometry, measured, w, poses):
+def _frame_residual(
+    geometry: BundleGeometry,
+    measured: NDArray[np.float64],
+    w: NDArray[np.float64],
+    poses: NDArray[np.float64],
+) -> NDArray[np.float64]:
     """Per-frame weighted RMS residual."""
     r = (geometry.predict(poses[:, :3], poses[:, 3:]) - measured) * w
     return np.sqrt(np.mean(r**2, axis=1))
@@ -125,7 +130,12 @@ def _frame_residual(geometry, measured, w, poses):
 _FAILURE_RESIDUAL_FACTOR = 10.0
 
 
-def _residual_ok(geometry, measured, w, poses) -> NDArray[np.bool_]:
+def _residual_ok(
+    geometry: BundleGeometry,
+    measured: NDArray[np.float64],
+    w: NDArray[np.float64],
+    poses: NDArray[np.float64],
+) -> NDArray[np.bool_]:
     """Which frames actually solved, as opposed to landing in a wrong basin.
 
     Judged against the median rather than an absolute threshold, because the
@@ -136,10 +146,17 @@ def _residual_ok(geometry, measured, w, poses) -> NDArray[np.bool_]:
     per_frame = _frame_residual(geometry, measured, w, poses)
     scale = float(np.abs(measured * w).mean())
     bar = max(_FAILURE_RESIDUAL_FACTOR * float(np.median(per_frame)), 1e-6 * scale)
-    return per_frame <= bar
+    return np.asarray(per_frame <= bar, dtype=np.bool_)
 
 
-def _run_lm(geometry, measured, w, poses, max_iter, tol):
+def _run_lm(
+    geometry: BundleGeometry,
+    measured: NDArray[np.float64],
+    w: NDArray[np.float64],
+    poses: NDArray[np.float64],
+    max_iter: int,
+    tol: float,
+) -> tuple[NDArray[np.float64], int]:
     """Levenberg-Marquardt over every frame at once. Returns (poses, iterations)."""
     n = len(measured)
     lam = np.full(n, 1e-3)
@@ -152,7 +169,7 @@ def _run_lm(geometry, measured, w, poses, max_iter, tol):
     cost, _ = cost_of(poses)
     iterations = 0
 
-    for iterations in range(1, max_iter + 1):
+    for iterations in range(1, max_iter + 1):  # noqa: B007 (used after the loop, as the return count)
         pred, j_pose, _ = geometry.predict_and_jacobians(poses[:, :3], poses[:, 3:])
         r = (pred - measured) * w
         j = j_pose * w[:, :, None]

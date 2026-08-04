@@ -1,8 +1,6 @@
-"""Priors, residual weighting, and the staged least-squares problem.
+"""Priors, residual weighting, and the least-squares problem scipy solves.
 
-Three ideas live here, and they are what turn the raw forward model in
-bundle_geometry.py into something that actually converges to a sensible
-answer:
+Three ideas live here:
 
 **Weighting.** The sensors span roughly 9-70 mT over a calibration run, and
 the model's error is part absolute (sensor noise, ~0.1 mT measured at rest)
@@ -15,35 +13,30 @@ be a least-squares problem and would bias the fit toward shrinking |B|.
 
 **Priors.** Every shared parameter is an offset from nominal with expected
 value 0, so a ridge term (offset / sigma) reads directly as "how many prior
-stddevs from nominal". Priors are per *group*, because the groups mean
-physically different things and are trusted very differently. They also do
-the gauge fixing: a global translation/rotation of all magnets is exactly
-degenerate with a compensating per-frame pose change, and anchoring the
-magnet offsets to nominal is what removes those 6 dead directions.
+stddevs from nominal". Priors are per *group* (`RegularizationSigmas`,
+walking `parameterization.BLOCKS`), because the groups mean physically
+different things and are trusted very differently - some (like
+`magnet_strength_mean`) deliberately carry none at all, see its docstring.
+The magnet-position and gain/strength gauges are fixed structurally now
+(see `parameterization.py`), not by these priors - they only have to be
+defensible as beliefs about the hardware, not as a load-bearing anchor.
 
-**Staging.** Fitting all 42 shared parameters at once from a cold start
-invites the solver to trade a badly-scaled gain against a magnet position it
-cannot yet see. `SolveStage` frees one group of parameters at a time, each
-stage warm-starting from the last - the gain scale first (it is the dominant
-term by far), then magnet geometry, then the weak cross-axis gain terms.
+**The problem.** `BundleCalibrationProblem` wraps measured data, a parameter
+mask, priors and weights into the residual(x)/jacobian(x) pair
+`scipy.optimize.least_squares` needs.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from .bundle_geometry import (
-    GROUP_SLICES,
-    N_POSE_PARAMS,
-    N_SENSORS,
-    N_SHARED_PARAMS,
-    PARAM_GROUPS,
-    unpack_shared,
-)
+from .bundle_geometry import N_POSE_PARAMS, N_SENSORS, BundleGeometry
+from .parameterization import BLOCKS, GROUP_SLICES, N_SHARED_PARAMS
 
 
 @dataclass(frozen=True)
@@ -63,8 +56,9 @@ class RegularizationSigmas:
     # (see ../enclosure/), and a few tenths of a millimetre is a well-founded
     # statement about that process - unlike the 600mT figure below, this is a
     # real belief about the parts rather than a round number nobody stands
-    # behind. Since the pose gauge is now fixed explicitly, this prior is no
-    # longer load-bearing and only has to be defensible on its own merits.
+    # behind. The position gauge is now fixed structurally (see
+    # parameterization.MAGNET_POS_BASIS), so this prior is not load-bearing
+    # and only has to be defensible on its own merits.
     magnet_pos_mm: float | None = 0.3
     # Magnet axis tilt, ~1.7 deg.
     magnet_tilt_rad: float | None = 0.03
@@ -87,10 +81,9 @@ class RegularizationSigmas:
     # firmware's own hand-tuned Config::sensor_offset_mT reaches 1.6 mT, so
     # this is deliberately loose enough not to fight it.
     sensor_offset_mT: float | None = 1.5
-    # Isotropic sensor gain. Deliberately loose: the firmware's own hand-tuned
-    # Config::magnet_gains span -0.96..-1.2, i.e. offsets up to 0.2 from the
-    # nominal, so a tight prior here would fight known-real hardware spread.
-    gain_iso: float | None = 0.15
+    # No gain_iso here: gain carries no isotropic/scale parameter at all (see
+    # parameterization.py's "gain: 8 exactly-traceless basis matrices") -
+    # magnet_strength_mean owns that job instead.
     # Per-axis sensitivity spread at fixed overall scale.
     gain_aniso: float | None = 0.05
     # Cross-axis skew and sensor-frame misalignment: weakly observable given
@@ -99,29 +92,25 @@ class RegularizationSigmas:
     gain_rot: float | None = 0.03
 
     def as_vector(self) -> NDArray[np.float64]:
+        """Full-length (N_SHARED_PARAMS,) sigma, one entry per shared parameter."""
         per_group = {
             "magnet_pos": self.magnet_pos_mm,
             "magnet_tilt": self.magnet_tilt_rad,
             "magnet_strength_mean": self.magnet_strength_mean,
             "magnet_strength_diff": self.magnet_strength_diff,
             "sensor_offset": self.sensor_offset_mT,
-            "gain_iso": self.gain_iso,
             "gain_aniso": self.gain_aniso,
             "gain_sym": self.gain_sym,
             "gain_rot": self.gain_rot,
         }
         out = np.empty(N_SHARED_PARAMS)
-        for name, _ in PARAM_GROUPS:
-            sigma = per_group[name]
+        for block in BLOCKS:
+            sigma = per_group[block.name]
             # None means "no prior": an infinite sigma makes both the penalty
             # (offset / sigma) and its Jacobian row exactly zero, and
             # contributes no precision to the posterior.
-            out[GROUP_SLICES[name]] = np.inf if sigma is None else sigma
+            out[GROUP_SLICES[block.name]] = np.inf if sigma is None else sigma
         return out
-
-    def regularized_mask(self) -> NDArray[np.bool_]:
-        """Which parameters actually carry a prior."""
-        return np.isfinite(self.as_vector())
 
 
 @dataclass(frozen=True)
@@ -145,7 +134,28 @@ class ResidualWeights:
 
 @dataclass(frozen=True)
 class SolveStage:
-    """One step of the hierarchical solve: which parameter groups are free."""
+    """A named subset of shared parameter groups to free in one solve.
+
+    Despite the name, `run_bundle_calibration` no longer solves in stages by
+    default (see ALL_STAGE below) - an earlier version froze parameters in a
+    ladder (offset, then geometry, then gain, then a separate gauge-transfer
+    pass for magnet strength), on the theory that a cold start freeing
+    everything at once would trade a badly-scaled gain against a magnet
+    position it couldn't yet see. That was never actually tested until it was
+    ablated: a single unstaged solve over every free parameter converges to
+    the *same* optimum, to within optimizer tolerance (~1e-3 on real capture
+    data, bit-identical on synthetic ground-truth recovery), for both real and
+    synthetic data. `scipy.optimize.least_squares`'s `x_scale="jac"` already
+    renormalizes each parameter by its own Jacobian norm every iteration,
+    which was apparently already doing the job the ladder was defending
+    against.
+
+    What SolveStage is still for: isolating a specific subset of parameters in
+    a test (e.g. "solve magnet_strength alone, with nothing else free, to
+    check it's recoverable when nothing competes with it") - a genuinely
+    useful diagnostic capability, kept for that reason even though the default
+    calibration no longer walks a ladder of them.
+    """
 
     name: str
     free_groups: tuple[str, ...]
@@ -156,53 +166,52 @@ class SolveStage:
             m[GROUP_SLICES[group]] = True
         return m
 
+    def build_problem(
+        self,
+        measured: NDArray[np.float64],
+        x_shared_base: NDArray[np.float64],
+        sigmas: RegularizationSigmas,
+        weights: ResidualWeights,
+    ) -> BundleCalibrationProblem:
+        """Convenience: build the Problem this stage implies, without the
+        caller needing to know a Problem is constructed from a mask rather
+        than the stage itself."""
+        return BundleCalibrationProblem(measured, x_shared_base, self.mask(), sigmas, weights)
 
-# The default ladder. Each stage inherits everything the previous one freed.
-#
-# Two things to note about the ordering. `sensor_offset` is freed immediately:
-# a DC offset is a pure constant across every pose, so it is both easy to
-# separate and badly corrupting if left for later - the geometry stages would
-# otherwise contort themselves to absorb it. And `gain_iso` carries scale
-# throughout, with `magnet_strength` frozen; the final stage swaps them, after
-# renormalize_gauge() has moved the scale across (see GAUGE_STAGE).
-DEFAULT_STAGES: tuple[SolveStage, ...] = (
-    SolveStage("gain scale + offset", ("gain_iso", "sensor_offset")),
-    SolveStage("magnet geometry",
-               ("gain_iso", "sensor_offset", "magnet_pos", "magnet_tilt")),
-    SolveStage("full gain",
-               ("gain_iso", "sensor_offset", "magnet_pos", "magnet_tilt",
-                "gain_aniso", "gain_sym", "gain_rot")),
-)
 
-# Run after renormalize_gauge(): identical to the last default stage except
-# gain_iso is frozen (det(G) == 1) and magnet_strength is free in its place.
-# This both re-optimizes strength and cleans up the cross-talk term that makes
-# the gauge transfer only approximate.
-GAUGE_STAGE = SolveStage(
-    "magnet strength",
-    ("magnet_strength_mean", "magnet_strength_diff", "sensor_offset", "magnet_pos", "magnet_tilt",
-     "gain_aniso", "gain_sym", "gain_rot"),
+# What run_bundle_calibration solves by default: one stage, everything free.
+ALL_STAGE: tuple[SolveStage, ...] = (
+    SolveStage("everything", tuple(b.name for b in BLOCKS)),
 )
 
 
-@dataclass
 class BundleCalibrationProblem:
     """The scaled residual/Jacobian pair scipy.optimize.least_squares works on.
 
-    The optimization vector is [free shared params, then 6 pose params per
-    frame]. Shared parameters outside the current stage stay frozen at
-    `x_shared_base` and simply do not appear in the vector.
+    The optimization vector `x` is [free shared params, then 6 pose params
+    per frame]. Shared parameters outside `mask` stay frozen at
+    `x_shared_base` and simply do not appear in `x`.
+
+    A plain class, not a dataclass: `_sigma_field` and `_sigma_prior` are
+    real derived state computed once from the constructor arguments (not
+    plain stored fields), so an explicit `__init__` is a more honest
+    description of what this object actually is than dataclass syntax would be.
     """
 
-    measured: NDArray[np.float64]           # (n_frames, 9)
-    x_shared_base: NDArray[np.float64]      # full-length shared vector; frozen entries used as-is
-    stage: SolveStage
-    sigmas: RegularizationSigmas = field(default_factory=RegularizationSigmas)
-    weights: ResidualWeights = field(default_factory=ResidualWeights)
-
-    def __post_init__(self) -> None:
-        self._mask = self.stage.mask()
-        self._sigma_field = self.weights.sigma(self.measured)
+    def __init__(
+        self,
+        measured: NDArray[np.float64],
+        x_shared_base: NDArray[np.float64],
+        mask: NDArray[np.bool_],
+        sigmas: RegularizationSigmas | None = None,
+        weights: ResidualWeights | None = None,
+    ) -> None:
+        self.measured = measured
+        self.x_shared_base = x_shared_base
+        self.mask = mask
+        self.sigmas = sigmas or RegularizationSigmas()
+        self.weights = weights or ResidualWeights()
+        self._sigma_field = self.weights.sigma(measured)
         self._sigma_prior = self.sigmas.as_vector()
 
     @property
@@ -211,99 +220,97 @@ class BundleCalibrationProblem:
 
     @property
     def n_free_shared(self) -> int:
-        return int(self._mask.sum())
+        """How many shared parameters `mask` leaves free."""
+        return int(self.mask.sum())
 
     @property
     def free_mask(self) -> NDArray[np.bool_]:
-        """Which entries of the full shared vector this stage leaves free."""
-        return self._mask.copy()
+        """Which entries of the full shared vector this problem leaves free."""
+        return self.mask.copy()
 
-    def pack(self, x_shared: NDArray[np.float64], poses: NDArray[np.float64]) -> NDArray[np.float64]:
-        return np.concatenate([x_shared[self._mask], poses.ravel()])
+    def pack(
+        self, x_shared: NDArray[np.float64], poses: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """Build the solver vector `x` from a full shared-parameter vector and
+        per-frame poses - the inverse of unpack()."""
+        return np.concatenate([x_shared[self.mask], poses.ravel()])
 
-    def unpack(self, x: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def unpack(
+        self, x: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], BundleGeometry, NDArray[np.float64]]:
+        """Solver vector `x` -> (full shared-parameter vector, the geometry it
+        encodes, per-frame poses).
+
+        Frozen shared parameters come from `x_shared_base`; free ones from
+        `x` itself, via `mask`. Every caller that used to do
+        `unpack(x)` followed immediately by `unpack_shared(x_shared)` now
+        gets the geometry directly - this is the one place that combination
+        happens.
+        """
         x_shared = self.x_shared_base.copy()
-        x_shared[self._mask] = x[: self.n_free_shared]
+        x_shared[self.mask] = x[: self.n_free_shared]
         poses = x[self.n_free_shared :].reshape(self.n_frames, N_POSE_PARAMS)
-        return x_shared, poses
+        return x_shared, BundleGeometry.from_shared(x_shared), poses
 
     def residual(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
-        x_shared, poses = self.unpack(x)
-        predicted = unpack_shared(x_shared).predict(poses[:, :3], poses[:, 3:])
+        """The full scaled residual: field residuals (in sigma units) followed
+        by prior residuals (in prior-sigma units) for the free parameters."""
+        x_shared, geometry, poses = self.unpack(x)
+        predicted = geometry.predict(poses[:, :3], poses[:, 3:])
         field = ((predicted - self.measured) / self._sigma_field).ravel()
-        prior = (x_shared / self._sigma_prior)[self._mask]
+        prior = (x_shared / self._sigma_prior)[self.mask]
         return np.concatenate([field, prior])
 
-    def jacobian(self, x: NDArray[np.float64]) -> sp.spmatrix:
-        x_shared, poses = self.unpack(x)
-        _, j_pose, j_shared = unpack_shared(x_shared).predict_and_jacobians(
-            poses[:, :3], poses[:, 3:]
-        )
+    def jacobian(self, x: NDArray[np.float64]) -> sp.csr_array:
+        """The scaled residual's Jacobian: dense in the shared-parameter
+        columns, block-diagonal in the per-frame pose columns (perturbing one
+        frame's pose cannot touch another frame's residual), stacked over the
+        prior rows' diagonal contribution."""
+        _, geometry, poses = self.unpack(x)
+        _, j_pose, j_shared = geometry.predict_and_jacobians(poses[:, :3], poses[:, 3:])
         inv_sigma = (1.0 / self._sigma_field)[:, :, None]
         j_pose = j_pose * inv_sigma
-        j_shared = j_shared[:, :, self._mask] * inv_sigma
+        j_shared = j_shared[:, :, self.mask] * inv_sigma
 
         n, p = self.n_frames, self.n_free_shared
-        # Dense shared columns stacked on top of a block-diagonal pose part -
-        # perturbing one frame's pose cannot touch another frame's residual.
         shared_block = sp.csr_array(j_shared.reshape(9 * n, p))
         pose_block = sp.block_diag([sp.coo_array(b) for b in j_pose], format="csr")
         field_jac = sp.hstack([shared_block, pose_block], format="csr")
 
         prior_jac = sp.hstack([
-            sp.diags_array(1.0 / self._sigma_prior[self._mask]),
+            sp.diags_array(1.0 / self._sigma_prior[self.mask]),
             sp.csr_array((p, N_POSE_PARAMS * n)),
         ], format="csr")
-        return sp.vstack([field_jac, prior_jac], format="csr")
+        return cast(sp.csr_array, sp.vstack([field_jac, prior_jac], format="csr"))
 
     def field_residual_mT(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
-        """The field part of the residual in real mT, for reporting."""
-        x_shared, poses = self.unpack(x)
-        predicted = unpack_shared(x_shared).predict(poses[:, :3], poses[:, 3:])
+        """The field part of the residual in real mT (unscaled), for reporting."""
+        _, geometry, poses = self.unpack(x)
+        predicted = geometry.predict(poses[:, :3], poses[:, 3:])
         return predicted - self.measured
 
     def covariance_shared(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Posterior covariance of the free shared parameters, via the Schur complement.
+        """Posterior covariance of the free shared parameters (a Laplace/
+        Gaussian approximation around x), for reporting only.
 
-        Each frame's 6 pose parameters appear only in that frame's 9 residuals,
-        so the pose-pose block of the normal equations is block-diagonal and
-        can be eliminated one frame at a time, leaving a system only in the
-        shared parameters. That keeps this O(n_frames) in time and O(p^2) in
-        memory instead of forming the full (42 + 6n)^2 matrix - and it is the
-        same reduction that would make an on-device port tractable.
+        Reuses this same object's own jacobian(x) - the exact Jacobian the
+        solver itself trusts - so the reported uncertainty can't drift out of
+        sync with what was actually fitted. The top-left p x p block of
+        inv(J^T J) is the marginal covariance of the shared parameters with
+        the per-frame poses marginalized out; that block equality is a
+        textbook Schur-complement identity, not an approximation.
+
+        An earlier version computed that block directly via a hand-rolled
+        per-frame Schur elimination (O(n_frames) instead of forming the full
+        (p + 6n)-sized matrix). That reduction is the right tool at a much
+        larger scale than this tool ever runs at (it's also exactly what
+        would make an eventual on-device streaming solve tractable - see
+        git history for the implementation if that becomes real work) - but
+        at this problem's actual size (a few hundred to a couple thousand
+        unknowns) a plain dense inverse is simpler and still well under a
+        second, so that's what this does.
         """
-        x_shared, poses = self.unpack(x)
-        _, j_pose, j_shared = unpack_shared(x_shared).predict_and_jacobians(
-            poses[:, :3], poses[:, 3:]
-        )
-        inv_sigma = (1.0 / self._sigma_field)[:, :, None]
-        a = j_pose * inv_sigma                       # (n, 9, 6)  pose columns
-        b = j_shared[:, :, self._mask] * inv_sigma   # (n, 9, p)  shared columns
-
+        j = self.jacobian(x)
+        h = (j.transpose() @ j).toarray()
         p = self.n_free_shared
-        h = np.diag(1.0 / self._sigma_prior[self._mask] ** 2)  # prior contribution
-        h = h + np.einsum("nka,nkb->ab", b, b)
-
-        h_pp = np.einsum("nka,nkb->nab", a, a)               # (n, 6, 6)
-        h_sp = np.einsum("nka,nkb->nab", b, a)               # (n, p, 6)
-        # Ridge-guard each frame's 6x6 before inverting: a frame whose pose is
-        # poorly determined would otherwise blow up the reduction.
-        h_pp = h_pp + 1e-9 * np.eye(N_POSE_PARAMS)
-        reduced = h - np.einsum("nab,nbc,ndc->ad", h_sp, np.linalg.inv(h_pp), h_sp)
-
-        return np.linalg.inv(reduced)
-
-    def prior_sigma_free(self) -> NDArray[np.float64]:
-        return self._sigma_prior[self._mask]
-
-    def free_param_names(self) -> list[str]:
-        names: list[str] = []
-        for group, _ in PARAM_GROUPS:
-            sl = GROUP_SLICES[group]
-            width = (sl.stop - sl.start) // N_SENSORS
-            for unit in range(N_SENSORS):
-                for k in range(width):
-                    idx = sl.start + width * unit + k
-                    if self._mask[idx]:
-                        names.append(f"{group}[{unit + 1}]{'xyz'[k] if width == 3 else k}")
-        return names
+        return np.linalg.inv(h)[:p, :p]

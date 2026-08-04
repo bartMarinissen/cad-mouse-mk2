@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from typing import Callable, Literal
+from collections.abc import Callable
+from typing import Literal
 
 from .protocol import (
+    STEP_NAMES,
     CalFrame,
     CalibPhase,
     CalibStep,
     CalState,
-    STEP_NAMES,
     Status,
     Unknown,
     parse_line,

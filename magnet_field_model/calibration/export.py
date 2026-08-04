@@ -45,7 +45,10 @@ def firmware_sensor_gain(geometry: BundleGeometry) -> NDArray[np.float64]:
 
 def firmware_sensor_offset(geometry: BundleGeometry) -> NDArray[np.float64]:
     """(3, 3) per-sensor offsets in read_mT()'s output space, i.e. G_fw @ o_fit."""
-    return np.einsum("iab,ib->ia", firmware_sensor_gain(geometry), geometry.sensor_offset)
+    result: NDArray[np.float64] = np.einsum(
+        "iab,ib->ia", firmware_sensor_gain(geometry), geometry.sensor_offset
+    )
+    return result
 
 
 def format_cpp(geometry: BundleGeometry) -> str:
@@ -85,8 +88,8 @@ def format_cpp(geometry: BundleGeometry) -> str:
     lines.append("")
     lines.append("// Per-magnet polarization multiplier. NOTE: the firmware has no such")
     lines.append("// multiplier yet - MagnetModel::evaluate would need to scale its result")
-    lines.append("// by this. Values are only meaningful under the det(G)=1 gauge that")
-    lines.append("// produced them (see calibration/bundle_geometry.renormalize_gauge).")
+    lines.append("// by this. Meaningful under the fixed det(G)=1 gauge - see the")
+    lines.append("// 'gain/strength gauge' note in calibration/bundle_geometry.py.")
     lines.append("const float magnet_strength[3] = { "
                  + ", ".join(f"{v:.6f}f" for v in geometry.magnet_strength) + " };")
     lines.append("")

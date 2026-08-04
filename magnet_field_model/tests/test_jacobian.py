@@ -13,12 +13,11 @@ import numpy as np
 import pytest
 
 from calibration.bundle_geometry import (
-    N_POSE_PARAMS,
-    N_SHARED_PARAMS,
     APPROX_REST_T_MM,
-    unpack_shared,
+    N_SHARED_PARAMS,
+    BundleGeometry,
 )
-from calibration.local_field import local_field_and_gradient, _SOURCE
+from calibration.local_field import _SOURCE, local_field_and_gradient
 
 
 def _central_diff(fn, x0, h=1e-6):
@@ -79,7 +78,7 @@ def test_pose_jacobian(seed):
     """d(prediction)/d(pose) against finite differences, at a perturbed geometry."""
     rng = np.random.default_rng(seed)
     x_shared = rng.normal(0.0, 0.03, N_SHARED_PARAMS)
-    geom = unpack_shared(x_shared)
+    geom = BundleGeometry.from_shared(x_shared)
     ts, rotvecs = _sample_poses(rng, 4)
 
     _, j_pose, _ = geom.predict_and_jacobians(ts, rotvecs)
@@ -100,11 +99,13 @@ def test_shared_jacobian(seed):
     x_shared = rng.normal(0.0, 0.03, N_SHARED_PARAMS)
     ts, rotvecs = _sample_poses(rng, 3)
 
-    _, _, j_shared = unpack_shared(x_shared).predict_and_jacobians(ts, rotvecs)
+    _, _, j_shared = BundleGeometry.from_shared(x_shared).predict_and_jacobians(ts, rotvecs)
 
     for k in range(len(ts)):
         ref = _central_diff(
-            lambda x: unpack_shared(x).predict(ts[k][None, :], rotvecs[k][None, :])[0],
+            lambda x, k=k: (
+                BundleGeometry.from_shared(x).predict(ts[k][None, :], rotvecs[k][None, :])[0]
+            ),
             x_shared,
         )
         scale = max(np.abs(ref).max(), 1.0)
@@ -117,10 +118,12 @@ def test_shared_jacobian_at_nominal():
     rng = np.random.default_rng(99)
     x_shared = np.zeros(N_SHARED_PARAMS)
     ts, rotvecs = _sample_poses(rng, 2)
-    _, _, j_shared = unpack_shared(x_shared).predict_and_jacobians(ts, rotvecs)
+    _, _, j_shared = BundleGeometry.from_shared(x_shared).predict_and_jacobians(ts, rotvecs)
     for k in range(len(ts)):
         ref = _central_diff(
-            lambda x: unpack_shared(x).predict(ts[k][None, :], rotvecs[k][None, :])[0],
+            lambda x, k=k: (
+                BundleGeometry.from_shared(x).predict(ts[k][None, :], rotvecs[k][None, :])[0]
+            ),
             x_shared,
         )
         scale = max(np.abs(ref).max(), 1.0)
@@ -130,7 +133,7 @@ def test_shared_jacobian_at_nominal():
 def test_predict_shapes_and_batching():
     """Batched prediction must equal per-frame prediction."""
     rng = np.random.default_rng(7)
-    geom = unpack_shared(rng.normal(0.0, 0.02, N_SHARED_PARAMS))
+    geom = BundleGeometry.from_shared(rng.normal(0.0, 0.02, N_SHARED_PARAMS))
     ts, rotvecs = _sample_poses(rng, 5)
     batched = geom.predict(ts, rotvecs)
     assert batched.shape == (5, 9)
@@ -146,5 +149,5 @@ def test_magnet_spin_is_not_a_parameter():
     assert GROUP_SLICES["magnet_tilt"].stop - GROUP_SLICES["magnet_tilt"].start == 2 * N_MAGNETS
     # and the assembled tilt vector's z component is always exactly zero
     rng = np.random.default_rng(3)
-    geom = unpack_shared(rng.normal(0.0, 0.05, N_SHARED_PARAMS))
+    geom = BundleGeometry.from_shared(rng.normal(0.0, 0.05, N_SHARED_PARAMS))
     assert np.all(geom.magnet_tilt[:, 2] == 0.0)

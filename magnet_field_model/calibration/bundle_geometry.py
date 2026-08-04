@@ -1,21 +1,17 @@
-"""Bundle geometry: the calibration parameter vector, the forward model, and
-its analytic Jacobian.
+"""The physical bundle geometry and its analytic forward model / Jacobian.
 
-This is the layer the calibration solver talks to. Three things live here:
+This module owns exactly one thing: `BundleGeometry` - a concrete geometry
+(nominal values plus calibration offsets applied) and its two methods,
+`predict()` and `predict_and_jacobians()`. It does NOT own the calibration
+parameter *layout* - that is `parameterization.py`'s job (see its module
+docstring for why that split exists). `BundleGeometry.from_shared()` is a
+thin consumer of `parameterization.assemble()`, not a second implementation
+of it.
 
-1. **Nominal geometry** - sensor and magnet placement, mirroring
-   firmware/include/magnet_model/positions.h.
-2. **The flat shared-parameter vector** (`x_shared`) - what is being
-   calibrated, grouped so that a hierarchical solve can enable one group at
-   a time (see PARAM_GROUPS).
-3. **predict_and_jacobians()** - the forward model *and* its exact analytic
-   derivative with respect to both the per-frame pose and every shared
-   parameter.
-
-Why analytic: the previous version finite-differenced the whole shared
-vector per frame, which cost 2*N_SHARED magpylib evaluations *per frame per
-Jacobian* - tens of thousands of calls per solver iteration. Every derivative
-here is instead the same closed-form chain rule the firmware already uses in
+Why the Jacobian is analytic: finite-differencing the whole shared vector per
+frame cost 2*N_SHARED magpylib evaluations *per frame per Jacobian* - tens of
+thousands of calls per solver iteration. Every derivative here is instead the
+same closed-form chain rule the firmware already uses in
 firmware/src/magnet_model/sensor.cpp, on top of the local field gradient from
 local_field.py. That makes the Jacobian roughly as cheap as one residual
 evaluation, and it is checked against finite differences in
@@ -35,42 +31,38 @@ Frame conventions
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 from scipy.spatial.transform import Rotation
 
-from .local_field import MAGNET_HALF_HEIGHT_MM, local_field_and_gradient
-
-N_MAGNETS = 3
-N_SENSORS = 3
-N_POSE_PARAMS = 6  # translation (3) + rotation vector (3)
-
-# --- Nominal bundle geometry, mirrors firmware/include/magnet_model/positions.h ---
-_SQRT3 = math.sqrt(3.0)
-_TRIANGLE_SIDE_MM = 28.58
-_TRIANGLE_R_MM = _TRIANGLE_SIDE_MM / _SQRT3
-_MAGNET_Z_FROM_PIVOT_MM = 14.0
-_MAGNET_REST_DISTANCE_MM = 6.0
-
-SENSOR_POS: NDArray[np.float64] = np.array([
-    [0.0, -_TRIANGLE_R_MM, 0.0],                                # sensor 1: bottom center
-    [-_TRIANGLE_R_MM * _SQRT3 / 2, _TRIANGLE_R_MM * 0.5, 0.0],  # sensor 2: top left
-    [_TRIANGLE_R_MM * _SQRT3 / 2, _TRIANGLE_R_MM * 0.5, 0.0],   # sensor 3: top right
-])
-
-# Knob-frame magnet positions (bottom-face reference, matching positions.h).
-MAGNET_POS_NOMINAL_KNOB: NDArray[np.float64] = SENSOR_POS.copy()
-MAGNET_POS_NOMINAL_KNOB[:, 2] = -_MAGNET_Z_FROM_PIVOT_MM
-
-# Seed for the per-frame pose solve: the pivot sits this far above the sensor
-# plane so each magnet's bottom face is ~_MAGNET_REST_DISTANCE_MM above its
-# sensor. Only an initial guess, never assumed exact.
-APPROX_REST_T_MM: NDArray[np.float64] = np.array(
-    [0.0, 0.0, _MAGNET_Z_FROM_PIVOT_MM + _MAGNET_REST_DISTANCE_MM]
+from .local_field import local_field_and_gradient
+from .nominal_geometry import (
+    APPROX_REST_T_MM,
+    MAGNET_POS_NOMINAL_KNOB,
+    N_MAGNETS,
+    N_POSE_PARAMS,
+    N_SENSORS,
+    SENSOR_POS,
 )
+from .parameterization import (
+    GAIN_BASIS,
+    GAIN_GROUP_BASIS_INDICES,
+    GROUP_SLICES,
+    MAGNET_POS_BASIS,
+    N_SHARED_PARAMS,
+    TILT_UNIT_BASIS,
+    assemble,
+    set_offsets,
+)
+
+__all__ = [
+    "APPROX_REST_T_MM", "MAGNET_POS_NOMINAL_KNOB", "N_MAGNETS", "N_POSE_PARAMS",
+    "N_SENSORS", "SENSOR_POS", "GROUP_SLICES", "N_SHARED_PARAMS", "MAGNET_POLARITY",
+    "NOMINAL_GAIN_SIGN", "BundleGeometry", "NOMINAL_GEOMETRY", "magnet_pos_offsets",
+    "set_magnet_pos_offsets", "strength_vector", "set_strength_vector", "so3_left_jacobian",
+]
 
 # The raw sensors read the opposite sign to the field local_field.py models
 # (the capture path streams readUncorrected(), i.e. before any correction).
@@ -86,147 +78,6 @@ MAGNET_POLARITY = -1.0
 NOMINAL_GAIN_SIGN = +1.0
 
 
-# --- Shared parameter vector layout -----------------------------------------
-#
-# Grouped (not interleaved) so a hierarchical solve can free one group at a
-# time with a simple boolean mask - see bundle_params.SolveStage.
-#
-#   magnet_pos      (3 total)       in-plane shape of the magnet triangle, mm.
-#                                   NOT 3 per magnet: 9 raw coordinates minus
-#                                   the 6 rigid-body DOF that are pure gauge
-#                                   (see MAGNET_POS_BASIS) leaves exactly 3 -
-#                                   the triangle's three side lengths, which
-#                                   is the only part that can cause Phantom
-#                                   Tilt. Where the trio sits and how it is
-#                                   oriented is absorbed by the per-frame pose
-#                                   and is not measurable by any dataset.
-#   magnet_tilt     (2 per magnet)  magnet axis tilt, rad. Only 2 DOF: the
-#                                   magnet is a solid of revolution about its
-#                                   own polarization axis, so spin about that
-#                                   axis changes nothing measurable - carrying
-#                                   it would add an exactly-dead column.
-#   magnet_strength_mean (1)        common-mode polarization multiplier: the
-#                                   absolute field scale, which the nominal
-#                                   600mT figure only guesses at.
-#   magnet_strength_diff (2)        how much individual magnets differ from
-#                                   that mean, as a traceless triple
-#                                   (d0, d1, -(d0+d1)). Split from the mean
-#                                   because the two deserve very different
-#                                   priors: magnets cut from one batch are
-#                                   graded to ~1% of each other even though
-#                                   the batch's absolute remanence is much
-#                                   less certain. The differential part is
-#                                   also the part that causes Phantom Tilt,
-#                                   so it is worth being able to say "these
-#                                   magnets are near-identical" strongly.
-#   sensor_offset   (3 per sensor)  DC offset in raw sensor units (mT), added
-#                                   *after* gain, since it is a property of the
-#                                   raw reading (Hall zero-point + ambient
-#                                   field) rather than of the modelled field.
-#   gain_iso        (1 per sensor)  isotropic gain error. To first order this
-#                                   is exactly the log-determinant direction of
-#                                   G_i, which is what makes "det(G) = 1" the
-#                                   same statement as "gain_iso = 0".
-#   gain_aniso      (2 per sensor)  traceless diagonal, i.e. per-axis
-#                                   sensitivity spread at fixed overall scale
-#   gain_sym        (3 per sensor)  symmetric off-diagonal (cross-axis skew)
-#   gain_rot        (3 per sensor)  antisymmetric, i.e. sensor frame misalignment
-#
-# Gain is assembled as  G_i = NOMINAL_GAIN_SIGN * (I + A_i), so every entry is
-# an offset from nominal with expected value 0 - which is what lets the ridge
-# priors in bundle_params.py read as "how many prior stddevs from nominal".
-PARAM_GROUPS: tuple[tuple[str, int], ...] = (
-    ("magnet_pos", 3),
-    ("magnet_tilt", 2 * N_MAGNETS),
-    ("magnet_strength_mean", 1),
-    ("magnet_strength_diff", 2),
-    ("sensor_offset", 3 * N_SENSORS),
-    ("gain_iso", 1 * N_SENSORS),
-    ("gain_aniso", 2 * N_SENSORS),
-    ("gain_sym", 3 * N_SENSORS),
-    ("gain_rot", 3 * N_SENSORS),
-)
-
-GROUP_SLICES: dict[str, slice] = {}
-_offset = 0
-for _name, _size in PARAM_GROUPS:
-    GROUP_SLICES[_name] = slice(_offset, _offset + _size)
-    _offset += _size
-N_SHARED_PARAMS = _offset  # 42
-
-
-def _magnet_pos_gauge_basis() -> NDArray[np.float64]:
-    """Orthonormal basis (9x3) for magnet position offsets that fixes the gauge.
-
-    A global translation or rotation of the magnet trio is exactly cancelled by
-    a compensating per-frame pose change, so 6 of the 9 raw coordinates carry
-    no information at all - measured as 6 eigenvalues at machine zero in the
-    reduced Hessian, invariant to how many frames are captured. Rather than
-    leaning on priors to hold those directions down, they are removed from the
-    parameterization outright by three constraints:
-
-      1. sum of offsets == 0            - fixes the trio's position (3 DOF)
-      2. all z offsets equal            - makes the triangle's plane
-                                          horizontal, fixing pitch and roll
-                                          (2 DOF). This costs nothing: three
-                                          points are always coplanar, so any
-                                          arrangement can be rotated flat, and
-                                          the plane's tilt is pure gauge.
-      3. zero net yaw moment            - fixes twist (1 DOF), symmetrically in
-                                          all three magnets rather than by
-                                          pinning one edge.
-
-    Constraints 1 and 2 together force every z offset to exactly zero, so the
-    three survivors are purely in-plane - the shape of the triangle.
-    """
-    constraints = []
-
-    for axis in range(3):                                   # 1. zero mean offset
-        row = np.zeros(9)
-        row[axis::3] = 1.0
-        constraints.append(row)
-
-    for j in range(N_MAGNETS - 1):                          # 2. equal z => plane horizontal
-        row = np.zeros(9)
-        row[3 * j + 2] = 1.0
-        row[3 * (j + 1) + 2] = -1.0
-        constraints.append(row)
-
-    row = np.zeros(9)                                       # 3. zero net yaw moment
-    for j in range(N_MAGNETS):
-        row[3 * j + 0] = -MAGNET_POS_NOMINAL_KNOB[j, 1]
-        row[3 * j + 1] = MAGNET_POS_NOMINAL_KNOB[j, 0]
-    constraints.append(row)
-
-    # The nullspace of the constraint matrix is the admissible subspace.
-    _, _, vt = np.linalg.svd(np.array(constraints))
-    basis = vt[len(constraints):].T
-    assert basis.shape == (9, 3), f"expected 3 free shape DOF, got {basis.shape}"
-    return basis
-
-
-MAGNET_POS_BASIS: NDArray[np.float64] = _magnet_pos_gauge_basis()
-
-
-def magnet_pos_offsets(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
-    """(3, 3) per-magnet position offsets implied by the 3 shape parameters."""
-    x = np.asarray(x_shared, dtype=float)
-    return (MAGNET_POS_BASIS @ x[GROUP_SLICES["magnet_pos"]]).reshape(N_MAGNETS, 3)
-
-
-def set_magnet_pos_offsets(
-    x_shared: NDArray[np.float64], offsets: NDArray[np.float64]
-) -> None:
-    """Write (3, 3) offsets back as shape parameters, in place.
-
-    Projects onto the gauge-fixed subspace: any rigid-body component of
-    `offsets` is silently dropped, which is correct - it was never observable,
-    and dropping it is exactly what choosing a gauge representative means.
-    """
-    flat = np.asarray(offsets, dtype=float).ravel()
-    x_shared[GROUP_SLICES["magnet_pos"]] = MAGNET_POS_BASIS.T @ flat
-
-
 def _skew(v: NDArray[np.float64]) -> NDArray[np.float64]:
     """Skew-symmetric matrix (or stack of them) from vector(s) of shape (..., 3)."""
     v = np.asarray(v, dtype=float)
@@ -238,36 +89,6 @@ def _skew(v: NDArray[np.float64]) -> NDArray[np.float64]:
     out[..., 2, 0] = -v[..., 1]
     out[..., 2, 1] = v[..., 0]
     return out
-
-
-# The 9 gain basis matrices, in the order the parameter groups list them
-# (iso, aniso x2, sym x3, rot x3). A_i is the sum of these weighted by the
-# fitted parameters, so d(A_i)/d(param_k) is just GAIN_BASIS[k] - which keeps
-# the gain Jacobian free of hand-rolled index arithmetic.
-def _gain_basis() -> NDArray[np.float64]:
-    basis = []
-    basis.append(np.eye(3))                                    # iso
-    basis.append(np.diag([1.0, 0.0, -1.0]))                    # aniso 0
-    basis.append(np.diag([0.0, 1.0, -1.0]))                    # aniso 1
-    for a, b in ((0, 1), (0, 2), (1, 2)):                      # sym off-diagonal
-        m = np.zeros((3, 3))
-        m[a, b] = m[b, a] = 1.0
-        basis.append(m)
-    for k in range(3):                                         # antisymmetric
-        e = np.zeros(3)
-        e[k] = 1.0
-        basis.append(_skew(e))
-    return np.array(basis)
-
-
-GAIN_BASIS: NDArray[np.float64] = _gain_basis()
-# Which gain basis index each gain group's per-sensor entries map to.
-_GAIN_GROUP_BASIS: dict[str, tuple[int, ...]] = {
-    "gain_iso": (0,),
-    "gain_aniso": (1, 2),
-    "gain_sym": (3, 4, 5),
-    "gain_rot": (6, 7, 8),
-}
 
 
 def so3_left_jacobian(rotvec: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -298,16 +119,33 @@ class BundleGeometry:
     """A concrete bundle geometry: nominal values with calibration offsets applied."""
 
     magnet_pos_knob: NDArray[np.float64]  # (3, 3) knob-frame bottom-face positions, mm
-    magnet_tilt: NDArray[np.float64]      # (3, 3) magnet tilt rotation vectors (z component always 0)
+    magnet_tilt: NDArray[np.float64]      # (3, 3) magnet tilt rotation vectors (z always 0)
     magnet_strength: NDArray[np.float64]  # (3,) polarization multiplier, nominal 1
     gain: NDArray[np.float64]             # (3, 3, 3) per-sensor gain matrix, nominal +I
     sensor_offset: NDArray[np.float64]    # (3, 3) per-sensor DC offset in raw units (mT)
+
+    @staticmethod
+    def from_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
+        """Build a concrete BundleGeometry from the flat shared-parameter vector.
+
+        Every offset comes from parameterization.assemble() - this method
+        does not itself decide what any index of x_shared means.
+        """
+        offsets = assemble(x_shared)
+        gain = NOMINAL_GAIN_SIGN * (np.eye(3)[None, :, :] + offsets["gain_offset"])
+        return BundleGeometry(
+            magnet_pos_knob=MAGNET_POS_NOMINAL_KNOB + offsets["magnet_pos_offset"],
+            magnet_tilt=offsets["magnet_tilt_offset"],
+            magnet_strength=1.0 + offsets["magnet_strength_offset"],
+            gain=gain,
+            sensor_offset=offsets["sensor_offset"],
+        )
 
     @property
     def magnet_rotation(self) -> Rotation:
         return Rotation.from_rotvec(self.magnet_tilt)
 
-    def _geometry_terms(self, ts, rotvecs):
+    def _geometry_terms(self, ts: ArrayLike, rotvecs: ArrayLike) -> dict[str, NDArray[np.float64]]:
         """Shared intermediates for predict() and predict_and_jacobians()."""
         ts = np.atleast_2d(np.asarray(ts, dtype=float))
         rotvecs = np.atleast_2d(np.asarray(rotvecs, dtype=float))
@@ -343,12 +181,12 @@ class BundleGeometry:
                     b_knob=b_knob, b_world=b_world, b_world_unit=b_world_unit, s=s,
                     pred=pred.reshape(n, 3 * N_SENSORS), rotvecs=rotvecs)
 
-    def predict(self, ts, rotvecs) -> NDArray[np.float64]:
+    def predict(self, ts: ArrayLike, rotvecs: ArrayLike) -> NDArray[np.float64]:
         """Predicted sensor readings, (n_frames, 9), ordered s1xyz s2xyz s3xyz."""
-        return self._geometry_terms(ts, rotvecs)["pred"]
+        return np.asarray(self._geometry_terms(ts, rotvecs)["pred"], dtype=np.float64)
 
     def predict_and_jacobians(
-        self, ts, rotvecs
+        self, ts: ArrayLike, rotvecs: ArrayLike
     ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
         """Prediction plus its exact derivatives.
 
@@ -356,9 +194,7 @@ class BundleGeometry:
         (n, 9), (n, 9, 6) and (n, 9, N_SHARED_PARAMS).
 
         Each frame's pose block is independent of every other frame's - that
-        block structure is what bundle_params.py turns into a sparse Jacobian
-        (and what would let a future port eliminate poses frame-by-frame via
-        the Schur complement, as covariance_shared() already does).
+        block structure is what bundle_params.py turns into a sparse Jacobian.
         """
         g = self._geometry_terms(ts, rotvecs)
         n, r_knob, r_mag = g["n"], g["r_knob"], g["r_mag"]
@@ -386,7 +222,7 @@ class BundleGeometry:
 
         # --- magnet position: d(field)/dm_j = -M R, then projected onto the
         # gauge-fixed shape basis (the 6 rigid-body directions are dropped
-        # rather than fitted - see MAGNET_POS_BASIS).
+        # rather than fitted - see parameterization.MAGNET_POS_BASIS).
         dm = -np.einsum("nijab,nbc->nijac", m, r_knob)               # (n,i,j,3,3)
         dm = np.einsum("iab,nijbc->nijac", gain, dm)
         dm_raw = np.empty((n, N_SENSORS, 3, 3 * N_MAGNETS))
@@ -405,9 +241,10 @@ class BundleGeometry:
         sl = GROUP_SLICES["magnet_tilt"]
         for j in range(N_MAGNETS):
             jl = so3_left_jacobian(self.magnet_tilt[j])
-            # only the x/y tilt columns are free; spin about the magnet axis is dropped
+            # TILT_UNIT_BASIS drops the always-dead spin column - jl @ TILT_UNIT_BASIS
+            # is exactly jl's first two columns, named instead of sliced positionally.
             j_shared[..., sl.start + 2 * j : sl.start + 2 * j + 2] = np.einsum(
-                "niab,bc->niac", dtilt[:, :, j], jl[:, :2]
+                "niab,bc->niac", dtilt[:, :, j], jl @ TILT_UNIT_BASIS
             )
 
         # --- magnet strength: linear in the field, so d/d(ds_j) = G polarity B_j.
@@ -427,7 +264,7 @@ class BundleGeometry:
             j_shared[:, i, :, sl.start + 3 * i : sl.start + 3 * i + 3] = np.eye(3)
 
         # --- gain: pred_i = sign * (I + A_i) s_i, so d/d(param) = sign * basis @ s ---
-        for group, basis_idx in _GAIN_GROUP_BASIS.items():
+        for group, basis_idx in GAIN_GROUP_BASIS_INDICES.items():
             sl = GROUP_SLICES[group]
             width = len(basis_idx)
             for k, bi in enumerate(basis_idx):
@@ -442,111 +279,24 @@ class BundleGeometry:
         )
 
 
+def magnet_pos_offsets(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
+    """(3, 3) per-magnet position offsets implied by the 3 shape parameters."""
+    return assemble(x_shared)["magnet_pos_offset"]
+
+
+def set_magnet_pos_offsets(x_shared: NDArray[np.float64], offsets: ArrayLike) -> None:
+    """Inverse of magnet_pos_offsets(): see parameterization.set_offsets()."""
+    set_offsets(x_shared, "magnet_pos_offset", offsets)
+
+
 def strength_vector(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
     """The 3 per-magnet strength *offsets* implied by (mean, diff) parameters."""
-    x = np.asarray(x_shared, dtype=float)
-    mean = x[GROUP_SLICES["magnet_strength_mean"]][0]
-    d0, d1 = x[GROUP_SLICES["magnet_strength_diff"]]
-    return mean + np.array([d0, d1, -(d0 + d1)])
+    return assemble(x_shared)["magnet_strength_offset"]
 
 
-def set_strength_vector(
-    x_shared: NDArray[np.float64], strength_offsets: NDArray[np.float64]
-) -> None:
-    """Inverse of strength_vector(): write 3 offsets back as (mean, diff), in place.
-
-    Exact - any 3-vector splits uniquely into its mean plus a zero-sum
-    remainder, which is what makes the gauge transfer in renormalize_gauge()
-    lossless even under this reparameterization.
-    """
-    s = np.asarray(strength_offsets, dtype=float)
-    mean = s.mean()
-    x_shared[GROUP_SLICES["magnet_strength_mean"]] = mean
-    x_shared[GROUP_SLICES["magnet_strength_diff"]] = (s - mean)[:2]
+def set_strength_vector(x_shared: NDArray[np.float64], strength_offsets: ArrayLike) -> None:
+    """Inverse of strength_vector(): see parameterization.set_offsets()."""
+    set_offsets(x_shared, "magnet_strength_offset", strength_offsets)
 
 
-def unpack_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
-    """Build a concrete BundleGeometry from the flat shared-parameter vector.
-
-    The single source of truth for what each index of x_shared means.
-    """
-    x = np.asarray(x_shared, dtype=float)
-
-    magnet_pos_offset = magnet_pos_offsets(x)
-    tilt_xy = x[GROUP_SLICES["magnet_tilt"]].reshape(N_MAGNETS, 2)
-    magnet_tilt = np.concatenate([tilt_xy, np.zeros((N_MAGNETS, 1))], axis=1)
-
-    a = np.zeros((N_SENSORS, 3, 3))
-    for group, basis_idx in _GAIN_GROUP_BASIS.items():
-        vals = x[GROUP_SLICES[group]].reshape(N_SENSORS, len(basis_idx))
-        a += np.einsum("ik,kab->iab", vals, GAIN_BASIS[list(basis_idx)])
-    gain = NOMINAL_GAIN_SIGN * (np.eye(3)[None, :, :] + a)
-
-    return BundleGeometry(
-        magnet_pos_knob=MAGNET_POS_NOMINAL_KNOB + magnet_pos_offset,
-        magnet_tilt=magnet_tilt,
-        magnet_strength=1.0 + strength_vector(x),
-        gain=gain,
-        sensor_offset=x[GROUP_SLICES["sensor_offset"]].reshape(N_SENSORS, 3),
-    )
-
-
-def gain_matrix_to_params(a: NDArray[np.float64]) -> dict[str, NDArray[np.float64]]:
-    """Project a (3, 3, 3) stack of gain *offset* matrices back onto the groups.
-
-    The exact inverse of the assembly in unpack_shared - needed by
-    renormalize_gauge(), which has to rescale a whole gain matrix and then
-    express the result in the group parameterization again.
-    """
-    a = np.asarray(a, dtype=float)
-    diag = np.einsum("iaa->ia", a)
-    iso = diag.mean(axis=1)
-    traceless = diag - iso[:, None]
-    sym = 0.5 * np.stack([a[:, 0, 1] + a[:, 1, 0],
-                          a[:, 0, 2] + a[:, 2, 0],
-                          a[:, 1, 2] + a[:, 2, 1]], axis=1)
-    anti = 0.5 * (a - np.transpose(a, (0, 2, 1)))
-    rot = np.stack([-anti[:, 1, 2], anti[:, 0, 2], -anti[:, 0, 1]], axis=1)
-    return {
-        "gain_iso": iso,
-        "gain_aniso": traceless[:, :2],
-        "gain_sym": sym,
-        "gain_rot": rot,
-    }
-
-
-def renormalize_gauge(x_shared: NDArray[np.float64]) -> NDArray[np.float64]:
-    """Move each sensor's overall gain scale into its paired magnet's strength,
-    leaving det(G_i) == 1.
-
-    Sensor gain scale and magnet strength describe the same thing from opposite
-    ends - a sensor reading 5% high and its magnet being 5% strong differ only
-    through cross-talk, which is about 1% of the signal here and so comparable
-    to the model error. They are therefore not meaningfully separable, and
-    freeing both at once just leaves the split to the priors.
-
-    Fixing det(G_i) = 1 is a clean way to choose: it says "sensors are
-    volume-preserving, magnets carry the scale", after which strength is
-    genuinely identifiable (nothing else can absorb overall scale). To first
-    order det(G) = 1 + 3*gain_iso, so this really is just "zero out gain_iso
-    and put it in strength" - done exactly, via the determinant.
-
-    Note this is a *gauge choice*, not a measurement: it re-attributes scale
-    rather than discovering where it belongs. The transfer is also only exact
-    in the absence of cross-talk, so the caller should refit afterwards.
-    """
-    x = np.asarray(x_shared, dtype=float).copy()
-    geom = unpack_shared(x)
-
-    scale = np.cbrt(np.abs(np.linalg.det(geom.gain)))       # (3,) per sensor
-    a_new = geom.gain / (NOMINAL_GAIN_SIGN * scale[:, None, None]) - np.eye(3)
-    for group, vals in gain_matrix_to_params(a_new).items():
-        x[GROUP_SLICES[group]] = vals.ravel()
-
-    # Sensor i's scale goes to magnet i - each sensor is dominated by the
-    # magnet it sits under, which is exactly why the two were degenerate.
-    set_strength_vector(x, (1.0 + strength_vector(x)) * scale - 1.0)
-    return x
-
-
-NOMINAL_GEOMETRY = unpack_shared(np.zeros(N_SHARED_PARAMS))
+NOMINAL_GEOMETRY = BundleGeometry.from_shared(np.zeros(N_SHARED_PARAMS))

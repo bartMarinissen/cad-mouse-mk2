@@ -1,4 +1,4 @@
-"""End-to-end and component tests for the calibration pipeline.
+"""End-to-end tests for the bundle calibration fit (calibration_algorithm.py).
 
 The synthetic round-trip tests are the important ones: they generate data
 from a *known* geometry and check the fit recovers it. That is the only check
@@ -19,203 +19,86 @@ from calibration.bundle_geometry import (
     GROUP_SLICES,
     N_SHARED_PARAMS,
     NOMINAL_GEOMETRY,
+    BundleGeometry,
     magnet_pos_offsets,
-    renormalize_gauge,
     set_magnet_pos_offsets,
     set_strength_vector,
     strength_vector,
-    unpack_shared,
 )
-from calibration.calibration_algorithm import run_bundle_calibration
-from calibration.export import firmware_sensor_gain
-from calibration.frame_selection import magnet_world_positions, select_diverse_frames
-from calibration.pose_solver import solve_poses
+from calibration.calibration_algorithm import _decimate, run_bundle_calibration
 from calibration.protocol import CalibStep
 
 RUNS_DIR = Path(__file__).resolve().parent.parent / "calibration_runs"
 
 
-def _random_poses(rng, n, spread_mm=1.0, spread_rad=0.15):
-    ts = APPROX_REST_T_MM + rng.uniform(-spread_mm, spread_mm, (n, 3))
-    rotvecs = rng.uniform(-spread_rad, spread_rad, (n, 3))
-    return np.concatenate([ts, rotvecs], axis=1)
+# --------------------------------------------------------------------------- #
+# frame decimation
+# --------------------------------------------------------------------------- #
+#
+# No diversity-selection logic to test here deliberately - an earlier version
+# picked frames by farthest-point sampling, ablated away once the measured
+# "30 to 387 frames land within 0.03pp" result showed the specific frames
+# chosen barely matter. _decimate() only exists to bound runtime.
+
+def test_decimate_caps_and_spans_the_range():
+    idx = np.arange(200)
+    out = _decimate(idx, 25)
+    assert len(out) == 25
+    assert len(np.unique(out)) == 25
+    assert out[0] == 0 and out[-1] == 199, "should span the full range, not just a prefix"
+
+
+def test_decimate_passes_through_when_under_the_cap():
+    idx = np.arange(10)
+    assert np.array_equal(_decimate(idx, 50), idx)
 
 
 # --------------------------------------------------------------------------- #
-# pose solver
+# gauge: gain has no isotropic/scale parameter, so det(G) = 1 structurally
 # --------------------------------------------------------------------------- #
 
-def test_pose_solver_recovers_known_poses():
-    """Batched LM must recover poses it generated, from a cold rest-pose start."""
-    rng = np.random.default_rng(0)
-    poses = _random_poses(rng, 40)
-    measured = NOMINAL_GEOMETRY.predict(poses[:, :3], poses[:, 3:])
+def test_gain_has_no_scale_direction():
+    """Randomizing every free gain parameter at its realistic prior scale must
+    still leave det(G) within the expected second-order tolerance of 1 - there
+    is no way to reach a different determinant, because there is no free
+    parameter that scales.
 
-    result = solve_poses(NOMINAL_GEOMETRY, measured)
-
-    assert result.converged.all()
-    assert np.abs(result.residual_mT).max() < 1e-6
-    assert np.abs(result.poses - poses).max() < 1e-4
-
-
-def test_pose_solver_handles_perturbed_geometry():
-    """Poses still solve when the geometry is not nominal."""
-    rng = np.random.default_rng(1)
-    geom = unpack_shared(rng.normal(0.0, 0.02, N_SHARED_PARAMS))
-    poses = _random_poses(rng, 20)
-    measured = geom.predict(poses[:, :3], poses[:, 3:])
-
-    result = solve_poses(geom, measured)
-    assert result.converged.all()
-    assert np.abs(result.residual_mT).max() < 1e-5
-
-
-# --------------------------------------------------------------------------- #
-# frame selection
-# --------------------------------------------------------------------------- #
-
-def test_frame_selection_count_and_bounds():
-    rng = np.random.default_rng(2)
-    poses = _random_poses(rng, 200)
-    idx = select_diverse_frames(poses, 25)
-    assert len(idx) == 25
-    assert len(np.unique(idx)) == 25
-    assert idx.min() >= 0 and idx.max() < 200
-    assert np.all(np.diff(idx) > 0), "indices should come back sorted"
-
-
-def test_frame_selection_returns_all_when_asked_for_too_many():
-    rng = np.random.default_rng(3)
-    poses = _random_poses(rng, 10)
-    assert len(select_diverse_frames(poses, 50)) == 10
-
-
-def test_frame_selection_beats_decimation_on_spread():
-    """Farthest-point selection should cover more pose volume than plain
-    decimation of the same size - that is its entire reason to exist."""
-    rng = np.random.default_rng(4)
-    # A run-like dataset: mostly clustered near rest, with a few excursions.
-    poses = np.concatenate([_random_poses(rng, 180, 0.2, 0.02),
-                            _random_poses(rng, 20, 2.0, 0.25)])
-    n = 20
-    chosen = magnet_world_positions(poses)[select_diverse_frames(poses, n)]
-    decimated = magnet_world_positions(poses)[:: len(poses) // n][:n]
-
-    def spread(x):
-        return float(np.linalg.norm(x - x.mean(axis=0), axis=1).mean())
-
-    assert spread(chosen) > 1.5 * spread(decimated)
-
-
-def test_frame_selection_respects_valid_mask():
-    rng = np.random.default_rng(5)
-    poses = _random_poses(rng, 50)
-    valid = np.zeros(50, dtype=bool)
-    valid[10:20] = True
-    idx = select_diverse_frames(poses, 5, valid=valid)
-    assert set(idx).issubset(set(range(10, 20)))
-
-
-# --------------------------------------------------------------------------- #
-# export
-# --------------------------------------------------------------------------- #
-
-def test_firmware_gain_is_the_inverse():
-    """The firmware applies gain to the measurement, the fit applies it to the
-    model, so the exported matrix is the inverse of the fitted one - with the
-    installed magnet polarity folded back in."""
-    from calibration.bundle_geometry import MAGNET_POLARITY
-
-    rng = np.random.default_rng(6)
-    geom = unpack_shared(rng.normal(0.0, 0.03, N_SHARED_PARAMS))
-    fw = firmware_sensor_gain(geom)
-    for i in range(3):
-        assert np.allclose(fw[i] @ (MAGNET_POLARITY * geom.gain[i]), np.eye(3), atol=1e-10)
-
-
-def test_nominal_gain_is_identity_and_polarity_carries_the_sign():
-    """Nominal gain is +I, with the raw sensors' sign flip carried by the
-    magnet's installed polarity instead. What matters is that the exported
-    firmware gain still lands near -I, matching Config::magnet_gains - getting
-    that sign wrong is what made the previous calibrator unfittable."""
-    from calibration.bundle_geometry import MAGNET_POLARITY
-
-    assert np.allclose(NOMINAL_GEOMETRY.gain, np.eye(3)[None, :, :])
-    assert MAGNET_POLARITY == -1.0
-    assert np.allclose(firmware_sensor_gain(NOMINAL_GEOMETRY), -np.eye(3)[None, :, :])
-
-
-def test_firmware_offset_mapping():
-    """o_fw = G_fw @ o_fit, i.e. the offset transforms into read_mT's space."""
-    from calibration.export import firmware_sensor_offset
-
-    rng = np.random.default_rng(11)
-    x = np.zeros(N_SHARED_PARAMS)
-    x[GROUP_SLICES["sensor_offset"]] = rng.normal(0.0, 1.0, 9)
-    geom = unpack_shared(x)
-    expected = np.einsum("iab,ib->ia", firmware_sensor_gain(geom), geom.sensor_offset)
-    assert np.allclose(firmware_sensor_offset(geom), expected)
-
-
-# --------------------------------------------------------------------------- #
-# gauge: det(G) = 1
-# --------------------------------------------------------------------------- #
-
-def test_gain_matrix_to_params_inverts_assembly():
-    """gain_matrix_to_params must be the exact inverse of unpack_shared's
-    gain assembly - renormalize_gauge depends on that round trip."""
-    from calibration.bundle_geometry import NOMINAL_GAIN_SIGN, gain_matrix_to_params
-
+    tr(A) = 0 exactly (test_parameterization.test_gain_basis_is_exactly_traceless),
+    so det(I+A) = 1 - tr(A^2)/2 + det(A): a genuine but second-order-small
+    deviation at typical fitted magnitudes, not an exact identity. The
+    magnitude used here matches RegularizationSigmas' prior widths - a much
+    larger stress magnitude would show a larger (still second-order, still
+    real) deviation, which is not what this test is checking.
+    """
     rng = np.random.default_rng(12)
     x = np.zeros(N_SHARED_PARAMS)
-    for group in ("gain_iso", "gain_aniso", "gain_sym", "gain_rot"):
+    sigmas = {"gain_aniso": 0.05, "gain_sym": 0.03, "gain_rot": 0.03}
+    for group, sigma in sigmas.items():
         sl = GROUP_SLICES[group]
-        x[sl] = rng.normal(0.0, 0.05, sl.stop - sl.start)
+        x[sl] = rng.normal(0.0, sigma, sl.stop - sl.start)
 
-    a = NOMINAL_GAIN_SIGN * unpack_shared(x).gain - np.eye(3)
-    recovered = gain_matrix_to_params(a)
-    for group, vals in recovered.items():
-        assert np.allclose(vals.ravel(), x[GROUP_SLICES[group]], atol=1e-12), group
+    geom = BundleGeometry.from_shared(x)
+    assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0, atol=2e-2)
 
 
-def test_renormalize_gauge_gives_unit_determinant():
-    """After the transfer every sensor gain must have |det| == 1."""
+def test_magnet_strength_free_from_the_start_no_gauge_transfer_needed():
+    """With gain carrying no scale, a fit that only frees magnet_strength (no
+    gain parameters at all) should already land close to the true value -
+    there is no separate gauge-transfer stage required to get there."""
     rng = np.random.default_rng(13)
-    x = np.zeros(N_SHARED_PARAMS)
-    for group in ("gain_iso", "gain_aniso", "gain_sym", "gain_rot"):
-        sl = GROUP_SLICES[group]
-        x[sl] = rng.normal(0.0, 0.06, sl.stop - sl.start)
-    set_strength_vector(x, rng.normal(0.0, 0.02, 3))
+    truth = np.zeros(N_SHARED_PARAMS)
+    set_strength_vector(truth, [0.05, -0.03, 0.04])
+    geom = BundleGeometry.from_shared(truth)
 
-    geom = unpack_shared(renormalize_gauge(x))
-    assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0, atol=1e-10)
+    from calibration.bundle_params import SolveStage
 
-
-def test_renormalize_gauge_nearly_preserves_predictions():
-    """The transfer re-attributes scale rather than changing the model. It is
-    only exact without cross-talk, so allow the ~1% cross-talk term - but it
-    must be far smaller than the scale being moved."""
-    rng = np.random.default_rng(14)
-    x = np.zeros(N_SHARED_PARAMS)
-    x[GROUP_SLICES["gain_iso"]] = [0.05, -0.03, 0.04]
-    poses = _random_poses(rng, 12)
-
-    before = unpack_shared(x).predict(poses[:, :3], poses[:, 3:])
-    after = unpack_shared(renormalize_gauge(x)).predict(poses[:, :3], poses[:, 3:])
-
-    scale = np.abs(before).mean()
-    assert np.abs(after - before).max() / scale < 0.01
-
-
-def test_gauge_moves_scale_from_gain_into_strength():
-    """gain_iso should end up at zero and its scale show up in strength."""
-    x = np.zeros(N_SHARED_PARAMS)
-    x[GROUP_SLICES["gain_iso"]] = [0.05, -0.03, 0.04]
-
-    y = renormalize_gauge(x)
-    assert np.abs(y[GROUP_SLICES["gain_iso"]]).max() < 1e-10
-    # to first order det(G)^(1/3) == 1 + gain_iso, so strength picks it up
-    assert np.allclose(strength_vector(y), [0.05, -0.03, 0.04], atol=2e-3)
+    result = run_bundle_calibration(
+        _synthetic_datasets(geom, rng), n_frames=60,
+        stages=(SolveStage("strength only",
+                           ("magnet_strength_mean", "magnet_strength_diff")),),
+        verbose=False,
+    )
+    assert result.field_rms_mT < 0.2
 
 
 # --------------------------------------------------------------------------- #
@@ -262,27 +145,24 @@ def test_synthetic_round_trip_recovers_gain_and_geometry():
     """Generate from a known geometry, fit, and check the answer comes back."""
     rng = np.random.default_rng(7)
     truth = np.zeros(N_SHARED_PARAMS)
-    truth[GROUP_SLICES["gain_iso"]] = [0.06, -0.04, 0.02]
+    truth[GROUP_SLICES["gain_aniso"]] = [0.03, -0.02, 0.05, -0.03, -0.02, 0.04]
     # Projected onto the gauge-fixed subspace on the way in, so the "truth"
     # compared against below is the gauge representative, not the raw numbers.
     set_magnet_pos_offsets(truth, [[0.15, -0.20, 0.05],
                                    [-0.10, 0.12, -0.04],
                                    [0.08, 0.18, 0.03]])
     truth[GROUP_SLICES["magnet_tilt"]] = [0.01, -0.008, 0.006, 0.012, -0.011, 0.004]
-    geom = unpack_shared(truth)
+    geom = BundleGeometry.from_shared(truth)
 
-    # gain_iso is what the gauge stage deliberately moves into strength, so
-    # compare against the scale-free fit here.
     result = run_bundle_calibration(
-        _synthetic_datasets(geom, rng), n_frames=60,
-        estimate_strength=False, verbose=False,
+        _synthetic_datasets(geom, rng), n_frames=60, verbose=False,
     )
 
     # residual should fall to about the injected noise level
     assert result.field_rms_mT < 0.2
 
     got = result.shared_offsets
-    gain_err = np.abs(got[GROUP_SLICES["gain_iso"]] - truth[GROUP_SLICES["gain_iso"]])
+    gain_err = np.abs(got[GROUP_SLICES["gain_aniso"]] - truth[GROUP_SLICES["gain_aniso"]])
     pos_err = magnet_pos_offsets(got) - magnet_pos_offsets(truth)
     assert gain_err.max() < 0.04, f"gain not recovered: {gain_err}"
 
@@ -302,7 +182,7 @@ def test_synthetic_round_trip_recovers_sensor_offsets():
     truth[GROUP_SLICES["sensor_offset"]] = [0.8, -1.2, 0.3,
                                             -1.5, 0.4, -0.2,
                                             0.2, 0.9, -0.7]
-    geom = unpack_shared(truth)
+    geom = BundleGeometry.from_shared(truth)
 
     result = run_bundle_calibration(
         _synthetic_datasets(geom, rng), n_frames=60, verbose=False
@@ -312,19 +192,20 @@ def test_synthetic_round_trip_recovers_sensor_offsets():
     assert err.max() < 0.25, f"offsets not recovered: {err}"
 
 
-def test_gauge_stage_holds_det_one_and_fits_the_field():
-    """Whatever the gauge does to attribution, it must not damage the fit."""
+def test_fitted_gain_determinant_stays_near_one():
+    """Every fitted gain matrix stays within the gauge's second-order
+    tolerance of det=1, structurally - not because a fit stage enforces it."""
     rng = np.random.default_rng(22)
     truth = np.zeros(N_SHARED_PARAMS)
     set_strength_vector(truth, [0.07, -0.05, 0.03])
-    geom = unpack_shared(truth)
-    assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0)  # truth is in-gauge
+    geom = BundleGeometry.from_shared(truth)
+    assert np.allclose(np.abs(np.linalg.det(geom.gain)), 1.0, atol=5e-3)  # truth is in-gauge
 
     result = run_bundle_calibration(
         _synthetic_datasets(geom, rng), n_frames=60, verbose=False
     )
     assert result.field_rms_mT < 0.2
-    assert np.allclose(np.abs(np.linalg.det(result.geometry.gain)), 1.0, atol=1e-6)
+    assert np.allclose(np.abs(np.linalg.det(result.geometry.gain)), 1.0, atol=5e-3)
 
 
 def test_magnet_strength_is_weakly_identified_at_realistic_z_travel():
@@ -342,7 +223,7 @@ def test_magnet_strength_is_weakly_identified_at_realistic_z_travel():
     set_strength_vector(truth, [0.07, -0.05, 0.03])
 
     result = run_bundle_calibration(
-        _synthetic_datasets(unpack_shared(truth), rng), n_frames=60, verbose=False
+        _synthetic_datasets(BundleGeometry.from_shared(truth), rng), n_frames=60, verbose=False
     )
     # The common mode carries no prior by default, so the honest signal is a
     # large posterior sd rather than a low information gain: the fit should be
@@ -364,7 +245,7 @@ def test_tight_differential_prior_makes_magnets_equal():
     set_strength_vector(truth, [0.06, -0.04, 0.02])
 
     result = run_bundle_calibration(
-        _synthetic_datasets(unpack_shared(truth), rng), n_frames=60, verbose=False
+        _synthetic_datasets(BundleGeometry.from_shared(truth), rng), n_frames=60, verbose=False
     )
     strengths = result.geometry.magnet_strength
     assert np.ptp(strengths) < 0.01, f"magnets not pulled together: {strengths}"
@@ -379,7 +260,7 @@ def test_loosening_the_differential_prior_lets_magnets_differ():
     set_strength_vector(truth, [0.06, -0.04, 0.02])
 
     result = run_bundle_calibration(
-        _synthetic_datasets(unpack_shared(truth), rng), n_frames=60,
+        _synthetic_datasets(BundleGeometry.from_shared(truth), rng), n_frames=60,
         sigmas=RegularizationSigmas(magnet_strength_diff=0.2), verbose=False,
     )
     assert np.ptp(result.geometry.magnet_strength) > 0.03
@@ -401,11 +282,10 @@ def test_magnet_strength_is_recoverable_when_nothing_competes():
     set_strength_vector(truth, [0.07, -0.05, 0.03])
 
     result = run_bundle_calibration(
-        _synthetic_datasets(unpack_shared(truth), rng),
+        _synthetic_datasets(BundleGeometry.from_shared(truth), rng),
         n_frames=60,
         stages=(SolveStage("strength only",
                            ("magnet_strength_mean", "magnet_strength_diff")),),
-        estimate_strength=False,
         verbose=False,
     )
     err = strength_vector(result.shared_offsets) - strength_vector(truth)
@@ -426,7 +306,7 @@ def test_synthetic_round_trip_at_nominal_stays_near_zero():
         _synthetic_datasets(NOMINAL_GEOMETRY, rng), n_frames=60, verbose=False
     )
     assert result.field_rms_mT < 0.2
-    assert np.abs(result.shared_offsets[GROUP_SLICES["gain_iso"]]).max() < 0.03
+    assert np.abs(result.shared_offsets[GROUP_SLICES["gain_aniso"]]).max() < 0.03
     assert np.abs(magnet_pos_offsets(result.shared_offsets)).max() < 0.15
 
 
@@ -479,6 +359,8 @@ def test_real_run_stays_physically_plausible():
     magnet offsets sub-millimetre, tilts a fraction of a degree, strengths
     near 1. The previous calibrator failed exactly this (gains of 2.3,
     strengths of 2.6)."""
+    from calibration.export import firmware_sensor_gain
+
     raw = json.loads(_real_runs()[0].read_text())
     datasets = {CalibStep[k]: v for k, v in raw.items()}
     result = run_bundle_calibration(datasets, n_frames=60, verbose=False)

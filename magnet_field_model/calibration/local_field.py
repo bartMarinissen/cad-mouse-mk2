@@ -60,7 +60,9 @@ def _make_source(strength: float = 1.0) -> magpy.magnet.Cylinder:
 _SOURCE = _make_source()
 
 
-def _b_rz(r: NDArray[np.float64], z: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+def _b_rz(
+    r: NDArray[np.float64], z: NDArray[np.float64]
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """(Br, Bz) at cylindrical coordinates (r, z), evaluated on the +x half-plane.
 
     Axisymmetry means the field at (r, 0, z) has By == 0 and Bx == Br, so one
