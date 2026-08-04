@@ -29,6 +29,7 @@ from calibration.bundle_geometry import (
     GROUP_SLICES,
     MAGNET_POS_NOMINAL_KNOB,
     N_MAGNETS,
+    N_SENSORS,
     PARAM_GROUPS,
 )
 from calibration.calibration_algorithm import (
@@ -82,23 +83,37 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
                        f"{s.field_rel_pct:.2f}", f"{s.seconds:.1f}")
     console.print(stages)
 
-    table = Table(title="Fitted geometry (offsets from nominal)")
-    table.add_column("Magnet/sensor")
-    table.add_column("Magnet pos offset (mm)")
-    table.add_column("Magnet tilt (deg)")
-    table.add_column("Fitted gain matrix (model side)")
-
     geometry = result.geometry
+
+    # Magnets and sensors get separate tables on purpose: they are indexed by
+    # different things. Sensor i is not exclusively paired with magnet i -
+    # every sensor sees all three magnets, which is the cross-talk the model
+    # accounts for - so listing them side by side would imply a pairing that
+    # isn't there.
+    magnets = Table(title="Fitted magnet geometry (offsets from nominal)")
+    magnets.add_column("Magnet")
+    magnets.add_column("dx (mm)", justify="right")
+    magnets.add_column("dy (mm)", justify="right")
+    magnets.add_column("dz (mm)", justify="right")
+    magnets.add_column("tilt x (deg)", justify="right")
+    magnets.add_column("tilt y (deg)", justify="right")
     for i in range(N_MAGNETS):
-        pos_offset = geometry.magnet_pos_knob[i] - MAGNET_POS_NOMINAL_KNOB[i]
-        tilt_deg = np.degrees(geometry.magnet_tilt[i][:2])
-        table.add_row(
-            str(i + 1),
-            np.array2string(pos_offset, precision=3),
-            np.array2string(tilt_deg, precision=3),
-            np.array2string(geometry.gain[i], precision=4),
-        )
-    console.print(table)
+        d = geometry.magnet_pos_knob[i] - MAGNET_POS_NOMINAL_KNOB[i]
+        tilt = np.degrees(geometry.magnet_tilt[i][:2])
+        magnets.add_row(str(i + 1), f"{d[0]:+.3f}", f"{d[1]:+.3f}", f"{d[2]:+.3f}",
+                        f"{tilt[0]:+.3f}", f"{tilt[1]:+.3f}")
+    console.print(magnets)
+
+    sensors = Table(title="Fitted sensor gain (model side; nominal is -I)")
+    sensors.add_column("Sensor")
+    sensors.add_column("Gain matrix", justify="left")
+    sensors.add_column("Scale", justify="right")
+    for i in range(N_SENSORS):
+        g = geometry.gain[i]
+        rows = "\n".join("  ".join(f"{v:+.4f}" for v in row) for row in g)
+        # Mean diagonal magnitude: the one number worth reading at a glance.
+        sensors.add_row(str(i + 1), rows, f"{np.abs(np.diag(g)).mean():.4f}")
+    console.print(sensors)
 
     # How much each group was actually pinned down by the data, as opposed to
     # left sitting at its prior. Low information gain is not a bug - some of
