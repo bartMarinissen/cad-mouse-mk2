@@ -52,37 +52,46 @@ class RegularizationSigmas:
 
     Priors, not measurements - they encode how far from the nominal/CAD value
     each quantity is plausibly allowed to drift.
+
+    A group may be set to None, meaning *no prior at all*: that parameter is
+    then determined by the data alone. Use it when the nominal value is not
+    actually a belief worth holding, since a prior centred on a number nobody
+    stands behind quietly pulls the answer toward it.
     """
 
     # Magnet placement in the knob: press-fit/glued, so a few tenths of a mm.
-    magnet_pos_mm: float = 0.3
+    magnet_pos_mm: float | None = 0.3
     # Magnet axis tilt, ~1.7 deg.
-    magnet_tilt_rad: float = 0.03
-    # Common-mode magnet strength: the absolute field scale. Loose, because
-    # the nominal 600mT polarization is itself only an estimate, and this
-    # carries the whole scale once the det(G)=1 gauge is applied.
-    magnet_strength_mean: float = 0.15
-    # How much individual magnets differ from that mean. Deliberately ~15x
-    # tighter: magnets cut from one batch are graded to about a percent of
-    # each other, whereas their common absolute remanence is not pinned at
-    # all. Setting this very small approaches "assume all magnets identical",
-    # which pushes per-sensor scale differences into geometry and gain
-    # instead - see the note in the README about that trade.
-    magnet_strength_diff: float = 0.01
+    magnet_tilt_rad: float | None = 0.03
+    # Common-mode magnet strength: the absolute field scale. UNREGULARIZED by
+    # default. The nominal it would be centred on is local_field.py's 600mT
+    # polarization, which is a round guess rather than a measurement of these
+    # magnets - so a prior on it would be asserting a belief nobody actually
+    # holds, and would drag the fitted field scale toward an arbitrary number.
+    # Left free, this parameter reports what the data alone says the scale is,
+    # with an honest posterior sd next to it.
+    magnet_strength_mean: float | None = None
+    # How much individual magnets differ from that mean. Kept, unlike the mean
+    # above, because its justification is independent of the 600mT figure: it
+    # says magnets cut from one batch are graded to about a percent of each
+    # other, which is a real belief about the parts. Setting this very small
+    # approaches "assume all magnets identical"; setting it to None drops the
+    # assumption entirely.
+    magnet_strength_diff: float | None = 0.01
     # DC offset on the raw reading: Hall zero-point plus ambient field. The
     # firmware's own hand-tuned Config::sensor_offset_mT reaches 1.6 mT, so
     # this is deliberately loose enough not to fight it.
-    sensor_offset_mT: float = 1.5
+    sensor_offset_mT: float | None = 1.5
     # Isotropic sensor gain. Deliberately loose: the firmware's own hand-tuned
     # Config::magnet_gains span -0.96..-1.2, i.e. offsets up to 0.2 from the
     # nominal, so a tight prior here would fight known-real hardware spread.
-    gain_iso: float = 0.15
+    gain_iso: float | None = 0.15
     # Per-axis sensitivity spread at fixed overall scale.
-    gain_aniso: float = 0.05
+    gain_aniso: float | None = 0.05
     # Cross-axis skew and sensor-frame misalignment: weakly observable given
     # how little the field direction varies over a run, so kept tight.
-    gain_sym: float = 0.03
-    gain_rot: float = 0.03
+    gain_sym: float | None = 0.03
+    gain_rot: float | None = 0.03
 
     def as_vector(self) -> NDArray[np.float64]:
         per_group = {
@@ -98,8 +107,16 @@ class RegularizationSigmas:
         }
         out = np.empty(N_SHARED_PARAMS)
         for name, _ in PARAM_GROUPS:
-            out[GROUP_SLICES[name]] = per_group[name]
+            sigma = per_group[name]
+            # None means "no prior": an infinite sigma makes both the penalty
+            # (offset / sigma) and its Jacobian row exactly zero, and
+            # contributes no precision to the posterior.
+            out[GROUP_SLICES[name]] = np.inf if sigma is None else sigma
         return out
+
+    def regularized_mask(self) -> NDArray[np.bool_]:
+        """Which parameters actually carry a prior."""
+        return np.isfinite(self.as_vector())
 
 
 @dataclass(frozen=True)

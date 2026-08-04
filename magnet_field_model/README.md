@@ -140,21 +140,32 @@ Recorded explicitly, because several are load-bearing:
 3. **Sensor positions are fixed, not calibrated.** They define the world
    frame. Real sensor placement error is absorbed by the magnet position
    offsets, which are related to it by a per-frame pose anyway.
-4. **Magnet strength is split into common mode and differential, with very
-   different priors, and is reported under a gauge.** See the det(G) = 1 note
-   above for why the overall scale cannot be separated from sensor gain on its
-   own; it reaches only ~7% information gain even under the gauge, because
-   anisotropic gain and magnet z-position absorb much of a scale change (the
-   field is Bz-dominated, and HEAVE gives ~3mm of travel to distinguish
-   "stronger" from "closer"). The *differential* part gets a ~15x tighter
-   prior (1%), on the grounds that magnets cut from one batch are graded to
-   about that of each other while their common remanence is not pinned at all.
-   Empirically that constraint is free: sweeping the differential prior from
-   0.2 down to 0.0002 moves the field residual by 0.001 percentage points, so
-   the per-magnet differences were never explaining anything - the apparent
-   per-sensor spread is accounted for by magnet position and DC offset
-   instead. Treat the reported strengths as an attribution, not a
-   measurement.
+4. **Magnet strength is split into common mode and differential, and the
+   common mode carries no prior at all.** A prior would have to be centred on
+   `local_field.py`'s 600mT polarization, which is a round guess rather than a
+   measurement of these magnets — asserting a belief nobody holds, and
+   dragging the fitted field scale toward an arbitrary number. So it is left
+   free and reported with its own posterior sd.
+
+   The result is worth knowing: **the data does not determine the absolute
+   field scale.** Unregularized, the fit settles around 1.29–1.39 across the
+   three runs — but with a posterior sd of ±0.43, i.e. under 1σ from nominal,
+   and the residual only improves from 0.315% to 0.310% across that entire
+   39% swing. The direction is very nearly flat, because a uniform scale
+   change is largely absorbable by every frame's pose moving further away, and
+   only the shape of |B| versus distance breaks it — over ~3mm of heave, only
+   barely. Read the fitted strength as "unconstrained", not as "the magnets
+   are 39% stronger than nominal". Dropping the prior did not reveal a better
+   value; it revealed that there was never one to reveal.
+
+   The *differential* part keeps its prior (1%), because that justification is
+   independent of the 600mT figure: it says magnets cut from one batch are
+   graded to about that of each other, which is a real belief about the parts.
+   Empirically the constraint is free — sweeping it from 0.2 down to 0.0002
+   moves the residual by 0.001 percentage points, so per-magnet differences
+   were never explaining anything. The apparent per-sensor spread is accounted
+   for by magnet position and DC offset instead.
+
 5. **DC offset is applied on the raw side, after gain.** It is a property of
    the raw reading (Hall zero-point plus ambient field), not of the modelled
    field, so `pred = G @ B_model + offset`. The firmware subtracts its offset
@@ -216,7 +227,9 @@ what distinguishes the two.
   but the mechanism limits how much is available before the magnet leaves the
   modelled region — past a few mm the magnet passes the sensor plane entirely
   and the model stops applying, so this is not simply a "capture more" fix.
-- The fitted common-mode strength lands consistently around 1.04-1.05, which
-  says the nominal 600mT polarization in `local_field.py` is a few percent
-  low. Worth folding back into the notebook (and hence the firmware table) at
-  some point, rather than carrying it as a calibration offset forever.
+- The absolute field scale is not measurable from this capture (±0.43 on a
+  multiplier of 1). If it is worth knowing — and it would tighten the z
+  sensitivity of the whole pose solve — it needs either much more heave travel
+  or an independent measurement of one magnet's remanence. Note the boot tare
+  cancels a systematic z bias, so the practical cost of getting it wrong is
+  mostly a slightly mis-scaled z axis, not an offset.

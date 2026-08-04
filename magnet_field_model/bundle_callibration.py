@@ -106,6 +106,21 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
                         f"{geometry.magnet_strength[i]:.4f}")
     console.print(magnets)
 
+    # Absolute field scale deserves its error bar right next to it: with no
+    # prior on the common mode, the fitted value is whatever the data prefers,
+    # and the data has very little to say (a uniform scale change is largely
+    # absorbable by every frame's pose moving further away).
+    mean_sd = result.posterior_sigma[GROUP_SLICES["magnet_strength_mean"]][0]
+    mean_strength = result.geometry.magnet_strength.mean()
+    if np.isfinite(mean_sd):
+        sigmas_from_nominal = abs(mean_strength - 1.0) / mean_sd if mean_sd > 0 else 0.0
+        verdict = ("[green]consistent with nominal[/]" if sigmas_from_nominal < 2
+                   else "[yellow]notably above nominal[/]")
+        console.print(
+            f"Common-mode strength [bold]{mean_strength:.3f} ± {mean_sd:.3f}[/] "
+            f"({sigmas_from_nominal:.1f}σ from nominal) — {verdict}"
+        )
+
     sensors = Table(title="Fitted sensor gain and DC offset (model side; nominal gain is +I)")
     sensors.add_column("Sensor")
     sensors.add_column("Gain matrix", justify="left")
@@ -136,12 +151,20 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         if not np.all(np.isfinite(post)):
             info.add_row(name, f"{prior:.3f}", "-", "[grey50]not fitted[/]")
             continue
+        if not np.isfinite(prior):
+            # No prior at all: the posterior sd stands on its own, and asking
+            # how much the data added over the prior is meaningless.
+            info.add_row(name, "[cyan]none[/]", f"{post.mean():.3f}",
+                         "[cyan]data only[/]")
+            continue
         colour = "green" if gain.mean() > 0.4 else ("yellow" if gain.mean() > 0.15 else "red")
         info.add_row(name, f"{prior:.3f}", f"{post.mean():.3f}",
                      f"[{colour}]{gain.mean():.0%}[/]")
     console.print(info)
     console.print("[grey50]Information gain = 1 - posterior/prior sd. Low means the fit "
-                  "mostly kept the prior, so treat that group as assumed, not measured.[/]")
+                  "mostly kept the prior, so treat that group as assumed, not measured. "
+                  "'data only' means the group carries no prior - read its posterior sd "
+                  "as the real uncertainty.[/]")
 
 
 def _pick_port(console: Console) -> str:

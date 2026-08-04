@@ -96,9 +96,15 @@ class BundleCalibrationResult:
 
         ~0 means the data said nothing and the parameter is sitting at its
         prior; ~1 means the data pinned it down far tighter than the prior did.
+
+        NaN where there is no prior to compare against - an unregularized
+        parameter is determined entirely by the data, so "how much did the data
+        add over the prior" is not a question with an answer. Read its
+        posterior sd directly instead.
         """
         with np.errstate(invalid="ignore", divide="ignore"):
-            return 1.0 - self.posterior_sigma / self.prior_sigma
+            gain = 1.0 - self.posterior_sigma / self.prior_sigma
+        return np.where(np.isfinite(self.prior_sigma), gain, np.nan)
 
 
 def _rel_pct(residual: NDArray[np.float64], measured: NDArray[np.float64]) -> float:
