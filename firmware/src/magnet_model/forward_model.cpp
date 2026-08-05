@@ -20,9 +20,9 @@ ForwardModel::ForwardModel(const CalibrationParams& cal)
               Sensor(Positions::sensor_3_world),
           },
           magnets_{
-              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[0], cal.magnet_rotation[0], cal.magnet_strength[0]),
-              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[1], cal.magnet_rotation[1], cal.magnet_strength[1]),
-              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[2], cal.magnet_rotation[2], cal.magnet_strength[2]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[0], cal.magnet_rotation[0], cal.magnet_strength_mT[0]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[1], cal.magnet_rotation[1], cal.magnet_strength_mT[1]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, cal.magnet_pos_knob[2], cal.magnet_rotation[2], cal.magnet_strength_mT[2]),
           }
     {}
 

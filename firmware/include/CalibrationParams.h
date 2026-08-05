@@ -46,9 +46,14 @@ struct CalibrationParams {
   // passed identity until now.
   Mat3 magnet_rotation[3];
 
-  // Per-magnet polarization multiplier, relative to the single magnet the
-  // bicubic table models. Consumed by MagnetModel::evaluate, which scales the
-  // six cylindrical field quantities by it before the x/y decomposition.
+  // Per-magnet polarization (remanence, Br), in mT. Consumed by
+  // MagnetModel::evaluate, which scales the six cylindrical field quantities
+  // by magnet_strength_mT[i] / BICUBIC_FIELD_REFERENCE_MT
+  // (magnet_model/magnet_model_table.h) before the x/y decomposition -- that
+  // reference is the polarization the bicubic table itself was generated at,
+  // an arbitrary but fixed number the notebook bakes into the generated
+  // header, so this field can be a real physical quantity in mT rather than a
+  // dimensionless multiplier tied to that arbitrary choice.
   //
   // These are only meaningful together with sensor_gain, under the det(G)=1
   // gauge that produced them (calibration/bundle_geometry.py's
@@ -56,12 +61,21 @@ struct CalibrationParams {
   // freedom -- a sensor reading 5% high and its magnet being 5% strong differ
   // only through cross-talk -- and the fit deliberately moves that freedom out
   // of the gain and into here, leaving det(G) == 1. So do not take a
-  // sensor_gain from one calibration and a magnet_strength from another, and do
-  // not "normalize" one without the other.
+  // sensor_gain from one calibration and a magnet_strength_mT from another,
+  // and do not "normalize" one without the other.
   //
-  // Config::defaultCalibration() sets these to 1.0, which is the consistent
-  // value for it rather than a placeholder: Config::magnet_gains is a
-  // hand-tuned scalar per sensor that still carries the whole field scale, so
-  // it is in the gain-carries-scale gauge, not the fit's.
-  float magnet_strength[3];
+  // KNOWN GAP: magnet_field_model/calibration/export.py still emits a
+  // dimensionless multiplier centred on 1.0 (its geometry.magnet_strength,
+  // relative to local_field.py's own 600mT guess), not an mT value on this
+  // scale. Pasting that output straight into this field is wrong -- it needs
+  // multiplying by whatever Br the calibration's 1.0 actually represents
+  // first. Left as-is deliberately; updating export.py is a separate,
+  // not-yet-done piece of work.
+  //
+  // Config::defaultCalibration() sets these to BICUBIC_FIELD_REFERENCE_MT,
+  // which is the consistent default rather than a placeholder: it makes the
+  // ratio above exactly 1.0, matching that Config::magnet_gains is a
+  // hand-tuned scalar per sensor that already carries the whole field scale
+  // (the gain-carries-scale gauge, not the fit's).
+  float magnet_strength_mT[3];
 };

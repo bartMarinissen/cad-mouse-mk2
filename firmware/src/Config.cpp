@@ -1,5 +1,6 @@
 #include "Config.h"
 
+#include "magnet_model/magnet_model_table.h"
 #include "magnet_model/positions.h"
 
 namespace Config {
@@ -22,12 +23,13 @@ CalibrationParams defaultCalibration() {
 
     cal.magnet_pos_knob[i] = nominal_magnet_pos[i];
     cal.magnet_rotation[i] = Mat3::Identity();
-    // 1.0 is the correct default, not a placeholder. MagnetModel::evaluate
-    // does consume this now, but magnet_gains above is a hand-tuned scalar
-    // that already carries the entire field scale -- i.e. these defaults are
-    // in the gain-carries-scale gauge, not the fit's det(G)=1 one, so there
-    // is no separate strength left to apply. See CalibrationParams.h.
-    cal.magnet_strength[i] = 1.0f;
+    // BICUBIC_FIELD_REFERENCE_MT, not a placeholder: it makes
+    // magnet_strength_mT[i] / BICUBIC_FIELD_REFERENCE_MT exactly 1.0, i.e.
+    // "no separate strength correction", because magnet_gains above is a
+    // hand-tuned scalar that already carries the entire field scale -- these
+    // defaults are in the gain-carries-scale gauge, not the fit's det(G)=1
+    // one. See CalibrationParams.h.
+    cal.magnet_strength_mT[i] = BICUBIC_FIELD_REFERENCE_MT;
   }
 
   return cal;

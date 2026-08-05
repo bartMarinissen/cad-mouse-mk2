@@ -215,13 +215,19 @@ values exactly.
 
 Two caveats on the exported numbers:
 
-- `MagnetModel` now carries a `magnet_strength` and applies it in `evaluate()`,
+- `MagnetModel` now carries a `magnet_strength_mT` — a real polarization value
+  in mT, not a dimensionless multiplier — and applies it in `evaluate()`,
   scaling the six cylindrical quantities before the x/y decomposition (exact,
-  since the field enters linearly downstream). This is the last piece of the
-  fitted set to get a consumer, so `export.py` emits the fit's numbers directly.
-  Gain and strength are one degree of freedom split by the `det(G) = 1` gauge —
-  the gain carries no field scale and the strengths carry all of it — so the two
-  must be pasted together or not at all.
+  since the field enters linearly downstream). The ratio it actually multiplies
+  by is `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`
+  (`magnet_model/magnet_model_table.h`): the polarization
+  `field_approximation.ipynb` generated the table at, currently 1000 mT and
+  arbitrary — any magnet's real Br divided by it gives the right scale
+  regardless of what that reference happens to be. **Known gap:**
+  `export.py` still emits a dimensionless multiplier centred on 1.0 (relative
+  to `local_field.py`'s own 600mT guess), not an mT value on this scale —
+  pasting it into `magnet_strength_mT` as-is is wrong. Updating `export.py` is
+  deliberately not done yet; see `CalibrationParams.h`.
 - `Sensor` no longer carries a gain; correction happens entirely in
   `SensorController::read_mT()`, which is what
   `TODO/sensor-gain-calibration.md` asked for.

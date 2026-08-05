@@ -45,12 +45,22 @@ being owned/reachable anywhere either).
   and the solver never sees an uncorrected reading, so there is no half-active
   second path. The "Current state" section above is stale on this point.
 - ~~Where does per-magnet strength live?~~ **Answered.** `MagnetModel` owns a
-  `magnet_strength` and applies it in `evaluate()`. Sensor-side correction would
-  have been numerically identical while `ForwardModel` pairs sensor *i* with
-  magnet *i* one-to-one, but that stops holding once cross-magnet interference
-  is modelled (`TODO/cross-magnet-interference.md`), and strength is a property
-  of the magnet. Note gain and strength are one degree of freedom split by the
-  fit's `det(G)=1` gauge — neither is meaningful without the other.
+  `magnet_strength_mT` (a real polarization value, in mT — not the
+  dimensionless multiplier it started as) and applies it in `evaluate()` as
+  `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`. Sensor-side correction
+  would have been numerically identical while `ForwardModel` pairs sensor *i*
+  with magnet *i* one-to-one, but that stops holding once cross-magnet
+  interference is modelled (`TODO/cross-magnet-interference.md`), and strength
+  is a property of the magnet. Note gain and strength are one degree of freedom
+  split by the fit's `det(G)=1` gauge — neither is meaningful without the
+  other.
+- **New gap, opened by the mT change:** `calibration/export.py` still emits a
+  dimensionless multiplier centred on 1.0, not an absolute mT value on
+  `magnet_strength_mT`'s scale — the two are not interchangeable, and pasting
+  the current export straight in is wrong. Left alone deliberately (the
+  request that produced the mT change was explicit about not touching the
+  Python calibration code); updating `export.py` to emit real mT is follow-up
+  work, not done here.
 - How this connects to the bundle-calibration effort (`TODO/tare-and-calibration.md`)
   once that design lands — bundle calibration is the thing that would actually
   produce these gain values.

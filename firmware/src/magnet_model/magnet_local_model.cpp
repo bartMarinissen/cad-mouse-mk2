@@ -4,9 +4,10 @@
 
 
 MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
-                         const Mat3 &magnet_rotation, float magnet_strength)
-    : field_model_(field_model), magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
-      magnet_strength(magnet_strength) {}
+                         const Mat3 &magnet_rotation, float magnet_strength_mT)
+    : magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
+      magnet_strength_mT(magnet_strength_mT), field_model_(field_model),
+      strength_ratio_(magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT) {}
 
 
 /**
@@ -25,11 +26,11 @@ Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p, Mat3& J_local) co
     Vec2 B_cylindrical, d_dr, d_dz;
     field_model_.evaluate(r, p[2], B_cylindrical, d_dr, d_dz);
 
-    // Apply this magnet's polarization multiplier here, on the six cylindrical
+    // Apply this magnet's strength ratio here, on the six cylindrical
     // quantities, rather than on the assembled B_local and J_local below: the
     // field enters everything downstream linearly, so scaling here is exact and
     // costs 6 multiplies instead of the 12 the 3-vector plus 3x3 matrix would.
-    const float s = magnet_strength;
+    const float s = strength_ratio_;
 
     // Decompose the measured field
     // Because we need to reconsitute the magnetic field in the x and y direction based on Br
