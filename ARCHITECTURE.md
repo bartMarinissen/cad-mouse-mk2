@@ -147,12 +147,17 @@ constant: `#include "math3D.h"` for `Vec3`/`Mat3`/`skew_matrix` typedefs
 
 ### Codegen: Python → firmware table
 
-`magnet_field_model/field_approximation.ipynb` (uv-managed Python env,
-`magpylib` for ground-truth field simulation of a real 6×6mm N52 cylinder
-magnet) samples the true field on the same 51×91 (r,z) grid defined by `NR`/`NZ`
-in [`magnet_model_table.h`](firmware/include/magnet_model/magnet_model_table.h),
-and hand-emits the hex-float C++ array in
-[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp).
+`magnet_field_model/bicubic_table.py` (uv-managed Python env, `magpylib` for
+ground-truth field simulation of a real 6×6mm N52 cylinder magnet) samples the
+true field on the same 51×91 (r,z) grid defined by `NR`/`NZ` in
+[`magnet_model_table.h`](firmware/include/magnet_model/magnet_model_table.h).
+Run `magnet_field_model/generate_bicubic_table.py` to actually (re)write that
+header and the hex-float C++ array in
+[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp) —
+it imports the magnet/grid definitions from `bicubic_table.py` rather than
+duplicating them. `field_approximation.ipynb` imports the same module to
+inspect/visualize the table (field plots, dipole-approximation comparison,
+interpolation error); it no longer writes the firmware files itself.
 **This file is generated, not hand-written** — if the magnet spec, grid bounds
 (`BICUBIC_ORIGIN`/`BICUBIC_FAR` in `magnet_model_table.h`), or grid resolution
 change, they need to change in both the notebook and the header in lockstep, by
@@ -221,9 +226,9 @@ Two caveats on the exported numbers:
   since the field enters linearly downstream). The ratio it actually multiplies
   by is `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`
   (`magnet_model/magnet_model_table.h`): the polarization
-  `field_approximation.ipynb` generated the table at, currently 1000 mT and
-  arbitrary — any magnet's real Br divided by it gives the right scale
-  regardless of what that reference happens to be. **Known gap:**
+  `magnet_field_model/bicubic_table.py` generated the table at, currently
+  1000 mT and arbitrary — any magnet's real Br divided by it gives the right
+  scale regardless of what that reference happens to be. **Known gap:**
   `export.py` still emits a dimensionless multiplier centred on 1.0 (relative
   to `local_field.py`'s own 600mT guess), not an mT value on this scale —
   pasting it into `magnet_strength_mT` as-is is wrong. Updating `export.py` is
@@ -244,7 +249,9 @@ Two caveats on the exported numbers:
 | Cylindrical magnet field model + r→0 handling | `firmware/src/magnet_model/magnet_local_model.cpp` |
 | Bicubic grid interpolation | `firmware/src/magnet_model/BicubicField.cpp` |
 | Generated field table (don't hand-edit) | `firmware/src/magnet_model/magnet_model_table.cpp` |
-| Field table generator (source of truth) | `magnet_field_model/field_approximation.ipynb` |
+| Field table generator (run this to regenerate) | `magnet_field_model/generate_bicubic_table.py` |
+| Field table magnet/grid definition (source of truth) | `magnet_field_model/bicubic_table.py` |
+| Field table inspection/visualization (does not write it) | `magnet_field_model/field_approximation.ipynb` |
 | HID descriptor / report format | `firmware/src/controllers/HIDController.cpp` |
 | Serial diagnostics dashboard | `firmware/src/controllers/TelemetryController.cpp` |
 | Jacobian correctness tests (finite-difference) | `firmware/test/test_jacobian.cpp` |

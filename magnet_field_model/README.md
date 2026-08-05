@@ -5,17 +5,20 @@ generates the firmware's interpolation table, and the **bundle calibration**
 that measures a specific unit's real geometry.
 
 ```
-field_approximation.ipynb   magpylib simulation -> firmware bicubic table (manual codegen)
-bundle_callibration.py      entry point: capture a run, fit it, report
-calibration/                the calibration package (see below)
-calibration_runs/           raw captured frames, as JSON
-tests/                      pytest suite, one file per module - run after touching any math
+bicubic_table.py             the magnet model + grid the firmware's table is built from
+generate_bicubic_table.py    entry point: (re)writes the firmware's table from bicubic_table.py
+field_approximation.ipynb    inspection/visualization of that table - does not write it
+bundle_callibration.py       entry point: capture a run, fit it, report
+calibration/                 the calibration package (see below)
+calibration_runs/            raw captured frames, as JSON
+tests/                       pytest suite, one file per module - run after touching any math
 ```
 
 ## Running it
 
 ```bash
 uv sync
+uv run python generate_bicubic_table.py                    # (re)write the firmware's field table
 uv run python bundle_callibration.py                       # live capture over serial
 uv run python bundle_callibration.py --replay calibration_runs/raw_*.json
 uv run python bundle_callibration.py --replay <run> --emit-cpp   # + firmware constants
@@ -137,9 +140,9 @@ difference between measured and assumed.
 Recorded explicitly, because several are load-bearing:
 
 1. **Magnet position reference is the BOTTOM FACE, not the centre.**
-   `field_approximation.ipynb` builds the firmware's table with the cylinder at
-   `z=+3` so its bottom face lands on `z=0`, so that is what `positions.h`'s
-   magnet positions mean. magpylib positions a cylinder by its centre, so
+   `bicubic_table.py`'s `build_magnet()` places the cylinder at `z=+3` so its
+   bottom face lands on `z=0`, so that is what `positions.h`'s magnet
+   positions mean. magpylib positions a cylinder by its centre, so
    `local_field.py` adds the half-height. Getting this wrong shifts the model
    3mm and inflates the predicted field roughly 3x at rest.
 2. **The raw sensors' sign flip is attributed to magnet polarity, not gain.**
