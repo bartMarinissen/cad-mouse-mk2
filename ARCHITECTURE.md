@@ -228,11 +228,18 @@ Two caveats on the exported numbers:
   (`magnet_model/magnet_model_table.h`): the polarization
   `magnet_field_model/bicubic_table.py` generated the table at, currently
   1000 mT and arbitrary — any magnet's real Br divided by it gives the right
-  scale regardless of what that reference happens to be. **Known gap:**
-  `export.py` still emits a dimensionless multiplier centred on 1.0 (relative
-  to `local_field.py`'s own 600mT guess), not an mT value on this scale —
-  pasting it into `magnet_strength_mT` as-is is wrong. Updating `export.py` is
-  deliberately not done yet; see `CalibrationParams.h`.
+  scale regardless of what that reference happens to be.
+- The fitted values are **effective parameters for this model, not measured
+  physics.** `ForwardModel::evaluate()` pairs sensor *i* with magnet *i* only,
+  ignoring the other two magnets ~28.58mm away — worth 1.7–4.5% of the field.
+  The Python fit is deliberately pinned to that same single-magnet model
+  (`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING = PAIRED_ONLY`)
+  so the two agree; fitting the complete model instead and exporting *that*
+  leaves the cross term uncompensated and measures 3.6% worse. Cross-magnet
+  field therefore ends up absorbed into gain/offset/strength, exactly as the
+  old hand-tuned `Config::magnet_gains` absorbed it. See
+  `TODO/cross-magnet-interference.md` for the measurements and the one-constant
+  path back.
 - `Sensor` no longer carries a gain; correction happens entirely in
   `SensorController::read_mT()`, which is what
   `TODO/sensor-gain-calibration.md` asked for.

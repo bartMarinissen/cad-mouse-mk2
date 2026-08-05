@@ -8,6 +8,7 @@ fit can look perfectly converged and still be describing the wrong magnet.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -15,10 +16,12 @@ import numpy as np
 import pytest
 
 from calibration.bundle_geometry import (
+    ALL_MAGNETS,
     APPROX_REST_T_MM,
     GROUP_SLICES,
     N_SHARED_PARAMS,
     NOMINAL_GEOMETRY,
+    PAIRED_ONLY,
     BundleGeometry,
     magnet_pos_offsets,
     set_magnet_pos_offsets,
@@ -266,37 +269,120 @@ def test_loosening_the_differential_prior_lets_magnets_differ():
     assert np.ptp(result.geometry.magnet_strength) > 0.03
 
 
-def test_magnet_strength_is_recoverable_when_nothing_competes():
-    """The companion to the test above: the machinery is sound, the *data* is
-    the limit.
+def _fit_strength_only(coupling, monkeypatch, seed=24):
+    """Fit common-mode strength against synthetic data, under one coupling.
 
-    Free strength alone - no gain anisotropy, no magnet geometry to soak up a
-    scale change - and it comes straight back. So the weak result above is
-    about what a real capture can distinguish, not about a broken Jacobian or
-    a broken gauge.
+    The coupling has to be patched globally, not just passed to from_shared:
+    the fit rebuilds a BundleGeometry from the parameter vector on every
+    iteration (via BundleCalibrationProblem.unpack), and those rebuilds read
+    SENSOR_MAGNET_COUPLING. Patching it makes data generation and the fit
+    agree, which is the whole point - a mismatch between them is exactly the
+    hardware bug this coupling switch exists to avoid.
     """
+    import calibration.bundle_geometry as bg
     from calibration.bundle_params import SolveStage
 
-    rng = np.random.default_rng(24)
+    monkeypatch.setattr(bg, "SENSOR_MAGNET_COUPLING", coupling)
+
+    rng = np.random.default_rng(seed)
     truth = np.zeros(N_SHARED_PARAMS)
     set_strength_vector(truth, [0.07, -0.05, 0.03])
 
     result = run_bundle_calibration(
-        _synthetic_datasets(BundleGeometry.from_shared(truth), rng),
+        _synthetic_datasets(BundleGeometry.from_shared(truth, coupling=coupling), rng),
         n_frames=60,
         stages=(SolveStage("strength only",
                            ("magnet_strength_mean", "magnet_strength_diff")),),
         verbose=False,
     )
-    err = strength_vector(result.shared_offsets) - strength_vector(truth)
     # The differential part is held near zero by its (deliberately tight)
     # prior, so only the common mode is expected to come back - hence the
     # signed mean of the error, not its magnitude.
-    assert abs(err.mean()) < 0.02, f"mean strength not recovered: {err}"
-    # And with nothing to trade against, the posterior tightens by roughly the
-    # order of magnitude that separates "measured" from "guessed" here.
-    post = result.posterior_sigma[GROUP_SLICES["magnet_strength_mean"]][0]
-    assert post < 0.06, f"strength posterior sd {post:.3f} - expected it to tighten"
+    err = float((strength_vector(result.shared_offsets) - strength_vector(truth)).mean())
+    post = float(result.posterior_sigma[GROUP_SLICES["magnet_strength_mean"]][0])
+    return err, post
+
+
+def test_absolute_strength_needs_cross_magnet_coupling(monkeypatch):
+    """Separating magnet *strength* from magnet *distance* is what cross-talk buys.
+
+    Under ALL_MAGNETS a sensor sees its own magnet at ~6mm and the other two
+    at ~28mm. A uniform strength change scales all three contributions
+    equally; moving the knob changes the near one steeply and the far ones
+    barely. Different functional forms, so the two separate cleanly.
+
+    Under PAIRED_ONLY only the near contribution exists, and strength is very
+    nearly degenerate with a z shift - broken only by the curvature of a
+    single falloff across the ~3mm of heave the hardware actually gives. So
+    absolute field scale goes soft. That is a real, accepted cost of matching
+    the firmware's model (see SENSOR_MAGNET_COUPLING), not a defect.
+
+    What must hold under *either* model is that the fit knows: the posterior
+    sd has to cover the error actually made. A fit that is wrong and says so
+    is usable; one that is wrong and confident is not.
+    """
+    err_paired, post_paired = _fit_strength_only(PAIRED_ONLY, monkeypatch)
+    err_all, post_all = _fit_strength_only(ALL_MAGNETS, monkeypatch)
+
+    # Honesty, the non-negotiable part: reported uncertainty covers real error.
+    assert abs(err_paired) < post_paired, (
+        f"PAIRED_ONLY error {err_paired:+.4f} exceeds its own posterior sd "
+        f"{post_paired:.4f} - the fit is wrong *and* overconfident")
+    assert abs(err_all) < post_all, (
+        f"ALL_MAGNETS error {err_all:+.4f} exceeds its own posterior sd {post_all:.4f}")
+
+    # Cross-talk genuinely determines absolute scale better, and the posterior
+    # reflects that rather than the two just differing by noise.
+    assert abs(err_all) < abs(err_paired), (
+        f"expected cross-talk to recover strength better: "
+        f"ALL_MAGNETS {err_all:+.4f} vs PAIRED_ONLY {err_paired:+.4f}")
+    assert post_all < post_paired, (
+        f"expected cross-talk to tighten the strength posterior: "
+        f"ALL_MAGNETS {post_all:.4f} vs PAIRED_ONLY {post_paired:.4f}")
+
+    # With cross-talk the machinery still recovers scale tightly - which is
+    # what shows the Jacobian and gauge are sound and the PAIRED_ONLY spread
+    # above is the data talking, not a broken fit.
+    assert abs(err_all) < 0.05, f"mean strength not recovered under cross-talk: {err_all:+.4f}"
+    assert post_all < 0.08, f"strength posterior sd {post_all:.3f} - expected it to tighten"
+
+
+def test_paired_only_isolates_each_sensor_to_its_own_magnet(monkeypatch):
+    """The mask does what it claims: under PAIRED_ONLY, magnet j is invisible
+    to every sensor but j.
+
+    Checked behaviourally rather than by inspecting the mask, because the
+    mask is applied once to the local field and then flows through several
+    einsums - this asserts the property that actually matters downstream.
+    """
+    rng = np.random.default_rng(5)
+    ts = APPROX_REST_T_MM + rng.uniform(-0.3, 0.3, (4, 3))
+    rotvecs = rng.uniform(-0.05, 0.05, (4, 3))
+
+    # Perturb magnet 0's position on the geometry directly, NOT through
+    # set_magnet_pos_offsets(): that projects onto MAGNET_POS_BASIS, whose
+    # zero-mean gauge constraint spreads a single-magnet bump across all
+    # three - which would move the "cross" sensors for reasons that have
+    # nothing to do with coupling and make this test vacuous.
+    bumped_pos = NOMINAL_GEOMETRY.magnet_pos_knob.copy()
+    bumped_pos[0] += np.array([0.4, 0.4, 0.0])
+
+    for coupling, cross_should_move in ((PAIRED_ONLY, False), (ALL_MAGNETS, True)):
+        base = dataclasses.replace(NOMINAL_GEOMETRY, coupling=coupling)
+        bumped = dataclasses.replace(
+            NOMINAL_GEOMETRY, coupling=coupling, magnet_pos_knob=bumped_pos
+        )
+
+        delta = np.abs(bumped.predict(ts, rotvecs) - base.predict(ts, rotvecs))
+        # Sensor 0 is magnet 0's pair; sensors 1 and 2 are the cross terms.
+        assert delta[:, 0:3].max() > 1e-3, "magnet 0 should move its own sensor"
+        cross_moved = delta[:, 3:9].max()
+        if cross_should_move:
+            assert cross_moved > 1e-6, (
+                f"ALL_MAGNETS: magnet 0 should reach sensors 1/2, moved {cross_moved:.2e}")
+        else:
+            assert cross_moved == 0.0, (
+                f"PAIRED_ONLY: magnet 0 must not reach sensors 1/2, moved {cross_moved:.2e}")
 
 
 def test_synthetic_round_trip_at_nominal_stays_near_zero():

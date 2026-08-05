@@ -1,13 +1,48 @@
 # Model cross-magnet interference
 
-**Hopefully not needed.** Before implementing anything here, it's worth
-actually quantifying the error this introduces — e.g. use `magpylib` in
-`magnet_field_model/field_approximation.ipynb` to simulate all 3 real magnets
-present simultaneously and compare each sensor's field against the
-single-magnet approximation the firmware currently uses, across the working
-range of poses. If the discrepancy is small relative to sensor noise / the
-residual thresholds tare will be gating on (see `TODO/tare-and-calibration.md`),
-this whole effort can stay shelved.
+**Measured: 1.7–4.5% of the field, growing with knob-to-sensor distance.**
+The "quantify it first" step below has been done, against all three captured
+runs in `magnet_field_model/calibration_runs/`. The Python fit already models
+all three magnets per sensor, so the term is directly extractable by comparing
+its full prediction against just the paired-magnet contribution:
+
+| \|t\| (mm) | cross-magnet share |
+|---|---|
+| 18.73 | 1.82% |
+| 19.95 | 2.93% |
+| 21.12 | 4.03% |
+
+It grows with distance because the paired magnet's own field falls off fast
+while the other two, ~28.58mm away, barely change — so their relative share
+rises as the knob lifts.
+
+**Currently worked around, not fixed.** Feeding parameters fitted under the
+physically complete model into the firmware's single-magnet model leaves
+exactly this term uncompensated — measured at **3.6%** field error on captured
+data, and observed on hardware as a pose-residual regression from ~1% to ~3%
+after applying a calibration. The workaround is
+`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING`, set to
+`PAIRED_ONLY` so the fit matches the firmware exactly; that brings the same
+comparison to **0.49%**.
+
+Two things worth knowing before picking this up:
+
+- The workaround costs **absolute field scale**. Cross-talk is what separates
+  magnet *strength* from magnet *distance* (a strength change scales the near
+  and far contributions equally; a z-shift changes them at very different
+  rates). Without it the two are near-degenerate over the ~3mm of heave the
+  hardware gives, and `magnet_strength_mean`'s posterior sd roughly triples.
+  The fit reports this honestly rather than hiding it — see
+  `test_absolute_strength_needs_cross_magnet_coupling`.
+- It does **not** cost fit quality. The single-magnet fit reaches 0.336%
+  residual against 0.339% for the complete model, so at these pose ranges
+  cross-talk is almost entirely absorbable into effective gain/offset/strength.
+  What is lost is the physical meaning of the fitted numbers, not the fit.
+
+So the case for doing this work is now "recover physically meaningful
+parameters and absolute field scale", not "reduce pose residual" — the
+workaround already handles the latter. Implementing it is a one-constant
+switch back to `ALL_MAGNETS` on the Python side, plus the firmware work below.
 
 ## The problem
 

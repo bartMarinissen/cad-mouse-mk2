@@ -31,7 +31,7 @@ Frame conventions
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -62,6 +62,7 @@ __all__ = [
     "N_SENSORS", "SENSOR_POS", "GROUP_SLICES", "N_SHARED_PARAMS", "MAGNET_POLARITY",
     "NOMINAL_GAIN_SIGN", "BundleGeometry", "NOMINAL_GEOMETRY", "magnet_pos_offsets",
     "set_magnet_pos_offsets", "strength_vector", "set_strength_vector", "so3_left_jacobian",
+    "PAIRED_ONLY", "ALL_MAGNETS", "SENSOR_MAGNET_COUPLING",
 ]
 
 # The raw sensors read the opposite sign to the field local_field.py models
@@ -76,6 +77,44 @@ __all__ = [
 # strength near +1, instead of a sign hiding inside the gain.
 MAGNET_POLARITY = -1.0
 NOMINAL_GAIN_SIGN = +1.0
+
+# --- Which magnets each sensor is modelled as seeing -------------------------
+#
+# (N_SENSORS, N_MAGNETS) weights, applied to the per-(sensor, magnet) local
+# field and its gradient at the one point they enter the model.
+#
+# PAIRED_ONLY mirrors the firmware exactly: ForwardModel::evaluate() in
+# firmware/src/magnet_model/forward_model.cpp evaluates sensors_[i] against
+# magnets_[i] and nothing else. ALL_MAGNETS is the physically complete model,
+# where every sensor also picks up the other two magnets ~28.58mm away.
+#
+# The two differ by 1.7-4.5% of the field on the captured runs, growing with
+# knob-to-sensor distance: the paired magnet's field falls off fast while the
+# far ones barely change, so their share grows as the knob lifts.
+#
+# Fitting under ALL_MAGNETS and then handing the result to the firmware's
+# single-magnet model leaves precisely that term uncompensated - measured on
+# hardware as a pose-residual regression from ~1% to ~3%. The fitted gain,
+# offset and strength are the values that make a *three*-magnet model match
+# the data; the firmware runs a one-magnet model, so the term they were
+# quietly absorbing simply vanishes.
+#
+# So this deliberately matches the firmware rather than physics. The
+# consequence is worth stating plainly: under PAIRED_ONLY the fitted values
+# are *effective* parameters for the model that actually runs, not true
+# magnet geometry - they absorb cross-magnet field into gain/offset/strength,
+# exactly as the old hand-tuned Config constants did. The fit's own reported
+# residual gets worse (the model really is less complete), while the pose
+# residual on device gets better. That trade is the whole point.
+#
+# To restore the physically-complete fit once the firmware models cross-magnet
+# interference (TODO/cross-magnet-interference.md), set SENSOR_MAGNET_COUPLING
+# to ALL_MAGNETS. That is the entire change - every prediction and derivative
+# below is linear in the masked quantities, so nothing else needs touching.
+PAIRED_ONLY: NDArray[np.float64] = np.eye(N_SENSORS, N_MAGNETS)
+ALL_MAGNETS: NDArray[np.float64] = np.ones((N_SENSORS, N_MAGNETS))
+
+SENSOR_MAGNET_COUPLING: NDArray[np.float64] = PAIRED_ONLY
 
 
 def _skew(v: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -123,13 +162,25 @@ class BundleGeometry:
     magnet_strength: NDArray[np.float64]  # (3,) polarization multiplier, nominal 1
     gain: NDArray[np.float64]             # (3, 3, 3) per-sensor gain matrix, nominal +I
     sensor_offset: NDArray[np.float64]    # (3, 3) per-sensor DC offset in raw units (mT)
+    # (3, 3) sensor-magnet visibility weights; see SENSOR_MAGNET_COUPLING.
+    # A field rather than a bare module lookup so tests can exercise both
+    # models side by side without mutating global state.
+    coupling: NDArray[np.float64] = field(
+        default_factory=lambda: SENSOR_MAGNET_COUPLING
+    )
 
     @staticmethod
-    def from_shared(x_shared: NDArray[np.float64]) -> BundleGeometry:
+    def from_shared(
+        x_shared: NDArray[np.float64],
+        coupling: NDArray[np.float64] | None = None,
+    ) -> BundleGeometry:
         """Build a concrete BundleGeometry from the flat shared-parameter vector.
 
         Every offset comes from parameterization.assemble() - this method
         does not itself decide what any index of x_shared means.
+
+        coupling defaults to SENSOR_MAGNET_COUPLING; pass it explicitly only to
+        compare the single-magnet and cross-talk models against each other.
         """
         offsets = assemble(x_shared)
         gain = NOMINAL_GAIN_SIGN * (np.eye(3)[None, :, :] + offsets["gain_offset"])
@@ -139,6 +190,7 @@ class BundleGeometry:
             magnet_strength=1.0 + offsets["magnet_strength_offset"],
             gain=gain,
             sensor_offset=offsets["sensor_offset"],
+            coupling=SENSOR_MAGNET_COUPLING if coupling is None else coupling,
         )
 
     @property
@@ -163,6 +215,16 @@ class BundleGeometry:
         p_mag = np.einsum("jba,nijb->nija", r_mag, d)
 
         b_loc, j_loc = local_field_and_gradient(p_mag)              # (n,i,j,3), (n,i,j,3,3)
+
+        # Drop the (sensor, magnet) pairs this model says are not coupled. This
+        # is the ONLY place the coupling is applied, and it is deliberately
+        # here: everything downstream - b_knob, b_world, b_world_unit, s, and
+        # the m gradient tensor in predict_and_jacobians - is linear in b_loc
+        # and j_loc, so masking at the source propagates exactly, to the
+        # prediction and to every analytic derivative alike, with no second
+        # place to keep in sync. See SENSOR_MAGNET_COUPLING.
+        b_loc = b_loc * self.coupling[None, :, :, None]
+        j_loc = j_loc * self.coupling[None, :, :, None, None]
 
         # Strength (and the installed polarity) scale the field linearly, so
         # they scale the gradient identically - fold them in here and every
