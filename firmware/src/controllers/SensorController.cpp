@@ -1,25 +1,23 @@
 #include "controllers/SensorController.h"
-#include "controllers/MotionController.h"
 #include "Config.h"
-// Need motion controller to get pose
-extern MotionController motionController;
+#include "Controllers.h"
 
 
 using namespace ifx::tlx493d;
 
-SensorController::SensorController()
+SensorController::SensorController(const CalibrationParams& cal)
     : mag1Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag2Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       sensor_gain_{
-        Config::magnet_gains[0] * Mat3::Identity(),
-        Config::magnet_gains[1] * Mat3::Identity(),
-        Config::magnet_gains[2] * Mat3::Identity(),
+        cal.sensor_gain[0],
+        cal.sensor_gain[1],
+        cal.sensor_gain[2],
       },
       sensor_offset_mT_{
-        Vec3(Config::sensor_offset_mT[0][0], Config::sensor_offset_mT[0][1], Config::sensor_offset_mT[0][2]),
-        Vec3(Config::sensor_offset_mT[1][0], Config::sensor_offset_mT[1][1], Config::sensor_offset_mT[1][2]),
-        Vec3(Config::sensor_offset_mT[2][0], Config::sensor_offset_mT[2][1], Config::sensor_offset_mT[2][2]),
+        cal.sensor_offset_mT[0],
+        cal.sensor_offset_mT[1],
+        cal.sensor_offset_mT[2],
       } {}
 
 void SensorController::powerOff(int pin) { digitalWrite(pin, LOW); }
@@ -202,7 +200,10 @@ void SensorController::updateCalibration() {
   Vec3 pos = Positions::approx_rest_pos - Vec3(0.1, 0.1, 0.1);
   Vec3 rot = Vec3::Zero();
   // Track pose aswell
-  float res = motionController.read_pose(raw, pos, rot);
+  // NOTE: reaching into the sibling controller from here is the coupling
+  // TODO/controller-ownership.md problem #1 is about. Unchanged by this work,
+  // just re-spelled -- it is entangled with the tare redesign.
+  float res = motionController().read_pose(raw, pos, rot);
   calibration_pos += pos;
   calibration_rot += rot;
   Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f", 
@@ -226,7 +227,7 @@ void SensorController::updateCalibration() {
   Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ", 
     calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
   );
-  motionController.set_base_pose(calibration_pos, calibration_rot);
+  motionController().set_base_pose(calibration_pos, calibration_rot);
 
   for (int i = 0; i < 9; i++) {
     baseline_[i] = calibrationSum_[i] / Config::ZERO_SAMPLES;

@@ -5,37 +5,31 @@
 #include "StateMachine.h"
 
 #ifndef PIO_UNIT_TESTING
-InputController inputController;
-LEDController ledController;
-SensorController sensorController;
-MotionController motionController;
-HIDController hidController;
-TelemetryController telemetryController;
-BundleCalibrationController bundleCalibrationController{};
-
 void setup() {
   // Initialize USB HID first
-  hidController.begin();
+  hidController().begin();
 
   if (Config::ENABLE_TELEMETRY) {
     Serial.begin(115200);
     delay(1000);
   }
 
-  inputController.begin();
-  ledController.begin();
-  if (!sensorController.begin()) {
+  inputController().begin();
+  ledController().begin();
+
+  // Note: this is where the callibration is actually read for the sensor and the motion controller.
+  if (!sensorController().begin()) {
     stateMachine.changeState(&StateMachine::errorState);
     return;
   }
-  motionController.reset();
-  telemetryController.begin();
+  motionController().reset();
+  telemetryController().begin();
 
   stateMachine.changeState(&StateMachine::calibratingState);
 }
 
 void loop() {
-  hidController.task();
+  hidController().task();
   stateMachine.update();
 }
 #endif

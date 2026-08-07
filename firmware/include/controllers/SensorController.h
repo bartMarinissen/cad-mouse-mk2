@@ -3,11 +3,12 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <TLx493D_inc.hpp>
+#include "CalibrationParams.h"
 #include "math3D.h"
 
 class SensorController {
  public:
-  SensorController();
+  explicit SensorController(const CalibrationParams& cal);
 
   bool begin();
   // Gain-corrected reading, in mT. Used by anything feeding the pose solver.
@@ -46,8 +47,10 @@ class SensorController {
   Vec3 calibration_rot = {};
 
   // Per-sensor gain/skew correction matrix and mT offset, applied to
-  // readUncorrected()'s output to produce read_mT()'s. Sourced from Config
-  // for now; will eventually come from flash-persisted bundle calibration.
-  Mat3 sensor_gain_[3];
-  Vec3 sensor_offset_mT_[3];
+  // readUncorrected()'s output to produce read_mT()'s. Const: they come from
+  // the CalibrationParams this controller was constructed with, and a sensor
+  // whose correction changed underneath a running pose solve would be a bug,
+  // not a feature.
+  const Mat3 sensor_gain_[3];
+  const Vec3 sensor_offset_mT_[3];
 };

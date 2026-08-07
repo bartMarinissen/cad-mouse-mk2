@@ -7,11 +7,11 @@
 #include "StateMachine.h"
 
 void ErrorState::enter() {
-  ledController.startSpinner(Config::LED_ERROR_COLOR);
+  ledController().startSpinner(Config::LED_ERROR_COLOR);
 }
 
 void ErrorState::update() {
-  ledController.updateSpinner();
+  ledController().updateSpinner();
 }
 
 void ErrorState::exit() {}

@@ -7,23 +7,26 @@
 #include "StateMachine.h"
 
 void CalibratingState::enter() {
-  sensorController.beginCalibration();
-  motionController.reset();
-  ledController.startSpinner(Config::LED_CALIBRATING_COLOR);
+  sensorController().beginCalibration();
+  motionController().reset();
+  ledController().startSpinner(Config::LED_CALIBRATING_COLOR);
 }
 
 void CalibratingState::update() {
-  inputController.update();
-  ledController.updateSpinner();
-  sensorController.updateCalibration();
+  SensorController& sensor = sensorController();
+  InputController& input = inputController();
+
+  input.update();
+  ledController().updateSpinner();
+  sensor.updateCalibration();
 
   // TODO check serial
-  if (inputController.takeActivity()) {
+  if (input.takeActivity()) {
     stateMachine.changeState(&StateMachine::bundleState);
   }
-  
 
-  if (sensorController.calibrationDone()) {
+
+  if (sensor.calibrationDone()) {
     stateMachine.changeState(&StateMachine::idleState);
   }
 }

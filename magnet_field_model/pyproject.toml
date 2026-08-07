@@ -15,3 +15,30 @@ dependencies = [
     "scipy>=1.18.0",
     "sympy>=1.14.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.14",
+    "mypy>=1.15",
+    "types-pyserial>=3.5.0.20260712",
+    "scipy-stubs>=1.18.0.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_ignores = true
+check_untyped_defs = true
+disallow_incomplete_defs = true

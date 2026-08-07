@@ -7,26 +7,30 @@
 #include "StateMachine.h"
 
 void BundleState::enter() {
-    ledController.startSpinner(0xFDFDFF);
-    inputController.takeActivity();
-    inputController.takeCalibrationRequest();
+    InputController& input = inputController();
+    ledController().startSpinner(0xFDFDFF);
+    input.takeActivity();
+    input.takeCalibrationRequest();
 
 }
 
 void BundleState::update() {
-    ledController.updateSpinner();
-    inputController.update();
+    InputController& input = inputController();
+    BundleCalibrationController& bundleCalibration = bundleCalibrationController();
+
+    ledController().updateSpinner();
+    input.update();
 
     char command[128]{};
     if (Serial.available())
         Serial.readBytesUntil('\n', command, sizeof(command));
-    bundleCalibrationController.handle_serial_command(command);
+    bundleCalibration.handle_serial_command(command);
 
-    uint16_t button_bits = inputController.takeActivity();
+    uint16_t button_bits = input.takeActivity();
     // We pass the sensorController so the callibrator can be selective in when it wants to read the sensor.
-    bundleCalibrationController.update(button_bits, sensorController);
+    bundleCalibration.update(button_bits, sensorController());
 
-   if (bundleCalibrationController.is_done()){
+   if (bundleCalibration.is_done()){
        stateMachine.changeState(&StateMachine::idleState);
    }
 }

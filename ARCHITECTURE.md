@@ -43,7 +43,7 @@ to force fixed-size Eigen types only, no heap allocation anywhere in the hot pat
 `firmware/src/main.cpp` is the entry point. `setup()` brings up controllers in a
 fixed order (HID → serial → input → LED → sensors → motion → telemetry), then
 `stateMachine.changeState(&calibratingState)`. `loop()` just calls
-`hidController.task()` then `stateMachine.update()` — a classic non-blocking
+`hidController().task()` then `stateMachine.update()` — a classic non-blocking
 super-loop, no RTOS.
 
 ### State machine
@@ -147,12 +147,17 @@ constant: `#include "math3D.h"` for `Vec3`/`Mat3`/`skew_matrix` typedefs
 
 ### Codegen: Python → firmware table
 
-`magnet_field_model/field_approximation.ipynb` (uv-managed Python env,
-`magpylib` for ground-truth field simulation of a real 6×6mm N52 cylinder
-magnet) samples the true field on the same 51×91 (r,z) grid defined by `NR`/`NZ`
-in [`magnet_model_table.h`](firmware/include/magnet_model/magnet_model_table.h),
-and hand-emits the hex-float C++ array in
-[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp).
+`magnet_field_model/bicubic_table.py` (uv-managed Python env, `magpylib` for
+ground-truth field simulation of a real 6×6mm N52 cylinder magnet) samples the
+true field on the same 51×91 (r,z) grid defined by `NR`/`NZ` in
+[`magnet_model_table.h`](firmware/include/magnet_model/magnet_model_table.h).
+Run `magnet_field_model/generate_bicubic_table.py` to actually (re)write that
+header and the hex-float C++ array in
+[`magnet_model_table.cpp`](firmware/src/magnet_model/magnet_model_table.cpp) —
+it imports the magnet/grid definitions from `bicubic_table.py` rather than
+duplicating them. `field_approximation.ipynb` imports the same module to
+inspect/visualize the table (field plots, dipole-approximation comparison,
+interpolation error); it no longer writes the firmware files itself.
 **This file is generated, not hand-written** — if the magnet spec, grid bounds
 (`BICUBIC_ORIGIN`/`BICUBIC_FAR` in `magnet_model_table.h`), or grid resolution
 change, they need to change in both the notebook and the header in lockstep, by
@@ -175,17 +180,74 @@ streams `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 [`bundle_callibration.py`](magnet_field_model/bundle_callibration.py), which
 ACKs frame counts back over the same link.
 
-**Status: data-capture only.** The Python script collects the datasets per
-step and stops — it imports `scipy.optimize.least_squares` but never calls it;
-the actual bundle-adjustment fit (solving for per-magnet strength / per-sensor
-gain and tilt) isn't implemented yet. There's also currently no path for
-calibration *results* to get back into the firmware at all: no flash/EEPROM
-write, and `Sensor`'s per-axis gain (`Mat3 sensor_gain`) and `MagnetModel`'s
-per-magnet `magnet_rotation` are both wired up in the math but only ever
-constructed once from hardcoded `Config::magnet_gains` (currently
-`{-1,-1,-1}` scalars — see Issues) at static-init time in `MotionController.cpp`.
-So: capture pipeline exists, fit doesn't, and even a finished fit has nowhere
-to plug in yet.
+**Status: capture and fit both work; the result has nowhere to go.** The
+Python side fits 54 shared parameters (per-magnet position, tilt and strength;
+per-sensor gain matrix and DC offset) jointly with one free 6-DOF pose per
+captured frame, and takes the field residual from ~1.8% at nominal geometry
+down to ~0.33%, in about a second. See
+[`magnet_field_model/README.md`](magnet_field_model/README.md) for the
+architecture, the load-bearing frame conventions, and the measured numbers.
+
+Two things are worth knowing before touching it:
+
+- The magnet position reference is the magnet's **bottom face**, not its
+  centre — that is what `positions.h` means and what the notebook baked into
+  the bicubic table. magpylib positions cylinders by their centre.
+- The raw capture path streams `readUncorrected()`, so the sensors read the
+  **opposite sign** to the modelled field — matching `Config::magnet_gains`
+  (`{-0.96, -1.2, -0.98}`). The fit attributes that flip to magnet polarity,
+  so fitted gains read near `+I` while the *exported* ones land near `-I`.
+- Sensor gain scale and magnet strength are not separable (only ~1%
+  cross-talk distinguishes them), so the fit picks a gauge: `det(G) = 1`, with
+  magnet strength carrying the scale. The reported strengths are an
+  attribution, not a measurement — the fit's information-gain column says so.
+
+There is still no path for calibration *results* to reach the firmware
+automatically: no flash/EEPROM write anywhere in this firmware, so
+`bundle_callibration.py --emit-cpp` prints a pasteable C++ snippet and that is
+as far as it goes.
+
+What changed is that there is now somewhere for a result to *land*. The whole
+fitted parameter set is one struct,
+[`CalibrationParams`](firmware/include/CalibrationParams.h). `SensorController`
+and `MotionController` are constructed from it and hold their
+calibration-derived state `const`, which is why they are no longer static-init
+globals — each is reached through its own Meyers-singleton accessor,
+`sensorController()`/`motionController()`, built on first call from
+`resolveCalibration()` (see [`Controllers.h`](firmware/include/Controllers.h)).
+Every other controller is trivially default-constructible and has no such
+dependency, so it gets a plain accessor over a static-init global instead —
+same construction as before, just reached through a function for uniform call
+syntax across all seven controllers. `resolveCalibration()` in
+`Controllers.cpp` is the single seam a flash loader plugs into; today it
+returns `Config::defaultCalibration()`, reproducing the previously hardcoded
+values exactly.
+
+Two caveats on the exported numbers:
+
+- `MagnetModel` now carries a `magnet_strength_mT` — a real polarization value
+  in mT, not a dimensionless multiplier — and applies it in `evaluate()`,
+  scaling the six cylindrical quantities before the x/y decomposition (exact,
+  since the field enters linearly downstream). The ratio it actually multiplies
+  by is `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`
+  (`magnet_model/magnet_model_table.h`): the polarization
+  `magnet_field_model/bicubic_table.py` generated the table at, currently
+  1000 mT and arbitrary — any magnet's real Br divided by it gives the right
+  scale regardless of what that reference happens to be.
+- The fitted values are **effective parameters for this model, not measured
+  physics.** `ForwardModel::evaluate()` pairs sensor *i* with magnet *i* only,
+  ignoring the other two magnets ~28.58mm away — worth 1.7–4.5% of the field.
+  The Python fit is deliberately pinned to that same single-magnet model
+  (`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING = PAIRED_ONLY`)
+  so the two agree; fitting the complete model instead and exporting *that*
+  leaves the cross term uncompensated and measures 3.6% worse. Cross-magnet
+  field therefore ends up absorbed into gain/offset/strength, exactly as the
+  old hand-tuned `Config::magnet_gains` absorbed it. See
+  `TODO/cross-magnet-interference.md` for the measurements and the one-constant
+  path back.
+- `Sensor` no longer carries a gain; correction happens entirely in
+  `SensorController::read_mT()`, which is what
+  `TODO/sensor-gain-calibration.md` asked for.
 
 ## Quick file index
 
@@ -199,7 +261,9 @@ to plug in yet.
 | Cylindrical magnet field model + r→0 handling | `firmware/src/magnet_model/magnet_local_model.cpp` |
 | Bicubic grid interpolation | `firmware/src/magnet_model/BicubicField.cpp` |
 | Generated field table (don't hand-edit) | `firmware/src/magnet_model/magnet_model_table.cpp` |
-| Field table generator (source of truth) | `magnet_field_model/field_approximation.ipynb` |
+| Field table generator (run this to regenerate) | `magnet_field_model/generate_bicubic_table.py` |
+| Field table magnet/grid definition (source of truth) | `magnet_field_model/bicubic_table.py` |
+| Field table inspection/visualization (does not write it) | `magnet_field_model/field_approximation.ipynb` |
 | HID descriptor / report format | `firmware/src/controllers/HIDController.cpp` |
 | Serial diagnostics dashboard | `firmware/src/controllers/TelemetryController.cpp` |
 | Jacobian correctness tests (finite-difference) | `firmware/test/test_jacobian.cpp` |

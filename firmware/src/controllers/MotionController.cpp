@@ -14,22 +14,8 @@
 
 
 
-MagnetModel magnets[3] = {
-  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_1_knob),
-  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_2_knob),
-  MagnetModel(CALCULATED_BICUBIC_FIELD, Positions::Magnet_3_knob),
-};
-const Sensor sensors[3] = {
-  Sensor(Positions::sensor_1_world),
-  Sensor(Positions::sensor_2_world),
-  Sensor(Positions::sensor_3_world),
-};
-ForwardModel forward_model(
-  sensors, magnets
-);
-
-Eigen::Matrix<float, 9, 6> J;
-Eigen::Matrix<float, 9, 1> B_field;
+MotionController::MotionController(const CalibrationParams& cal)
+    : forward_model_(cal) {}
 
 namespace {
 enum RawIndex {
@@ -150,7 +136,7 @@ float MotionController::read_pose(const float raw[9], Vec3 &position, Vec3 &rot_
   // Actual solve (not yet used)
   //
   int before = millis();
-  float residual_magnitude = solve_knob_pose(position, R, forward_model, measured, residual_vec_ptr, jacobian_ptr);
+  float residual_magnitude = solve_knob_pose(position, R, forward_model_, measured, residual_vec_ptr, jacobian_ptr);
   int after = millis();
   if (Config::statistics)
     statistics.update(after - before);

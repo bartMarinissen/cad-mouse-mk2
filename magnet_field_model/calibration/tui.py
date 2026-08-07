@@ -9,6 +9,7 @@ when to redraw it.
 from __future__ import annotations
 
 import time
+from types import TracebackType
 
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -20,7 +21,9 @@ from rich.text import Text
 from .protocol import COUNTDOWN_MS, STEP_NAMES, CalibPhase, CalibStep, step_duration_ms
 from .session import CalibrationSession
 
-STEP_ORDER = [step for step in CalibStep if int(step) >= 0 and step != CalibStep.COMPLETE]
+STEP_ORDER: list[CalibStep] = [
+    step for step in CalibStep if int(step) >= 0 and step != CalibStep.COMPLETE
+]
 
 LOG_TAIL = 15
 BAR_WIDTH = 40
@@ -138,15 +141,20 @@ class LiveDisplay:
 
     _live: Live
 
-    def __init__(self, session: CalibrationSession, console: Console | None = None):
+    def __init__(self, session: CalibrationSession, console: Console | None = None) -> None:
         self._live = Live(render(session), console=console, refresh_per_second=10, screen=True)
 
-    def __enter__(self) -> "LiveDisplay":
+    def __enter__(self) -> LiveDisplay:
         self._live.__enter__()
         return self
 
-    def __exit__(self, *exc_info) -> None:
-        self._live.__exit__(*exc_info)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self._live.__exit__(exc_type, exc_val, exc_tb)
 
     def update(self, session: CalibrationSession) -> None:
         self._live.update(render(session))

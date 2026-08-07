@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CalibrationParams.h"
 #include "math3D.h"
 #include "magnet_local_model.h"
 #include "sensor.h"
@@ -8,6 +9,12 @@ class ForwardModel {
 public:
     // Initializes the model with the physical layout of the PCB and knob
     ForwardModel(const Sensor (&sensors)[3], const MagnetModel (&magnets)[3]);
+
+    // The layout as actually calibrated: sensors at their (fixed, world-frame
+    // defining) nominal positions, magnets at their fitted knob-frame positions
+    // and tilts. This is how the running firmware builds its model; the array
+    // constructor above stays for tests that want to hand-place things.
+    explicit ForwardModel(const CalibrationParams& cal);
 
     // Computes the 9x1 residual and 9x6 Jacobian for a given pose
     // Note the pose for this jacobian is in terms of a translation vector t 

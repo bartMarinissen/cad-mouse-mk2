@@ -28,7 +28,17 @@ calibration (see `TODO/tare-and-calibration.md` — this will need to be
 resolved together with the tare redesign, since tare is exactly the state
 that currently drives this calibration loop).
 
-## Problem 2: the forward model's state lives outside any controller
+## Problem 2: the forward model's state lives outside any controller — RESOLVED
+
+Fixed as part of the `CalibrationParams` work. `MotionController` now owns a
+`const ForwardModel forward_model_` member, constructed from the
+`CalibrationParams` the controller was built with; `J`/`B_field` were dead and
+are deleted. `MotionController` and `SensorController` are each reached
+through their own Meyers-singleton accessor, `motionController()` /
+`sensorController()` (`firmware/include/Controllers.h`), independently built
+on first call from `resolveCalibration()` at a point `setup()` chooses — which
+is what gives a flash-loaded calibration somewhere to land. The original
+description follows, for context.
 
 In `firmware/src/controllers/MotionController.cpp`, at file scope (not class
 members):
@@ -66,3 +76,9 @@ owner) will likely reshape how #1 gets resolved, since "who owns the model"
 and "who's allowed to call into the solver during calibration" are the same
 question from two directions. Worth designing together rather than
 sequentially.
+
+In the event #2 was resolved without touching #1. Giving the model an owner
+turned out not to require deciding who may call into the solver — the call in
+`updateCalibration()` just got re-spelled as `motionController().read_pose()`
+and is as coupled as it ever was. #1 remains open and still belongs with the
+tare redesign.

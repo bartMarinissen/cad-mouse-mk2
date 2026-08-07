@@ -1,5 +1,7 @@
 #pragma once
+#include "CalibrationParams.h"
 #include "math3D.h"
+#include "magnet_model/forward_model.h"
 #include "magnet_model/positions.h"
 
 using Vector9f = Eigen::Matrix<float, 9, 1>;
@@ -30,6 +32,8 @@ struct Statistics {
 
 class MotionController {
  public:
+  explicit MotionController(const CalibrationParams& cal);
+
   void reset();
   // Returns the residual in percents
   float compute(const float raw[9], const float* baseline, float dt, float out[6]);
@@ -46,6 +50,14 @@ class MotionController {
   static float hardZero(float v, float thr);
   static float lowpass(float prev, float x, float dt, float tau);
   static float axisBaseDead(int i);
+
+  // The model the pose solve runs against. Previously three translation-unit
+  // globals in MotionController.cpp, which TODO/controller-ownership.md flagged
+  // as the reason a calibration write-back had no path to the running
+  // Sensor/MagnetModel instances. Now owned, and const because it is built from
+  // this controller's calibration and never changes after that.
+  const ForwardModel forward_model_;
+
   float filt_[6] = {};
   bool motionActive_ = false;
   // Baseline measurements, for computing offset against

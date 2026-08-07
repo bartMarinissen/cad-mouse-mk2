@@ -16,7 +16,7 @@ before touching the C++ side here, this file is scoping/design only.
 still sends *any* input activity straight into `BundleState` mid-boot-calibration:
 
 ```cpp
-if (inputController.takeActivity()) {
+if (inputController().takeActivity()) {
     stateMachine.changeState(&StateMachine::bundleState);
 }
 ```
@@ -32,8 +32,8 @@ Related caller-side bug still present in `BundleState::update()`
 (`firmware/src/states/BundleState.cpp:25`):
 
 ```cpp
-uint16_t button_bits = inputController.takeActivity();  // should this be buttonBits()?
-bundleCalibrationController.update(button_bits, sensorController);
+uint16_t button_bits = inputController().takeActivity();  // should this be buttonBits()?
+bundleCalibrationController().update(button_bits, sensorController());
 ```
 
 `takeActivity()` returns a bool, not the actual button bitmask

@@ -244,6 +244,50 @@ void test_magnet_model_jacobian_at_origin(void) {
     check_magnet_model_at(model, Vec3(0.0f, 0.0f, -6.0f));
 }
 
+void test_magnet_strength_scales_field_and_jacobian(void) {
+    // magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT multiplies the six
+    // cylindrical quantities inside evaluate() rather than the assembled
+    // outputs, on the argument that the field enters everything downstream
+    // linearly. That argument is exactly what this asserts: B and J must both
+    // come out scaled by that ratio, with no residual shape change. If someone
+    // later scales only B, or scales after the r->0 L'Hopital branch, this
+    // catches it.
+    //
+    // Expressed as ratios (not raw mT) so the assertion below reads directly
+    // as "B_s should be ratio * B_unit" regardless of what
+    // BICUBIC_FIELD_REFERENCE_MT itself happens to be.
+    const float ratios[] = { 0.87f, 1.0f, 1.23f };
+    const Vec3 probes[] = {
+        Vec3( 1.4f,  1.4f, -3.0f),
+        Vec3( 0.0f,  3.0f, -6.0f),
+        Vec3(-2.0f, -2.0f, -8.0f),
+        Vec3( 0.0f,  0.0f, -6.0f),   // the r = 0 branch
+    };
+
+    MagnetModel unit(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+    char msg[192];
+
+    for (const Vec3& p : probes) {
+        Mat3 J_unit;
+        const Vec3 B_unit = unit.evaluate(p, J_unit);
+
+        for (float ratio : ratios) {
+            MagnetModel scaled(CALCULATED_BICUBIC_FIELD, Vec3::Zero(), Mat3::Identity(),
+                                ratio * BICUBIC_FIELD_REFERENCE_MT);
+            Mat3 J_s;
+            const Vec3 B_s = scaled.evaluate(p, J_s);
+
+            const float eB = max_rel_error_mat<3, 1>(B_s, (ratio * B_unit).eval());
+            const float eJ = max_rel_error_mat<3, 3>(J_s, (ratio * J_unit).eval());
+
+            snprintf(msg, sizeof(msg),
+                     "strength ratio %.2f (%.0f mT) at p=(%.2f, %.2f, %.2f): B err %.2e, J err %.2e",
+                     ratio, ratio * BICUBIC_FIELD_REFERENCE_MT, p[0], p[1], p[2], eB, eJ);
+            TEST_ASSERT_TRUE_MESSAGE(eB < 1e-5f && eJ < 1e-5f, msg);
+        }
+    }
+}
+
 // ======================================================================
 // 3. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
@@ -251,18 +295,19 @@ void test_magnet_model_jacobian_at_origin(void) {
 // Updated to accept hardware calibration states.
 // Sensor gain is no longer part of ForwardModel/Sensor - it's applied by
 // SensorController on raw readings before they ever reach the solver - so
-// this only exercises magnet tilt/orientation states now.
+// this exercises the two per-magnet states that *are* still in the model:
+// axis tilt and polarization strength.
 static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
         const Mat3 magnet_rotations[3],
+        const float magnet_strengths[3],
         Eigen::Matrix<float, 9, 6>& J_analytic,
         Eigen::Matrix<float, 9, 6>& J_numeric) {
 
     MagnetModel magnets[3] = {
-        // Note: Update these constructors or setters to match your actual MagnetModel API
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0], magnet_strengths[0]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1], magnet_strengths[1]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2], magnet_strengths[2]),
     };
 
     Sensor sensors[3] = {
@@ -315,20 +360,36 @@ void test_forward_model_jacobian_grid(void) {
     // Scenario A: Perfect Hardware
     Mat3 tilts_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
 
+    float strengths_perfect[3] = {
+        BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT
+    };
+
     // Scenario B: Realistic Manufacturing Tolerances (magnet tilt)
     Mat3 tilts_real[3] = {
         exp_so3(Vec3( 0.03f, -0.02f,  0.01f)), // ~2 deg tilt
         exp_so3(Vec3(-0.01f,  0.04f,  0.00f)),
         exp_so3(Vec3( 0.02f,  0.01f, -0.03f))
     };
+    // Per-magnet polarization spread, expressed as a ratio of
+    // BICUBIC_FIELD_REFERENCE_MT so the scenario means the same thing
+    // regardless of what that reference value is. The fit's own prior on how
+    // much magnets from one batch differ is ~1%; these are deliberately wider,
+    // plus a common-mode offset, since the common mode is the absolute field
+    // scale and is left unregularized by the fit.
+    float strengths_real[3] = {
+        0.94f * BICUBIC_FIELD_REFERENCE_MT,
+        1.08f * BICUBIC_FIELD_REFERENCE_MT,
+        1.01f * BICUBIC_FIELD_REFERENCE_MT,
+    };
 
     struct HardwareState {
         const Mat3* tilts;
+        const float* strengths;
         const char* name;
     };
     HardwareState hw_states[] = {
-        { tilts_perfect, "Ideal Hardware" },
-        { tilts_real, "Distorted Hardware" }
+        { tilts_perfect, strengths_perfect, "Ideal Hardware" },
+        { tilts_real, strengths_real, "Distorted Hardware" }
     };
 
     // 2. Define Pose Grid Bounds
@@ -360,7 +421,7 @@ void test_forward_model_jacobian_grid(void) {
                         Mat3 R = exp_so3(r_vec);
                         
                         Eigen::Matrix<float, 9, 6> J_analytic, J_numeric;
-                        compute_forward_model_jacobians(t, R, hw.tilts, J_analytic, J_numeric);
+                        compute_forward_model_jacobians(t, R, hw.tilts, hw.strengths, J_analytic, J_numeric);
 
                         float e = max_rel_error_mat<9, 6>(J_analytic, J_numeric);
                         
@@ -396,6 +457,7 @@ void setup() {
     RUN_TEST(test_bicubic_field_derivatives);
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
+    RUN_TEST(test_magnet_strength_scales_field_and_jacobian);
     RUN_TEST(test_forward_model_jacobian_grid);
     UNITY_END();
 }

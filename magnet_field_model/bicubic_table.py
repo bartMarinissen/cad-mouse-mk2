@@ -1,0 +1,140 @@
+"""Builds the magnet model and the (r, z) field table
+firmware/include/magnet_model/magnet_model_table.h /
+firmware/src/magnet_model/magnet_model_table.cpp are generated from.
+
+Single source of truth for two consumers that must never describe a different
+magnet or grid from each other:
+  - generate_bicubic_table.py: the script that actually (re)writes those two
+    firmware files. Run this to regenerate the table.
+  - field_approximation.ipynb: imports the same functions to build the
+    identical magnet and grid for inspection/visualization (field plots,
+    dipole-approximation comparison, interpolation error), rather than keeping
+    a second hand-written copy that could silently drift from what the script
+    generates.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import magpylib as magpy
+import numpy as np
+from numpy.typing import NDArray
+
+# --- The physical magnet the table models ---
+MAGNET_DIAMETER_MM = 6.0
+MAGNET_HEIGHT_MM = 6.0
+
+# The polarization (remanence, Br) the table is generated at, baked into the
+# generated header as BICUBIC_FIELD_REFERENCE_MT. firmware's MagnetModel
+# divides its own magnet_strength_mT by this to get the ratio it scales the
+# table by, so a real magnet's actual Br -- whatever it is -- reads out
+# correctly regardless of what this constant happens to be: the field scales
+# exactly linearly with polarization, so the value itself is arbitrary. 1000mT
+# is picked purely so that ratio reads as "a magnet at N mT of Br". This is
+# NOT the same number as calibration/local_field.py's 600mT, which is a
+# genuine guess at the installed magnets' real Br for the *calibration* model
+# -- a separate, unrelated constant.
+BICUBIC_FIELD_REFERENCE_MT = 1000.0
+
+# --- Interpolation grid: (r, z) in the magnet's local frame, bottom face at
+# the origin, +z along the polarization axis. Matches
+# firmware/include/magnet_model/magnet_model_table.h's BICUBIC_ORIGIN/FAR. ---
+NR, NZ = 51, 91
+R_MIN, R_MAX = 0.0, 10.0
+Z_MIN, Z_MAX = -20.0, -0.5
+
+HEADER_RELATIVE_PATH = "magnet_model/magnet_model_table.h"
+
+
+def build_magnet(polarization_mt: float = BICUBIC_FIELD_REFERENCE_MT) -> magpy.magnet.Cylinder:
+    """The magnet the table is generated from, at the canonical local pose:
+    bottom face at the origin, polarized along -z (see local_field.py's
+    module docstring for why the origin is the bottom face, not the center).
+    """
+    return magpy.magnet.Cylinder(
+        polarization=(0, 0, -polarization_mt),
+        dimension=(MAGNET_DIAMETER_MM, MAGNET_HEIGHT_MM),
+        position=(0, 0, MAGNET_HEIGHT_MM / 2.0),  # center at half-height -> bottom face at z=0
+    )
+
+
+@dataclass(frozen=True)
+class FieldTable:
+    """The (r, z) grid and the field magpylib computes on it.
+
+    field has shape (NR, NZ, 3): magpylib's (x, y, z) components, sampled on
+    the +x half-plane (y=0) at every (r_line[i], z_line[j]) -- the axisymmetric
+    field only depends on (r, z), so this one half-plane is the whole model.
+    """
+    r_line: NDArray[np.float64]
+    z_line: NDArray[np.float64]
+    field: NDArray[np.float64]
+
+
+def compute_field_table(magnet: magpy.magnet.Cylinder) -> FieldTable:
+    r_line = np.linspace(R_MIN, R_MAX, NR)
+    z_line = np.linspace(Z_MIN, Z_MAX, NZ)
+    R, Z = np.meshgrid(r_line, z_line, indexing="ij")
+    pts = np.stack([R.ravel(), np.zeros_like(R.ravel()), Z.ravel()], axis=-1)
+    field = magnet.getB(pts).reshape(NR, NZ, 3)
+    return FieldTable(r_line=r_line, z_line=z_line, field=field)
+
+
+def _hex_array_2d(arr: NDArray[np.float64]) -> str:
+    """Row-major C++ initializer of Vec2{x, z} hex float literals.
+
+    Hex floats round-trip exactly (no base-10 rounding), which matters here:
+    this is the entire interpolation table baked into the firmware image.
+    """
+    lines = []
+    for row in arr:
+        points = ", ".join(f"Vec2( {p[0].hex()}f, {p[1].hex()}f )" for p in row)
+        lines.append("{" + points + "}")
+    return "{\n" + ",\n".join(lines) + "\n}"
+
+
+def format_header(table: FieldTable, reference_mt: float) -> str:
+    return f"""
+#pragma once
+#include "math3D.h"
+
+struct Point {{ float r; float z; }};
+
+using Vec2 = Eigen::Vector2f;
+constexpr int NR = {len(table.r_line)};
+constexpr int NZ = {len(table.z_line)};
+
+constexpr Point BICUBIC_ORIGIN = {{ {table.r_line[0]}, {table.z_line[0]} }};
+constexpr Point BICUBIC_FAR    = {{ {table.r_line[-1]}, {table.z_line[-1]} }};
+
+// The polarization (remanence, Br) this table was generated at. A real
+// magnet is not this strong or weak -- MagnetModel divides its own
+// magnet_strength_mT by this to get the ratio it scales the table by.
+constexpr float BICUBIC_FIELD_REFERENCE_MT = {reference_mt}f;
+
+extern const Vec2 BICUBIC_INTERPOLATION_TABLE[NZ][NR];
+
+"""
+
+
+def format_cpp(table: FieldTable) -> str:
+    # (NR, NZ, 3) -> (NZ, NR, 2): swap to row-per-z (matching the header's
+    # BICUBIC_INTERPOLATION_TABLE[NZ][NR]) and keep only the x, z components --
+    # y is exactly zero by construction (points sampled on the y=0 half-plane).
+    field_2d = table.field.swapaxes(0, 1)[:, :, (0, 2)]
+    arr = _hex_array_2d(field_2d)
+    return f"""
+#include "{HEADER_RELATIVE_PATH}"
+
+const Vec2 BICUBIC_INTERPOLATION_TABLE[NZ][NR] = {arr};
+"""
+
+
+def generate(polarization_mt: float = BICUBIC_FIELD_REFERENCE_MT) -> tuple[str, str, FieldTable]:
+    """Builds the magnet and grid, and returns (header_text, cpp_text, table)."""
+    magnet = build_magnet(polarization_mt)
+    table = compute_field_table(magnet)
+    header = format_header(table, polarization_mt)
+    cpp = format_cpp(table)
+    return header, cpp, table
