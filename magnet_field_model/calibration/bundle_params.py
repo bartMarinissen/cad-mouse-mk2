@@ -59,9 +59,9 @@ class RegularizationSigmas:
     # behind. The position gauge is now fixed structurally (see
     # parameterization.MAGNET_POS_BASIS), so this prior is not load-bearing
     # and only has to be defensible on its own merits.
-    magnet_pos_mm: float | None = 0.3
+    magnet_pos_mm: float | None = 1
     # Magnet axis tilt, ~1.7 deg.
-    magnet_tilt_rad: float | None = 0.03
+    magnet_tilt_rad: float | None = 0.06
     # Common-mode magnet strength: the absolute field scale. UNREGULARIZED by
     # default. The nominal it would be centred on is local_field.py's 600mT
     # polarization, which is a round guess rather than a measurement of these
@@ -76,16 +76,16 @@ class RegularizationSigmas:
     # other, which is a real belief about the parts. Setting this very small
     # approaches "assume all magnets identical"; setting it to None drops the
     # assumption entirely.
-    magnet_strength_diff: float | None = 0.01
+    magnet_strength_diff: float | None = 0.1
     # DC offset on the raw reading: Hall zero-point plus ambient field. The
     # firmware's own hand-tuned Config::sensor_offset_mT reaches 1.6 mT, so
     # this is deliberately loose enough not to fight it.
-    sensor_offset_mT: float | None = 1.5
+    sensor_offset_mT: float | None = 1.8
     # No gain_iso here: gain carries no isotropic/scale parameter at all (see
     # parameterization.py's "gain: 8 exactly-traceless basis matrices") -
     # magnet_strength_mean owns that job instead.
     # Per-axis sensitivity spread at fixed overall scale.
-    gain_aniso: float | None = 0.05
+    gain_aniso: float | None = 0.25
     # Cross-axis skew and sensor-frame misalignment: weakly observable given
     # how little the field direction varies over a run, so kept tight.
     gain_sym: float | None = 0.03

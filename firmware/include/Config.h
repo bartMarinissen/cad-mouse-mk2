@@ -77,4 +77,7 @@ const float sensor_offset_mT[3][3] = {
 // an order nothing here controls.
 CalibrationParams defaultCalibration();
 
+// Uncomment this one and define it in config.cpp if you ran calibration and don't want to store it in flash.
+// CalibrationParams fittedCalibration();
+
 }  // namespace Config

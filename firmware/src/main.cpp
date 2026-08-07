@@ -17,12 +17,7 @@ void setup() {
   inputController().begin();
   ledController().begin();
 
-  // Builds the calibrated controllers, from resolveCalibration(). Done here,
-  // explicitly, rather than being left to whichever call site happens to
-  // touch sensorController()/motionController() first -- in Stage 2 this is
-  // the point at which the filesystem gets read, and it needs to be after
-  // Serial is up so a failed load can say so, and before anything starts
-  // solving poses.
+  // Note: this is where the callibration is actually read for the sensor and the motion controller.
   if (!sensorController().begin()) {
     stateMachine.changeState(&StateMachine::errorState);
     return;

@@ -19,29 +19,26 @@ Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p, Mat3& J_local) co
     // return value
     Vec3 B_local;
     // get radius of the given point compared to the z axis
-    // TODO: possible optimization, do the bicubic interpolation on Z, r^2? Saves a sqrt here.
-    //       it might also spread the grid more nicely.
+    // TODO: possible optimization, do the bicubic interpolation on Z, r^2? 
+    // This also solves the r < EPSILON singularity.
     float r = sqrtf(p[0]*p[0] + p[1]*p[1]);
 
     Vec2 B_cylindrical, d_dr, d_dz;
     field_model_.evaluate(r, p[2], B_cylindrical, d_dr, d_dz);
 
-    // Apply this magnet's strength ratio here, on the six cylindrical
-    // quantities, rather than on the assembled B_local and J_local below: the
-    // field enters everything downstream linearly, so scaling here is exact and
-    // costs 6 multiplies instead of the 12 the 3-vector plus 3x3 matrix would.
-    const float s = strength_ratio_;
 
     // Decompose the measured field
     // Because we need to reconsitute the magnetic field in the x and y direction based on Br
-    float Br = B_cylindrical[0] * s;
+    //
+    // Also Apply this magnet's strength ratio here
+    float Br = B_cylindrical[0] * strength_ratio_;
     // skip y which is stupidly zero
-    float Bz = B_cylindrical[1] * s;
+    float Bz = B_cylindrical[1] * strength_ratio_;
 
-    float dBr_dr = d_dr[0] * s;
-    float dBz_dr = d_dr[1] * s;
-    float dBr_dz = d_dz[0] * s;
-    float dBz_dz = d_dz[1] * s;
+    float dBr_dr = d_dr[0] * strength_ratio_;
+    float dBz_dr = d_dr[1] * strength_ratio_;
+    float dBr_dz = d_dz[0] * strength_ratio_;
+    float dBz_dz = d_dz[1] * strength_ratio_;
 
 
     const float EPSILON = 1e-6f;
