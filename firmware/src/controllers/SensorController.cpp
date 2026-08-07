@@ -203,7 +203,7 @@ void SensorController::updateCalibration() {
   // NOTE: reaching into the sibling controller from here is the coupling
   // TODO/controller-ownership.md problem #1 is about. Unchanged by this work,
   // just re-spelled -- it is entangled with the tare redesign.
-  float res = calibrated().motion.read_pose(raw, pos, rot);
+  float res = motionController().read_pose(raw, pos, rot);
   calibration_pos += pos;
   calibration_rot += rot;
   Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f", 
@@ -227,7 +227,7 @@ void SensorController::updateCalibration() {
   Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ", 
     calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
   );
-  calibrated().motion.set_base_pose(calibration_pos, calibration_rot);
+  motionController().set_base_pose(calibration_pos, calibration_rot);
 
   for (int i = 0; i < 9; i++) {
     baseline_[i] = calibrationSum_[i] / Config::ZERO_SAMPLES;

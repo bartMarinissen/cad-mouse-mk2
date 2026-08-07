@@ -9,11 +9,11 @@
 void IdleState::enter() {
   lastUpdateMs_ = 0;
   lastActivityMs_ = millis();
-  ledController.setSolid(Config::LED_IDLE_COLOR);
+  ledController().setSolid(Config::LED_IDLE_COLOR);
 }
 
 bool IdleState::handleCalibrationRequest() {
-  if (inputController.takeCalibrationRequest()) {
+  if (inputController().takeCalibrationRequest()) {
     stateMachine.changeState(&StateMachine::calibratingState);
     return true;
   }
@@ -21,36 +21,38 @@ bool IdleState::handleCalibrationRequest() {
 }
 
 void IdleState::runMotionPipeline(float dt, unsigned long now) {
-  CalibratedControllers& c = calibrated();
+  SensorController& sensor = sensorController();
+  MotionController& motion = motionController();
 
   float raw[9] = {};
-  c.sensor.read_mT(raw);
+  sensor.read_mT(raw);
 
   // Serial.printf(
-  // "s1: %f %f %f \ns2: %f %f %f \ns3: %f %f %f \n", 
+  // "s1: %f %f %f \ns2: %f %f %f \ns3: %f %f %f \n",
   // raw[0], raw[1], raw[2],
   // raw[3], raw[4], raw[5],
   // raw[6], raw[7], raw[8]
   // );
-  float motion[6] = {};
-  float res_percent = c.motion.compute(raw, c.sensor.baseline(), dt, motion);
+  float motionOut[6] = {};
+  float res_percent = motion.compute(raw, sensor.baseline(), dt, motionOut);
 
-  if (c.motion.hasMotionActivity()) {
+  if (motion.hasMotionActivity()) {
     lastActivityMs_ = now;
   }
 
-  const uint16_t buttonBits = inputController.buttonBits();
-  const bool hidReportSent = hidController.sendReports(motion, buttonBits);
-  if (telemetryController.enabled()) {
+  const uint16_t buttonBits = inputController().buttonBits();
+  const bool hidReportSent = hidController().sendReports(motionOut, buttonBits);
+  TelemetryController& telemetry = telemetryController();
+  if (telemetry.enabled()) {
     // we have the raw field as raw
-    // we can get the pose from c.motion.last_pos and c.motion.last_rot
+    // we can get the pose from motion.last_pos and motion.last_rot
 
-    //auto eig_vals = c.motion.statistics.last_jacobian.jacobiSvd().singularValues();
+    //auto eig_vals = motion.statistics.last_jacobian.jacobiSvd().singularValues();
     float rcond = 1.0;
-    telemetryController.publish(
-      motion, res_percent, buttonBits, hidReportSent, c.motion.statistics, raw, c.motion.last_pos, c.motion.last_rot, rcond);
+    telemetry.publish(
+      motionOut, res_percent, buttonBits, hidReportSent, motion.statistics, raw, motion.last_pos, motion.last_rot, rcond);
   }
-} 
+}
 
 void IdleState::handleSleepTransition(unsigned long now) {
   const unsigned long inactiveMs = now - lastActivityMs_;
@@ -60,14 +62,15 @@ void IdleState::handleSleepTransition(unsigned long now) {
 }
 
 void IdleState::update() {
-  inputController.update();
+  InputController& input = inputController();
+  input.update();
 
   if (handleCalibrationRequest()) {
     return;
   }
 
   const unsigned long now = millis();
-  if (inputController.takeActivity()) {
+  if (input.takeActivity()) {
     lastActivityMs_ = now;
   }
 

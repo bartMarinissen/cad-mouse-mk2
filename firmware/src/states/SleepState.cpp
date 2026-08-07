@@ -7,13 +7,14 @@
 #include "StateMachine.h"
 
 void SleepState::enter() {
-  ledController.off();
+  ledController().off();
 }
 
 void SleepState::update() {
-  inputController.update();
+  InputController& input = inputController();
+  input.update();
 
-  if (inputController.takeActivity()) {
+  if (input.takeActivity()) {
     stateMachine.changeState(&StateMachine::idleState);
     return;
   }

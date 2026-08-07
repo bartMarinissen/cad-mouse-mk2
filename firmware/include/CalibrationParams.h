@@ -6,11 +6,10 @@
 // unit: the per-sensor correction that turns a raw reading into mT, and the
 // knob/magnet geometry the forward model solves against.
 //
-// This is constant for the lifetime of every controller that uses it. The
-// calibrated controllers are *constructed from* it and hold it const -- see
-// CalibratedControllers in Controllers.h -- rather than being reconfigured
-// later, so there is no window in which half the pipeline is running on one
-// calibration and half on another.
+// This is constant for the lifetime of every controller that uses it.
+// sensorController() and motionController() (Controllers.h) are each
+// *constructed from* it and hold it const, rather than being reconfigured
+// later, so nothing can drift onto a different calibration mid-flight.
 //
 // GAIN CONVENTION. The one genuinely subtle part, quoted from
 // magnet_field_model/calibration/export.py:

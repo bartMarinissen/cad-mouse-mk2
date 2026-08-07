@@ -43,7 +43,7 @@ to force fixed-size Eigen types only, no heap allocation anywhere in the hot pat
 `firmware/src/main.cpp` is the entry point. `setup()` brings up controllers in a
 fixed order (HID → serial → input → LED → sensors → motion → telemetry), then
 `stateMachine.changeState(&calibratingState)`. `loop()` just calls
-`hidController.task()` then `stateMachine.update()` — a classic non-blocking
+`hidController().task()` then `stateMachine.update()` — a classic non-blocking
 super-loop, no RTOS.
 
 ### State machine
@@ -212,9 +212,14 @@ fitted parameter set is one struct,
 [`CalibrationParams`](firmware/include/CalibrationParams.h). `SensorController`
 and `MotionController` are constructed from it and hold their
 calibration-derived state `const`, which is why they are no longer static-init
-globals — they live in `CalibratedControllers`, built once by `calibrated()`
-(see [`Controllers.h`](firmware/include/Controllers.h)). `resolveCalibration()`
-in `Controllers.cpp` is the single seam a flash loader plugs into; today it
+globals — each is reached through its own Meyers-singleton accessor,
+`sensorController()`/`motionController()`, built on first call from
+`resolveCalibration()` (see [`Controllers.h`](firmware/include/Controllers.h)).
+Every other controller is trivially default-constructible and has no such
+dependency, so it gets a plain accessor over a static-init global instead —
+same construction as before, just reached through a function for uniform call
+syntax across all seven controllers. `resolveCalibration()` in
+`Controllers.cpp` is the single seam a flash loader plugs into; today it
 returns `Config::defaultCalibration()`, reproducing the previously hardcoded
 values exactly.
 

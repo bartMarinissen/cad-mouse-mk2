@@ -33,9 +33,10 @@ that currently drives this calibration loop).
 Fixed as part of the `CalibrationParams` work. `MotionController` now owns a
 `const ForwardModel forward_model_` member, constructed from the
 `CalibrationParams` the controller was built with; `J`/`B_field` were dead and
-are deleted. `MotionController` and `SensorController` are grouped into
-`CalibratedControllers` (`firmware/include/Controllers.h`), built once by
-`calibrated()` from `resolveCalibration()` at a point `setup()` chooses — which
+are deleted. `MotionController` and `SensorController` are each reached
+through their own Meyers-singleton accessor, `motionController()` /
+`sensorController()` (`firmware/include/Controllers.h`), independently built
+on first call from `resolveCalibration()` at a point `setup()` chooses — which
 is what gives a flash-loaded calibration somewhere to land. The original
 description follows, for context.
 
@@ -78,6 +79,6 @@ sequentially.
 
 In the event #2 was resolved without touching #1. Giving the model an owner
 turned out not to require deciding who may call into the solver — the call in
-`updateCalibration()` just got re-spelled as `calibrated().motion.read_pose()`
+`updateCalibration()` just got re-spelled as `motionController().read_pose()`
 and is as coupled as it ever was. #1 remains open and still belongs with the
 tare redesign.
