@@ -1,36 +1,37 @@
 # TODO
 
-Tracked follow-ups from the architecture review in `../ARCHITECTURE.md`. One
-file per combined issue.
+This directory tracks non-trivial follow-up work: real architectural
+decisions or issues that don't belong in a code comment and don't fit in a
+single commit. Some files originated from the architecture review in
+`../ARCHITECTURE.md`; others get added independently as issues come up
+during development. Each file covers one self-contained issue, or a small
+cluster of tightly related issues.
 
-- [tare-and-calibration.md](tare-and-calibration.md) — replace boot
-  `CalibratingState` with a proper tare step (sanity checks, redoable via a
-  gesture); bundle calibration itself is separate and still undesigned.
-- [calibration-mode-entry.md](calibration-mode-entry.md) — the knob-side UX
-  for deliberately entering bundle calibration mode (currently entered by
-  accident via any button activity during boot tare).
-- [calibration-led-animations.md](calibration-led-animations.md) — the
-  per-phase LED ring animations bundle calibration wants but doesn't have yet
-  (`LEDController` only has solid/spinner/off).
-- [controller-ownership.md](controller-ownership.md) — `SensorController` /
-  `MotionController` circular coupling, and the forward model's state living
-  outside any controller.
-- [sensor-gain-calibration.md](sensor-gain-calibration.md) — move sensor
-  gain/skew correction into `SensorController`, out of the motion/solver
-  system entirely.
-- [telemetry-rework.md](telemetry-rework.md) — `rcond` stub +
-  `TelemetryController::publish()`'s ever-growing parameter list, as one
-  combined rework.
-- [readme-refresh.md](readme-refresh.md) — `firmware/README.md` still
-  documents the replaced motion heuristic.
-- [cross-magnet-interference.md](cross-magnet-interference.md) — modeling
-  each sensor's field contribution from the two magnets it isn't paired with,
-  via a cheap dipole approximation. Hopefully unnecessary — check the error
-  magnitude first.
-- [multicore.md](multicore.md) — empty, reserved.
-- [Performance.md](Performance.md) — `solve_pose` is taking ~10ms of the 20ms
-  50Hz budget; assembly-verified hypotheses on where the time goes (soft
-  float, Eigen not inlining, RAM/flash veneer hops), not yet a fix plan.
+This file intentionally isn't an index. File names are descriptive, and
+each file's own content is the source of truth — skim the directory listing
+to see what's open. A manually-synced one-line summary per file here would
+just be a second place that drifts out of date with no way to enforce it.
 
-Resolved without a TODO entry: the `solve_pose.cpp` Jacobian assignment bug
-(fixed), and the unwired `custom_memmap.ld`/`full_custom_memmap.ld` (removed).
+## Writing a TODO file
+
+- State the problem concretely: what's wrong, where in the code, and why it
+  matters — not just "this is inconsistent," but what actually breaks or
+  gets harder because of it.
+- Include a "likely fix shape" if you have one, but it doesn't need to be a
+  committed plan — just enough direction that whoever picks it up isn't
+  starting from zero.
+- Update a file in place as understanding deepens, rather than leaving it
+  stale (see `controller-ownership.md`'s "Problem 3" for an example — a
+  later investigation surfaced a related issue and it was added as a new
+  section instead of a separate file).
+- If a new problem turns out to be tightly coupled with an existing file's
+  topic, add a section there instead of creating a duplicate.
+
+## Resolving a TODO file
+
+- Delete the file once the work lands.
+- If the issue was also tracked in `../ARCHITECTURE.md`'s "Issues /
+  architecture drift" list, update that entry to say it's fixed instead of
+  leaving it pointing at a deleted file.
+- Trivial issues resolved without ever getting a TODO file don't need one
+  written retroactively just to close it out.
