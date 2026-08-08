@@ -38,9 +38,16 @@ class SerialController {
   const char* takeLine();
 
  private:
-  // "CAL_UPLOAD " + 624 hex characters + terminator is 636; the rest is
-  // margin so the largest real command is nowhere near the edge.
-  static constexpr size_t kMaxLine = 768;
+  // "CAL_UPLOAD " + 624 hex characters + terminator is 636, so the largest
+  // real command sits at about 62% of this.
+  static constexpr size_t kMaxLine = 1024;
+
+  // Bytes to take per tick. USB CDC's own receive buffer is far smaller, so
+  // in practice every pending byte is consumed each time; the cap only exists
+  // so a pathological flood cannot stretch one tick and stutter HID. Derived
+  // from kMaxLine rather than written out, so a complete upload keeps landing
+  // in a single tick if that ever changes.
+  static constexpr size_t kDrainBudget = kMaxLine * 2;
 
   // Two buffers on purpose. A completed line sits in line_ until someone
   // takes it, while bytes for the *next* line keep arriving into pending_.

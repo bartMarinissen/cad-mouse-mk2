@@ -2,14 +2,6 @@
 
 #include <string.h>
 
-namespace {
-// Bytes to take per tick. USB CDC's own receive buffer is far smaller than
-// this, so in practice every pending byte is consumed each time; the cap only
-// exists so a pathological flood cannot stretch one tick and stutter HID.
-// Two full lines' worth, so a complete upload still lands in a single tick.
-constexpr size_t kDrainBudget = 1536;
-}  // namespace
-
 void SerialController::begin() {
   Serial.begin(115200);
   // Carried over from the setup() this replaced: gives USB CDC a moment to
