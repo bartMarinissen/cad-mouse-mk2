@@ -262,13 +262,15 @@ what distinguishes the two.
 
 ## Still open
 
-- The `/calibration.bin` contract is checked, but indirectly.
-  `tests/test_export.py` compiles `format_cpp()`'s snippet against a copy of
-  the `CalibrationParams` declaration and diffs the resulting struct bytes
-  against `format_binary()`, which catches a field order or matrix
-  transposition that a CRC never would. The copy is the weak point: it mirrors
-  `firmware/include/CalibrationParams.h` by hand, so the two can still drift —
-  the test failing is the intended way to notice.
+- The `/calibration.bin` layout is no longer duplicated:
+  `calibration/firmware_struct.py` extracts the `CalibrationParams`
+  declaration straight out of `firmware/include/CalibrationParams.h` and hands
+  it to cffi, so `format_binary()` fills the struct by field *name* and the
+  order is only ever stated in the header. `tests/test_export.py` pins the
+  resulting offsets and compiles the same extracted declaration with g++ to
+  check cffi's ABI model against a real compiler. Both still only describe the
+  *host* — the firmware's own `static_assert`s are what pin the target, and
+  nothing here has run on hardware yet.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
   already here, and the firmware has the same chain rule in `sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination

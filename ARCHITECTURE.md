@@ -275,12 +275,20 @@ Two routes in, the same bytes either way:
   reboots, since the controllers hold their calibration `const` from boot and
   cannot adopt a new one in place.
 
+The host never restates that layout. `calibration/firmware_struct.py` extracts
+the `CalibrationParams` declaration from the header and feeds it to cffi in ABI
+mode (no compiler at runtime), so `format_binary()` fills the struct by field
+name and `sizeof` comes from the declaration rather than a literal. Field order
+therefore lives in exactly one place. This matters because a wrong order is
+silent: it still yields a valid blob with a valid CRC, and a *reordered* struct
+is even the same 300 bytes — so `tests/test_export.py` pins the field offsets,
+not just the size.
+
 `--emit-cpp` stays for reading and diffing the numbers, now as a nested-brace
 aggregate initializer — possible since the struct became plain data, and the
-reason `tests/test_export.py` can compile that snippet on the host and diff its
-bytes against `format_binary()`. That is the only check that both ends of the
-format actually agree; a wrong field order still produces a valid blob with a
-valid CRC.
+reason the same test can compile that snippet against the extracted
+declaration and diff its bytes against `format_binary()`, checking cffi's ABI
+model against a real compiler.
 
 **Storing is a decision, not the only exit.** Capture and fit never touch flash
 by themselves, and `CAL_ABORT` returns `BundleState` to idle without writing

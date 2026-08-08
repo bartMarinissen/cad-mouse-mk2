@@ -29,6 +29,13 @@ from calibration.export import (
     format_binary,
     format_cpp,
 )
+from calibration.firmware_struct import (
+    CALIBRATION_PARAMS_H,
+    FIELD_NAMES,
+    PAYLOAD_SIZE,
+    ffi,
+    struct_source,
+)
 from calibration.local_field import MAGNET_POLARIZATION_MT
 
 
@@ -257,20 +264,62 @@ def test_nominal_blob_is_pinned():
     assert zlib.crc32(blob) & 0xFFFFFFFF == 0x2144DF1C  # the residue, for contrast
 
 
-# --- The one test that checks both ends of the format against each other. ---
+# --- The layout, and the checks that both ends of it agree. ---
 
-# Mirrors firmware/include/CalibrationParams.h. If that struct changes, this
-# has to change with it, and the test failing is the intended way to find out.
-_CPP_STRUCT = """
-struct CalibrationParams {
-  float sensor_gain[3][3][3];
-  float sensor_offset_mT[3][3];
-  float magnet_pos_knob[3][3];
-  float magnet_rotation[3][3][3];
-  float magnet_strength_mT[3];
-};
-static_assert(sizeof(CalibrationParams) == 300, "payload size is the format");
-"""
+
+def test_struct_source_extracts_the_real_declaration():
+    """The layout is read out of the firmware header, so the extraction itself
+    is load-bearing. A header reformat that broke it into something still
+    parseable but wrong would silently change every blob this produces."""
+    assert CALIBRATION_PARAMS_H.is_file(), f"header not found at {CALIBRATION_PARAMS_H}"
+
+    source = struct_source()
+    assert source.startswith("struct CalibrationParams {")
+    assert source.rstrip().endswith("};")
+    assert "//" not in source, "comments should be stripped before reaching cdef"
+    for field in FIELD_NAMES:
+        assert field in source, f"{field} missing from the extracted declaration"
+
+
+def test_struct_source_refuses_a_header_without_the_struct(tmp_path):
+    """Failing loudly is the point - a silent fallback to a built-in copy would
+    reintroduce exactly the duplication this module removes."""
+    empty = tmp_path / "CalibrationParams.h"
+    empty.write_text("#pragma once\n// nothing here\n")
+    with pytest.raises(ValueError, match="no `struct CalibrationParams"):
+        struct_source(empty)
+
+    with pytest.raises(FileNotFoundError):
+        struct_source(tmp_path / "does_not_exist.h")
+
+
+def test_payload_layout_is_pinned():
+    """The offsets the format depends on. Inserting or reordering a field
+    changes these, and would otherwise only show up as a device that loads a
+    valid-CRC blob into the wrong values."""
+    assert PAYLOAD_SIZE == 300
+    assert FIELD_NAMES == (
+        "sensor_gain",
+        "sensor_offset_mT",
+        "magnet_pos_knob",
+        "magnet_rotation",
+        "magnet_strength_mT",
+    )
+    assert {name: ffi.offsetof("struct CalibrationParams", name) for name in FIELD_NAMES} == {
+        "sensor_gain": 0,
+        "sensor_offset_mT": 108,
+        "magnet_pos_knob": 144,
+        "magnet_rotation": 180,
+        "magnet_strength_mT": 288,
+    }
+
+
+# Appended to the extracted declaration so the compiler confirms the size the
+# format depends on, rather than the test asserting it separately.
+_CPP_SIZE_ASSERT = (
+    f'\nstatic_assert(sizeof(CalibrationParams) == {PAYLOAD_SIZE},'
+    ' "payload size is the format");\n'
+)
 
 _CPP_MAIN = """
 #include <cstdio>
@@ -293,6 +342,11 @@ def test_cpp_struct_layout_matches_the_blob_payload(tmp_path):
     C++ struct declares them - and a wrong order still produces a valid blob
     with a valid CRC that loads into plausible-looking garbage.
 
+    Both sides are now derived from the same header - Python's payload via
+    cffi, this program via struct_source() - so what is really being checked
+    is that cffi's ABI model agrees with a real compiler's. That is worth
+    checking, and it is why this test survives the move to cffi.
+
     Only possible because the struct is plain arrays: with Eigen members it
     would be neither trivially copyable nor host-compilable without Eigen.
     """
@@ -300,7 +354,7 @@ def test_cpp_struct_layout_matches_the_blob_payload(tmp_path):
     geom = BundleGeometry.from_shared(rng.normal(scale=0.02, size=N_SHARED_PARAMS))
 
     source = tmp_path / "layout.cpp"
-    source.write_text(_CPP_STRUCT + format_cpp(geom) + _CPP_MAIN)
+    source.write_text(struct_source() + _CPP_SIZE_ASSERT + format_cpp(geom) + _CPP_MAIN)
     binary = tmp_path / "layout"
 
     subprocess.run(
@@ -308,7 +362,10 @@ def test_cpp_struct_layout_matches_the_blob_payload(tmp_path):
         check=True, capture_output=True,
     )
     from_cpp = np.array(
-        struct.unpack("<75f", subprocess.run([str(binary)], check=True, capture_output=True).stdout)
+        struct.unpack(
+            f"<{BLOB_PAYLOAD_FLOATS}f",
+            subprocess.run([str(binary)], check=True, capture_output=True).stdout,
+        )
     )
 
     _, from_python, _ = _unpack_blob(format_binary(geom))

@@ -5,6 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    # Reads the firmware's CalibrationParams declaration and computes its
+    # layout, so the /calibration.bin field order is not restated in Python.
+    # ABI mode only - no compiler needed. See calibration/firmware_struct.py.
+    "cffi>=1.17",
     "ipykernel>=7.3.0",
     "jupyterlab>=4.6.2",
     "magpylib>=5.2.3",
