@@ -35,6 +35,11 @@ public:
     // Call this when a complete line is received over Serial
     void handle_serial_command(const char* cmd);
 
+    // Begin a run from the first step. Called by BundleState::enter(), since
+    // the CAL_START that got us there was consumed by CalibratingState, and
+    // by handle_serial_command() when CAL_START arrives once already running.
+    void start();
+
     bool is_active() const { return current_phase != CalibPhase::IDLE; }
     bool is_done() const { return current_step == CalibStep::COMPLETE; }
 

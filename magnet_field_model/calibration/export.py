@@ -32,6 +32,9 @@ firmware_magnet_strength_mT() for turning that back into a real mT value.
 
 from __future__ import annotations
 
+import struct
+import zlib
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -42,6 +45,16 @@ from .bundle_geometry import (
     BundleGeometry,
 )
 from .local_field import MAGNET_POLARIZATION_MT
+
+# --- /calibration.bin wire format. Mirrors firmware/include/CalibrationStorage.h. ---
+#
+# Change nothing here without changing that header to match: these are the two
+# ends of one contract, and there is no compiler that can check it for us. The
+# pinned-CRC test in tests/test_export.py is the closest thing to an alarm.
+BLOB_MAGIC = b"CMK2"
+BLOB_VERSION = 1
+BLOB_PAYLOAD_FLOATS = 75
+BLOB_SIZE = 312
 
 
 def firmware_sensor_gain(geometry: BundleGeometry) -> NDArray[np.float64]:
@@ -149,3 +162,64 @@ def format_cpp(geometry: BundleGeometry) -> str:
     lines.append("  return cal;")
     lines.append("}")
     return "\n".join(lines)
+
+
+def format_binary(geometry: BundleGeometry) -> bytes:
+    """The 312-byte /calibration.bin blob: the same numbers format_cpp() prints as text.
+
+    Layout, little-endian throughout (native for both the RP2040 and any host
+    that runs this), matching firmware/include/CalibrationStorage.h:
+
+        offset  size  field
+        0       4     magic, b"CMK2"
+        4       4     version, uint32
+        8       300   payload, 75 x float32
+        308     4     crc32 over bytes [0, 308)
+
+    Payload order is sensor_gain, sensor_offset_mT, magnet_pos_knob,
+    magnet_rotation, magnet_strength_mT - three of each, matrices ROW-major.
+    Row-major is the point: it makes this side a plain .ravel(), and keeps the
+    format from encoding the fact that Eigen happens to store Matrix3f
+    column-major. The firmware writes through coefficient accessors for the
+    same reason.
+
+    The CRC is stdlib zlib.crc32, which is the standard reflected IEEE 802.3
+    CRC-32 the firmware reimplements bitwise. Both ends have to agree exactly,
+    so neither gets to be clever about it.
+
+    Two routes carry these bytes: written to firmware/data/calibration.bin they
+    become a LittleFS image for `pio run -t uploadfs`; hex-encoded onto one
+    line they become the CAL_UPLOAD serial command. Identical either way.
+    """
+    gain = firmware_sensor_gain(geometry)
+    offset = firmware_sensor_offset(geometry)
+    strength_mt = firmware_magnet_strength_mT(geometry)
+    pos = geometry.magnet_pos_knob
+    rot = geometry.magnet_rotation.as_matrix()
+
+    # .ravel() is C-order, i.e. row-major, and for the (3, 3, 3) arrays that
+    # means magnet-major then row then column - exactly the firmware's
+    # serialize() loop nesting.
+    values = np.concatenate([
+        np.asarray(gain, dtype=np.float64).ravel(),
+        np.asarray(offset, dtype=np.float64).ravel(),
+        np.asarray(pos, dtype=np.float64).ravel(),
+        np.asarray(rot, dtype=np.float64).ravel(),
+        np.asarray(strength_mt, dtype=np.float64).ravel(),
+    ])
+
+    if values.size != BLOB_PAYLOAD_FLOATS:
+        raise ValueError(
+            f"expected {BLOB_PAYLOAD_FLOATS} payload floats, built {values.size} - "
+            "the geometry does not have the shape this format assumes"
+        )
+
+    body = (
+        BLOB_MAGIC
+        + struct.pack("<I", BLOB_VERSION)
+        + struct.pack(f"<{BLOB_PAYLOAD_FLOATS}f", *values)
+    )
+    blob = body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    assert len(blob) == BLOB_SIZE, f"blob is {len(blob)} bytes, expected {BLOB_SIZE}"
+    return blob

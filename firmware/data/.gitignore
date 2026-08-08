@@ -1,0 +1,5 @@
+# The fitted calibration blob is generated per physical unit, by
+# `bundle_callibration.py --emit-bin`. Committing one would ship a single
+# device's calibration to every checkout, and it is a build input rather than
+# source. See README.md in this directory.
+calibration.bin

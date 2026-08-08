@@ -22,12 +22,16 @@ void BundleCalibrationController::change_phase(CalibPhase new_phase) {
     Serial.printf("CAL_STATE %d %d\n", (int)current_step, (int)current_phase);
 }
 
+void BundleCalibrationController::start() {
+    Serial.println("STARTING_CAL");
+    current_step = CalibStep::STATIONARY;
+    change_phase(CalibPhase::WAIT_FOR_START_BTN);
+}
+
 void BundleCalibrationController::handle_serial_command(const char* cmd) {
     if (strncmp(cmd, "CAL_START", 9) == 0) {
-        Serial.println("STARTING_CAL");
-        current_step = CalibStep::STATIONARY;
-        change_phase(CalibPhase::WAIT_FOR_START_BTN);
-    } 
+        start();
+    }
     else if (strncmp(cmd, "CAL_ACK", 7) == 0) {
         if (current_phase == CalibPhase::WAIT_FOR_ACK) {
             acked_samples = atoi(cmd + 8);

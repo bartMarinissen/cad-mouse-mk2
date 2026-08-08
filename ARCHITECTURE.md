@@ -42,9 +42,15 @@ to force fixed-size Eigen types only, no heap allocation anywhere in the hot pat
 
 `firmware/src/main.cpp` is the entry point. `setup()` brings up controllers in a
 fixed order (HID → serial → input → LED → sensors → motion → telemetry), then
-`stateMachine.changeState(&calibratingState)`. `loop()` just calls
-`hidController().task()` then `stateMachine.update()` — a classic non-blocking
+`stateMachine.changeState(&calibratingState)`. `loop()` calls
+`hidController().task()`, then `serialController().update()` to assemble any
+incoming serial line, then `stateMachine.update()` — a classic non-blocking
 super-loop, no RTOS.
+
+`Serial.begin()` happens unconditionally in `serialController().begin()`, not
+gated on `Config::ENABLE_TELEMETRY` as it once was: the link now carries the
+calibration protocol as well as telemetry. `TelemetryController` still decides
+for itself whether to *print*.
 
 ### State machine
 
@@ -57,10 +63,15 @@ super-loop, no RTOS.
 
 States, all in `firmware/{include,src}/states/`:
 
-- **CalibratingState** — runs at boot. Drives `SensorController::updateCalibration()`
-  for `Config::ZERO_SAMPLES` (200) samples to compute a baseline field offset and
-  a baseline pose, then hands off to `IdleState`.
-  ⚠️ Slated for replacement by a "tare" step — see
+- **CalibratingState** — the tare step. Runs at boot and on the both-buttons-3s
+  gesture from `IdleState`. Drives `SensorController::updateCalibration()` for
+  `Config::ZERO_SAMPLES` (200) samples to compute a baseline field offset and a
+  baseline pose, then hands off to `IdleState`. Also the *only* place serial
+  commands are accepted: it announces `STATUS TARE_BEGIN` on entry, then honours
+  `CAL_START` (enter `BundleState`) and `CAL_UPLOAD` (store a new calibration)
+  for the ~1.7s the tare lasts. Scoping both to a user-triggered window means
+  neither can happen without someone physically holding the buttons.
+  ⚠️ Still slated for replacement by a fuller "tare" step — see
   [`TODO/tare-and-calibration.md`](TODO/tare-and-calibration.md).
 - **IdleState** — the main operating state. Reads sensors → runs the pose solve →
   maps to HID axes → sends HID report → publishes telemetry → watches for the
@@ -68,15 +79,17 @@ States, all in `firmware/{include,src}/states/`:
 - **SleepState** — LEDs off, waits for any button activity to return to `IdleState`.
 - **ErrorState** — entered if `SensorController::begin()` fails at boot. LED
   spinner in red, otherwise inert (no recovery path).
-- **BundleState** *(new, uncommitted)* — hosts the serial-driven multi-step
-  hardware calibration routine (see "Calibration subsystem" below).
+- **BundleState** — hosts the serial-driven multi-step hardware calibration
+  routine (see "Calibration subsystem" below). Entered only from
+  `CalibratingState` on `CAL_START`; `enter()` kicks the run off directly,
+  since the command that got it there was already consumed.
 
-### Controllers (global singletons, DI via `extern` in `Controllers.h`)
+### Controllers (global singletons, reached through accessors in `Controllers.h`)
 
-Declared in [`firmware/include/Controllers.h`](firmware/include/Controllers.h),
-defined as globals in `main.cpp`. This is the project's entire DI mechanism —
+Declared in [`firmware/include/Controllers.h`](firmware/include/Controllers.h)
+and defined in `Controllers.cpp`. This is the project's entire DI mechanism —
 there is no container, no interfaces, states and controllers reach each other
-via these externs directly.
+through these accessors directly.
 
 | Controller | File | Responsibility |
 |---|---|---|
@@ -86,7 +99,8 @@ via these externs directly.
 | `MotionController` | `controllers/MotionController.*` | The pose pipeline: raw field → solved pose → filtered/mapped HID axes (detail below) |
 | `HIDController` | `controllers/HIDController.*` | Owns the USB HID descriptor + report state, dedupes unchanged reports before sending |
 | `TelemetryController` | `controllers/TelemetryController.*` | Formats a big fixed-layout ASCII dashboard to Serial every 20 ticks when `Config::ENABLE_TELEMETRY` |
-| `BundleCalibrationController` | `controllers/BundleCalibrationController.*` | *(new)* Serial-driven state machine for the guided hardware calibration capture |
+| `BundleCalibrationController` | `controllers/BundleCalibrationController.*` | Serial-driven state machine for the guided hardware calibration capture |
+| `SerialController` | `controllers/SerialController.*` | Assembles incoming bytes into whole lines without blocking; `takeLine()` hands the active state one line per tick. Transport only — command meaning stays with the caller, and outbound prints still go to `Serial` directly |
 
 ## The pose pipeline (the core of the project)
 
@@ -180,7 +194,7 @@ streams `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 [`bundle_callibration.py`](magnet_field_model/bundle_callibration.py), which
 ACKs frame counts back over the same link.
 
-**Status: capture and fit both work; the result has nowhere to go.** The
+**Status: capture, fit, and delivery all work.** The
 Python side fits 54 shared parameters (per-magnet position, tilt and strength;
 per-sensor gain matrix and DC offset) jointly with one free 6-DOF pose per
 captured frame, and takes the field residual from ~1.8% at nominal geometry
@@ -202,26 +216,56 @@ Two things are worth knowing before touching it:
   magnet strength carrying the scale. The reported strengths are an
   attribution, not a measurement — the fit's information-gain column says so.
 
-There is still no path for calibration *results* to reach the firmware
-automatically: no flash/EEPROM write anywhere in this firmware, so
-`bundle_callibration.py --emit-cpp` prints a pasteable C++ snippet and that is
-as far as it goes.
+### Persistence
 
-What changed is that there is now somewhere for a result to *land*. The whole
-fitted parameter set is one struct,
-[`CalibrationParams`](firmware/include/CalibrationParams.h). `SensorController`
-and `MotionController` are constructed from it and hold their
-calibration-derived state `const`, which is why they are no longer static-init
-globals — each is reached through its own Meyers-singleton accessor,
-`sensorController()`/`motionController()`, built on first call from
+Fitted calibrations reach the firmware on their own now. The whole fitted
+parameter set is one struct,
+[`CalibrationParams`](firmware/include/CalibrationParams.h), and
+[`CalibrationStorage`](firmware/include/CalibrationStorage.h) persists it to
+LittleFS as `/calibration.bin`: 312 bytes of `CMK2` magic, a version, 75
+little-endian float32s, and a CRC-32 over everything before it. Matrices are
+stored **row-major** and written through Eigen coefficient accessors, so the
+format does not encode the fact that `Matrix3f` is column-major internally and
+the Python side stays a plain `.ravel()`. `board_build.filesystem_size` in
+`platformio.ini` carves out the partition — without it the filesystem is 0MB
+and nothing mounts.
+
+`SensorController` and `MotionController` are constructed from that struct and
+hold their calibration-derived state `const`, which is why they are no longer
+static-init globals — each is reached through its own Meyers-singleton
+accessor, `sensorController()`/`motionController()`, built on first call from
 `resolveCalibration()` (see [`Controllers.h`](firmware/include/Controllers.h)).
 Every other controller is trivially default-constructible and has no such
 dependency, so it gets a plain accessor over a static-init global instead —
 same construction as before, just reached through a function for uniform call
-syntax across all seven controllers. `resolveCalibration()` in
-`Controllers.cpp` is the single seam a flash loader plugs into; today it
-returns `Config::defaultCalibration()`, reproducing the previously hardcoded
-values exactly.
+syntax across all eight controllers. `resolveCalibration()` in
+`Controllers.cpp` reads and validates the stored blob, falling back to
+`Config::defaultCalibration()` — and printing which check failed — whenever
+there is nothing stored or what is stored does not survive.
+
+Validation is deliberately all-or-nothing, and that follows from the gauge
+note above: `sensor_gain` and `magnet_strength_mT` are the same degree of
+freedom under `det(G) = 1`, so a blob is accepted whole or rejected whole.
+Nothing repairs or defaults an individual field while keeping the rest, which
+would silently manufacture a mixed-gauge calibration worse than either input.
+Past the CRC the checks are loose corruption tripwires — finite floats,
+non-singular gain, sane magnitudes — sized to admit both that gauge and
+`defaultCalibration()`'s different gain-carries-scale one. Magnet strength is
+bounded on magnitude only: a reversed-polarity magnet legitimately fits to a
+negative `Br`, and `MagnetModel` handles the sign correctly.
+
+Two routes in, the same bytes either way:
+
+- **`bundle_callibration.py --emit-bin`** writes the blob into `firmware/data/`;
+  `pio run -t uploadfs` flashes it as a filesystem image.
+- **`bundle_callibration.py --write-serial`** pushes it to a running device as
+  one hex-encoded `CAL_UPLOAD` line. Hex rather than raw binary so it rides the
+  same newline-delimited convention as everything else on this link — raw bytes
+  would contain `0x0A` and truncate the read. The device validates, stores, and
+  reboots, since the controllers hold their calibration `const` from boot and
+  cannot adopt a new one in place.
+
+`--emit-cpp` stays for reading and diffing the numbers.
 
 Two caveats on the exported numbers:
 

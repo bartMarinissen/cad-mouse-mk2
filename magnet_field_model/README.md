@@ -262,20 +262,20 @@ what distinguishes the two.
 
 ## Still open
 
-- No persistence path into the firmware. There is no flash/EEPROM storage
-  anywhere in this firmware yet, so `--emit-cpp` printing a pasteable snippet
-  is as far as a result can travel.
-- The firmware has no per-magnet strength multiplier, so the fitted strengths
-  cannot be consumed as-is — `MagnetModel::evaluate` would need to scale its
-  result. `--emit-cpp` emits them with that caveat attached.
+- Nothing checks the two ends of the `/calibration.bin` format against each
+  other. `calibration/export.py`'s `format_binary()` and the firmware's
+  `CalibrationStorage` have to agree byte for byte, and the only thing
+  guarding that is the pinned-CRC test in `tests/test_export.py` plus reading
+  both carefully. A C++ side that could run under pytest would be better.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
   already here, and the firmware has the same chain rule in `sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination
   driving the actual solve (not just the reporting-only covariance
   `covariance_shared` computes today via a plain dense inverse, which is
   simpler at this problem's desktop-scale size but not embedded-friendly) —
-  see git history for a prior implementation of that reduction — plus the
-  persistence layer above.
+  see git history for a prior implementation of that reduction. The storage
+  half of that is done: a result fitted on the knob would have somewhere to
+  land, via `CalibrationStorage`.
 - Magnet strength stays weakly determined (~7% information gain). Scaling a
   magnet and moving it closer both scale |B|; only the shape of |B| versus
   distance separates them, and HEAVE supplies ~3mm of travel to do it with.

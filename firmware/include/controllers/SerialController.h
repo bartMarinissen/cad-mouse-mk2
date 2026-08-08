@@ -1,0 +1,58 @@
+#pragma once
+
+#include <Arduino.h>
+
+// Turns the incoming serial byte stream into whole lines, without blocking.
+//
+// Transport only. What a line *means* stays with whoever owns the command --
+// the same split BundleCalibrationController already assumes, since
+// handle_serial_command() takes an already-extracted line and never touches
+// Serial itself.
+//
+// This replaces the Serial.readBytesUntil('\n', ...) that used to live in
+// BundleState::update(). That call blocks until the delimiter arrives or
+// Stream's 1000ms timeout expires, which was survivable for a short "CAL_ACK
+// 60" but is not for a ~640 character calibration upload: those take ~55ms to
+// arrive at 115200 baud, and stalling the ~120Hz loop that long would stutter
+// HID. Here each update() takes only the bytes already buffered and returns.
+//
+// Output is deliberately not routed through this class. Telemetry,
+// SensorController and the bundle protocol keep printing to Serial directly;
+// there is no contention to arbitrate, and wrapping writes would be churn for
+// its own sake.
+class SerialController {
+ public:
+  void begin();
+
+  // Drain whatever has arrived and assemble it into lines. Called once per
+  // loop() from main.cpp, before the state machine runs, so whichever state
+  // is active sees a line on the same tick it completed.
+  void update();
+
+  // The most recently completed line, or nullptr if none is waiting.
+  // Consuming it clears it.
+  //
+  // The returned pointer is only valid until the next update(), which is to
+  // say until the end of the current tick. Anything that needs to outlive
+  // that has to copy it.
+  const char* takeLine();
+
+ private:
+  // "CAL_UPLOAD " + 624 hex characters + terminator is 636; the rest is
+  // margin so the largest real command is nowhere near the edge.
+  static constexpr size_t kMaxLine = 768;
+
+  // Two buffers on purpose. A completed line sits in line_ until someone
+  // takes it, while bytes for the *next* line keep arriving into pending_.
+  // Sharing one buffer would let an in-flight line overwrite a completed one
+  // before its state got a chance to read it.
+  char pending_[kMaxLine];
+  size_t pendingLen_ = 0;
+  char line_[kMaxLine];
+  bool ready_ = false;
+
+  // Set when a line outgrows the buffer. The rest of that line is discarded
+  // through its newline rather than silently truncated into a command that
+  // looks valid -- the old 128-byte read had no way to tell the difference.
+  bool overflow_ = false;
+};

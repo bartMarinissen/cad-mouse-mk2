@@ -34,12 +34,22 @@ from calibration.calibration_algorithm import (
     BundleCalibrationResult,
     run_bundle_calibration,
 )
-from calibration.export import format_cpp
+from calibration.export import format_binary, format_cpp
 from calibration.parameterization import BLOCKS, GROUP_SLICES
 from calibration.protocol import CalibStep
 from calibration.serial_link import SerialLink, list_available_ports
 
 DEFAULT_BAUDRATE = 921600
+
+# Where --emit-bin writes by default: PlatformIO's data_dir, so the blob is
+# already in place for `pio run -t uploadfs`.
+DEFAULT_BIN_PATH = Path(__file__).parent.parent / "firmware" / "data" / "calibration.bin"
+
+# The upload is only accepted during a tare, which the user triggers by hand,
+# so this waits about as long as someone needs to pick the knob up and hold
+# both buttons.
+TARE_WAIT_SECONDS = 120.0
+UPLOAD_RESPONSE_SECONDS = 5.0
 
 # Where the real calibration result gets output/stored is still undecided
 # (see the TODO in main()). This is just a raw dump of the collected
@@ -186,6 +196,71 @@ def _pick_port(console: Console) -> str:
     return ports[choice].device
 
 
+def _write_calibration_over_serial(
+    console: Console, port: str, baud: int, blob: bytes
+) -> None:
+    """Push a fitted calibration to a running device and let it reboot into it.
+
+    The firmware only accepts CAL_UPLOAD during a tare, which is a deliberate
+    choice rather than an obstacle: it means nothing can rewrite a device's
+    calibration without someone physically holding the buttons. The tare window
+    is short (~1.7s), so rather than guess at the timing we wait for the
+    device to announce STATUS TARE_BEGIN and answer immediately.
+    """
+    link = SerialLink(port, baud)
+    try:
+        link.open()
+    except Exception as e:
+        console.print(f"[red]Failed to open {port}: {e}[/]")
+        raise SystemExit(1) from e
+
+    try:
+        console.print(
+            "\n[bold]Waiting for a tare window.[/] Hold both buttons on the knob for "
+            "~3 seconds - the device announces STATUS TARE_BEGIN when it is ready."
+        )
+
+        deadline = time.monotonic() + TARE_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            line = link.readline()
+            if line is not None and line.strip() == "STATUS TARE_BEGIN":
+                break
+        else:
+            console.print("[red]Timed out waiting for STATUS TARE_BEGIN.[/]")
+            raise SystemExit(1)
+
+        link.send(f"CAL_UPLOAD {blob.hex()}")
+
+        deadline = time.monotonic() + UPLOAD_RESPONSE_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                line = link.readline()
+            except Exception:
+                # The device reboots immediately after acknowledging, so the
+                # port vanishing mid-read is the expected ending, not a fault.
+                break
+            if line is None:
+                continue
+            line = line.strip()
+            if line == "CAL_UPLOAD_OK":
+                console.print(
+                    "[green]Calibration stored.[/] The device is rebooting to apply it - "
+                    "the serial port will drop and come back."
+                )
+                return
+            if line.startswith("CAL_UPLOAD_ERR"):
+                console.print(f"[red]Device rejected the calibration:[/] {line}")
+                raise SystemExit(1)
+
+        console.print("[yellow]No response from the device.[/]")
+        raise SystemExit(1)
+    finally:
+        try:
+            link.close()
+        except Exception:
+            pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bundle calibration data collector")
     parser.add_argument("--port", help="Serial port (e.g. COM4). Prompts interactively if omitted.")
@@ -213,15 +288,47 @@ def main() -> None:
         action="store_true",
         help="Also print a pasteable C++ snippet of the fitted constants.",
     )
+    parser.add_argument(
+        "--emit-bin",
+        type=Path,
+        nargs="?",
+        const=DEFAULT_BIN_PATH,
+        default=None,
+        metavar="PATH",
+        help=f"Also write the fitted constants as a binary calibration blob "
+             f"(default {DEFAULT_BIN_PATH}), ready for `pio run -t uploadfs`.",
+    )
+    parser.add_argument(
+        "--write-serial",
+        action="store_true",
+        help="Also push the fitted constants straight to a connected device. "
+             "Prompts you to trigger a tare, then sends the same bytes --emit-bin "
+             "writes; the device validates, stores and reboots into them.",
+    )
     args = parser.parse_args()
 
     console = Console()
 
-    def report(result: BundleCalibrationResult) -> None:
+    def report(result: BundleCalibrationResult, port: str | None = None) -> None:
         _print_calibration_summary(console, result)
         if args.emit_cpp:
             console.print("\n[bold]Firmware constants[/]")
             console.print(format_cpp(result.geometry))
+
+        if args.emit_bin is not None:
+            blob = format_binary(result.geometry)
+            args.emit_bin.parent.mkdir(parents=True, exist_ok=True)
+            args.emit_bin.write_bytes(blob)
+            console.print(f"\nWrote {len(blob)} byte calibration blob to {args.emit_bin}")
+            console.print("[grey50]Flash it with: pio run -t uploadfs[/]")
+
+        if args.write_serial:
+            _write_calibration_over_serial(
+                console,
+                port or args.port or _pick_port(console),
+                args.baud,
+                format_binary(result.geometry),
+            )
 
     if args.replay:
         report(run_bundle_calibration(_load_raw_datasets(args.replay), n_frames=args.frames))
@@ -251,10 +358,11 @@ def main() -> None:
         console.print("[yellow]Calibration aborted before all steps completed.[/]")
         raise SystemExit(1)
 
-    report(run_bundle_calibration(session.datasets, n_frames=args.frames))
-    # NOTE: there is still no persistence path into the firmware - this
-    # firmware has no flash/EEPROM storage of any kind yet - so --emit-cpp
-    # printing a pasteable snippet is as far as the result can travel today.
+    # The device stores a calibration on LittleFS now, so a fit can actually
+    # land on hardware: --write-serial pushes it over this same port, or
+    # --emit-bin writes the blob for `pio run -t uploadfs`. --emit-cpp stays
+    # for reading and diffing the numbers.
+    report(run_bundle_calibration(session.datasets, n_frames=args.frames), port=port)
 
 
 if __name__ == "__main__":
