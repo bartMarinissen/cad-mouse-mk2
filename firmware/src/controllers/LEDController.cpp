@@ -1,13 +1,12 @@
 #include "controllers/LEDController.h"
 
-#include <new>
 #include <utility>
 
 #include "Config.h"
 
 LEDController::LEDController()
-    : ring_(Config::LED_COUNT, Config::PIN_LED_DATA,
-            NEO_GRB + NEO_KHZ800) {}
+    : ring_(Config::LED_COUNT, Config::PIN_LED_DATA, NEO_GRB + NEO_KHZ800),
+      active_(OffAnimation(ring_)) {}
 
 void LEDController::begin() {
   pinMode(Config::PIN_LED_LS, OUTPUT);
@@ -31,39 +30,16 @@ void LEDController::setPower(bool enabled) {
 }
 
 void LEDController::activate() {
-  AnimationBase* anim = active_.pointer();
-  if (anim->wantsPower()) {
+  const bool wantsPower = std::visit([](auto& anim) { return anim.wantsPower(); }, active_);
+  if (wantsPower) {
     setPower(true);
-    anim->update();
+    std::visit([](auto& anim) { anim.update(); }, active_);
   } else {
-    anim->update();
+    std::visit([](auto& anim) { anim.update(); }, active_);
     setPower(false);
   }
 }
 
-void LEDController::set(SolidAnimation animation) {
-  active_.destroy();
-  new (&active_.storage.solid) SolidAnimation(std::move(animation));
-  active_.kind = AnimationKind::Solid;
-  activate();
-}
-
-void LEDController::set(SpinnerAnimation animation) {
-  active_.destroy();
-  new (&active_.storage.spinner) SpinnerAnimation(std::move(animation));
-  active_.kind = AnimationKind::Spinner;
-  activate();
-}
-
-void LEDController::set(OffAnimation animation) {
-  active_.destroy();
-  new (&active_.storage.off) OffAnimation(std::move(animation));
-  active_.kind = AnimationKind::Off;
-  activate();
-}
-
 void LEDController::update() {
-  if (AnimationBase* anim = active_.pointer()) {
-    anim->update();
-  }
+  std::visit([](auto& anim) { anim.update(); }, active_);
 }

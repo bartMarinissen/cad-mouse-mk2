@@ -3,62 +3,31 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 
+#include <utility>
+#include <variant>
+
 #include "animations/Animations.h"
 
-enum class AnimationKind { None, Solid, Spinner, Off };
-
-union AnimationUnion {
-  AnimationUnion() {}
-  ~AnimationUnion() {}
-  SolidAnimation solid;
-  SpinnerAnimation spinner;
-  OffAnimation off;
-};
-
-struct AnimationSlot {
-  AnimationKind kind = AnimationKind::None;
-  AnimationUnion storage;
-
-  AnimationBase* pointer() {
-    switch (kind) {
-      case AnimationKind::Solid:
-        return &storage.solid;
-      case AnimationKind::Spinner:
-        return &storage.spinner;
-      case AnimationKind::Off:
-        return &storage.off;
-      case AnimationKind::None:
-        return nullptr;
-    }
-    return nullptr;
-  }
-
-  void destroy() {
-    switch (kind) {
-      case AnimationKind::Solid:
-        storage.solid.~SolidAnimation();
-        break;
-      case AnimationKind::Spinner:
-        storage.spinner.~SpinnerAnimation();
-        break;
-      case AnimationKind::Off:
-        storage.off.~OffAnimation();
-        break;
-      case AnimationKind::None:
-        break;
-    }
-    kind = AnimationKind::None;
-  }
-};
+using Animation = std::variant<SolidAnimation, SpinnerAnimation, OffAnimation>;
 
 class LEDController {
  public:
   LEDController();
   void begin();
   Adafruit_NeoPixel& ring();
-  void set(SolidAnimation animation);
-  void set(SpinnerAnimation animation);
-  void set(OffAnimation animation);
+
+  // A template rather than an Animation-typed parameter: AnimationBase holds
+  // a reference member, which makes SolidAnimation/SpinnerAnimation/OffAnimation
+  // move-constructible but not move-assignable, so std::variant's operator=
+  // is implicitly deleted for Animation. emplace<T>() only needs
+  // constructibility (destroy the old alternative, construct the new one in
+  // place), which sidesteps that.
+  template <typename T>
+  void set(T animation) {
+    active_.emplace<T>(std::move(animation));
+    activate();
+  }
+
   void update();
 
  private:
@@ -66,6 +35,6 @@ class LEDController {
   void setPower(bool enabled);
 
   bool isPowered_ = false;
-  AnimationSlot active_;
   Adafruit_NeoPixel ring_;
+  Animation active_;
 };
