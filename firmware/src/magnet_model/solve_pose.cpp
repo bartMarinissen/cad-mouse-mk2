@@ -18,10 +18,14 @@ float __not_in_flash_func(solve_knob_pose)(
     const int MAX_ITER = 10;
     const float TOLERANCE = 3e-3f; // Stop if the update step is smaller than this
     
-    // TODO don't even allocate these if we were passed non-null residual_out / Jacobian_out.
-    //      instead, in that case, pass in those pointers directly
-    Vector9f residual;        
-    Matrix9x6f jacobian;      
+    // Work directly in the caller's buffers whenever it supplied them. With
+    // Config::statistics enabled MotionController passes both on every call, so
+    // the copy that used to happen at the end of this function was live -- 63
+    // floats per solve -- rather than the exception.
+    Vector9f   residual_local;
+    Matrix9x6f jacobian_local;
+    Vector9f   &residual = (residual_out != nullptr) ? *residual_out : residual_local;
+    Matrix9x6f &jacobian = (Jacobian_out != nullptr) ? *Jacobian_out : jacobian_local;
 
     for (int iter = 0; iter < MAX_ITER; ++iter) {
         // 1. Evaluate forward model (assuming it populates predicted fields)
@@ -30,8 +34,20 @@ float __not_in_flash_func(solve_knob_pose)(
         residual.block<3, 1>(3, 0) -= measured_fields[1];
         residual.block<3, 1>(6, 0) -= measured_fields[2];
 
-        // 2. Construct Damped Normal Equations (Levenberg-Marquardt)
-        Matrix6x6f H = jacobian.transpose() * jacobian;
+        // 2. Construct Damped Normal Equations (Levenberg-Marquardt).
+        // H = J^T J is symmetric, so only its lower triangle is worth computing:
+        // 21 dot products of length 9 instead of a full 36-entry product, which
+        // saves ~135 multiplies and ~120 adds per iteration. The upper triangle
+        // is mirrored in so H stays a well-formed symmetric matrix for whatever
+        // reads it next.
+        Matrix6x6f H;
+        for (int i = 0; i < 6; ++i) {
+            for (int j = 0; j <= i; ++j) {
+                const float h = jacobian.col(i).dot(jacobian.col(j));
+                H(i, j) = h;
+                H(j, i) = h;
+            }
+        }
         const float LAMBDA = 0.02f;
         H.diagonal().array() += LAMBDA;
         Vector6f g = -jacobian.transpose() * residual;
@@ -69,10 +85,8 @@ float __not_in_flash_func(solve_knob_pose)(
             R = (dR * R).eval();
         }
     }
-    if (residual_out != nullptr)
-        *residual_out = residual;
-    if (Jacobian_out != nullptr)
-        *Jacobian_out = jacobian;
+    // No copy-out needed: when the caller supplied buffers, the loop above has
+    // been writing straight into them.
     // TODO check jacobian well-formedness
     // TODO deal with residual
     return residual.norm();

@@ -23,6 +23,15 @@ struct MagnetModel {
     // sensor cannot then undo three different magnet strengths.
     const float magnet_strength_mT;
 
+    // magnet_rotation^T * magnet_pos_knob, precomputed.
+    //
+    // Math.md 3.2 writes the sensor position in the magnet-local frame as
+    //   v_l = R_total^T (s - t) - R_mag^T m
+    // where the second term depends only on frozen calibration constants. Doing
+    // it that way lets Sensor::evaluate subtract a constant vector instead of
+    // performing a second 3x3 rotation on every call.
+    const Vec3 magnet_offset_local;
+
     // We assume BicubicField is passed by reference to avoid copying the grid
     MagnetModel(const BicubicField& field_model, const Vec3& m_local,
                 const Mat3 &magnet_rotation = Mat3::Identity(),

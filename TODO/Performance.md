@@ -275,6 +275,71 @@ above once this lands, and updating the `MagnetModel`/`Sensor`/`ForwardModel`/
 `solve_knob_pose` rows in the operation tally, which all currently still
 reflect the old `BicubicField::evaluate` cost.
 
+## Third optimization pass: solver algebra, hot start, instrumentation
+
+Non-interpolation work. Every change below is verified equivalent, not just
+"passing": a host harness built Eigen 3.4 against both the pre- and post-change
+trees and compared the forward model and end-to-end solves at five poses. Max
+differences were **1.2e-6 (field), 3.1e-6 (Jacobian), 2.9e-6 mm (solved
+translation), 2.4e-7 (solved rotation)** — float32 round-off. `test_jacobian.cpp`
+also passes on the host, 384/384 grid points.
+
+**Correction to the tally above:** it undercounts `solve_knob_pose`'s own cost.
+Counts were taken by following `bl` targets, but an Eigen kernel entered once
+loops internally — `H = JᵀJ` alone is ~612 flops, not the ~150 implied. A
+recounted iteration is roughly 2970 flops: 3 × ~610 for the sensor chain, ~1140
+for the normal equations.
+
+- **`micros()` instead of `millis()`** for the solve timer. At ~7.5ms per call
+  the millisecond clock quantised at ±13%, coarser than most changes worth
+  measuring. `Statistics::time_tot`/`n_time` are `uint32_t` (a signed int of
+  microseconds overflows in about an hour at 80Hz), and `reset()` now clears
+  them, which it previously did not.
+- **Rotation is hot-started.** `read_pose` took `Mat3 R = Mat3::Identity()`
+  every frame under a TODO saying not to, so the solver re-converged the
+  rotation from scratch each frame while translation was hot-started. The
+  rotation now lives in `MotionController::last_R`. Payoff is data-dependent:
+  near-free at rest, largest while the knob is moving.
+- **`R_mag` folded into `R_total`** (`sensor.cpp`). `R·(R_mag·J·R_magᵀ)·Rᵀ`
+  is `R_total·J·R_totalᵀ`; four 3×3 products become two, and the field rotation
+  collapses the same way. ~6%.
+- **`R_magᵀ·m` precomputed** into `MagnetModel::magnet_offset_local`, per
+  Math.md §3.2 — it is a frozen calibration constant. ~1.5%.
+- **Skew products written out.** `[a]_x` has a zero diagonal, so the general
+  3×3 product spent a third of its multiplies on structural zeros, and
+  `−[B]_x` touches six entries rather than nine. ~1.8%.
+- **`H = JᵀJ` exploits symmetry**: 21 dot products for the lower triangle,
+  mirrored, instead of all 36 entries. ~8.6%.
+- **Dead work deleted.** `Statistics::avg_jacobian` ran a 54-element EMA every
+  frame (~162 flops) and nothing ever read it; `raw_full` in `read_pose` was
+  assigned every frame for a commented-out debug block; `forward_model.cpp`
+  computed an unused `R_T`. `solve_knob_pose` also copied 63 floats into its
+  out-params on every call — with `Config::statistics` true that copy was live,
+  so it now writes into the caller's buffers directly (the TODO at the top of
+  that function).
+
+Not yet measured on hardware — all of the above is static/host verification.
+The `micros()` figure in the telemetry dashboard is the number to trust, and
+the changes were kept separable so they can be landed and timed individually.
+
+### Found while doing this, not acted on
+
+`Positions::approx_rest_pos` is `{0, 0, magnet_z_pos_from_pivot}` = `{0,0,14}`,
+which puts the magnet-local query at exactly **(r=0, z=0)** — the magnet's
+bottom face centre, outside the bicubic table's `z ∈ [-20,-0.5]` domain and at
+the field's singular point. `magnet_z_pos_from_pivot + magnet_rest_distance_sensor`
+= 20 lands at (0, -6), comfortably inside, and matches the 6mm standoff the
+geometry comment describes. `magnet_rest_distance_sensor` is defined in
+`positions.h` and referenced nowhere else in the repo, which is consistent with
+it having been dropped from this expression by accident.
+
+This is the boot value of `last_pos`, the reset value of the hot start, and the
+starting guess `SensorController::updateCalibration()` perturbs by 0.1mm — so
+it affects the calibration baseline, not just the first frame. Left alone here
+because correcting it shifts the calibration baseline and therefore the tuned
+`Config::GAIN_T`/`GAIN_R`, which is a behavioural change rather than a
+performance one. Probably belongs with `TODO/tare-and-calibration.md`.
+
 ## Open next steps (not yet acted on)
 
 - Fix the Statistics TODO, then add iteration-count + per-phase (`micros()`)

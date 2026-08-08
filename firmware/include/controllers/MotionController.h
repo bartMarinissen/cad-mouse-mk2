@@ -10,22 +10,24 @@ using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
 struct Statistics {
   static constexpr float smoothing = 0.99f;
 
-  // profiling
-  int time_tot = {};
-  int n_time = {};
-  
+  // profiling. Microseconds -- solve_knob_pose runs ~7.5ms, so the millisecond
+  // clock this used to sample quantised it at about +/-13%, which is coarser
+  // than most of the optimisations worth measuring. uint32_t because at ~7500us
+  // per call and 80Hz a signed int overflows in a little over an hour.
+  uint32_t time_tot = {};
+  uint32_t n_time = {};
+
   // Mean tracking
   Vector9f avg_residual = {};
-  Matrix9x6f avg_jacobian = {};
-  
+
   // Variance tracking (second moment for EMA)
   Vector9f avg_residual_sq = {};
-  
+
   // Latest values
   Vector9f last_residual = {};
   Matrix9x6f last_jacobian = {};
-  
-  void update(int time = 0);
+
+  void update(uint32_t time = 0);
   void reset();
   Vector9f get_residual_stddev() const;
 };
@@ -39,11 +41,17 @@ class MotionController {
   float compute(const float raw[9], const float* baseline, float dt, float out[6]);
   bool hasMotionActivity() const;
   void set_base_pose(const Vec3 pos, const Vec3 rot);
-  // Returns the residual
-  float read_pose(const float raw[9], Vec3 &position, Vec3 &rot);
+  // Returns the residual. `position` and `R` are in/out: they carry the previous
+  // frame's estimate in as the solver's starting point and the new one out.
+  // `rot_degrees` is output only, derived from `R` for reporting.
+  float read_pose(const float raw[9], Vec3 &position, Mat3 &R, Vec3 &rot_degrees);
   Statistics statistics{};
   Vec3 last_pos = Positions::approx_rest_pos;
   Vec3 last_rot {};
+  // The rotation half of the hot start. Kept as a matrix rather than rebuilt
+  // from last_rot each frame: going back through Euler angles is both lossy and
+  // expensive, and this is the solver's actual state variable.
+  Mat3 last_R = Mat3::Identity();
 
  private:
   static float clampf(float v, float lo, float hi);
