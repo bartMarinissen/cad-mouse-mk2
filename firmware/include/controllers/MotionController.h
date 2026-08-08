@@ -44,6 +44,11 @@ class MotionController {
   Statistics statistics{};
   Vec3 last_pos = Positions::approx_rest_pos;
   Vec3 last_rot {};
+  // Baseline measurements, for computing offset against. Public alongside
+  // last_pos/last_rot so callers (e.g. PoseColorAnimation) can compute the
+  // same rest-relative deltas compute() uses internally.
+  Vec3 base_pos = Positions::approx_rest_pos;
+  Vec3 base_rot {};
 
  private:
   static float clampf(float v, float lo, float hi);
@@ -60,9 +65,6 @@ class MotionController {
 
   float filt_[6] = {};
   bool motionActive_ = false;
-  // Baseline measurements, for computing offset against
-  Vec3 base_pos = Positions::approx_rest_pos;
-  Vec3 base_rot {};
   // Last measurements, for hot-starting the newton-gauss
 };
 

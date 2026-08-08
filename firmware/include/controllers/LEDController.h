@@ -8,7 +8,7 @@
 
 #include "animations/Animations.h"
 
-using Animation = std::variant<SolidAnimation, SpinnerAnimation, OffAnimation>;
+using Animation = std::variant<SolidAnimation, SpinnerAnimation, OffAnimation, PoseColorAnimation>;
 
 class LEDController {
  public:

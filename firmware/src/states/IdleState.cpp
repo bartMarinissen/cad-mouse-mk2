@@ -10,7 +10,7 @@
 void IdleState::enter() {
   lastUpdateMs_ = 0;
   lastActivityMs_ = millis();
-  ledController().set(SolidAnimation(ledController().ring(), Config::LED_IDLE_COLOR));
+  ledController().set(PoseColorAnimation(ledController().ring()));
 }
 
 bool IdleState::handleCalibrationRequest() {
@@ -79,6 +79,7 @@ void IdleState::update() {
                                         : ((now - lastUpdateMs_) / 1000.0);
   lastUpdateMs_ = now;
   runMotionPipeline(dt, now);
+  ledController().update();
   handleSleepTransition(now);
 }
 

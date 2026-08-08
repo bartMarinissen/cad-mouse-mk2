@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Config.h"
 #include "animations/AnimationBase.h"
+#include "math3D.h"
 
 class SolidAnimation : public AnimationBase {
  public:
@@ -27,4 +29,17 @@ class OffAnimation : public AnimationBase {
   explicit OffAnimation(Adafruit_NeoPixel& ring);
   void update() override;
   bool wantsPower() const override { return false; }
+};
+
+// Represents the knob's live pose (rotation + translation, relative to its
+// calibrated rest pose) as colors sampled from a cylindrical-HSV color solid.
+// See TODO-plan discussion / commit message for the math; constants and the
+// point-to-color mapping are expected to need heavy retuning.
+class PoseColorAnimation : public AnimationBase {
+ public:
+  explicit PoseColorAnimation(Adafruit_NeoPixel& ring);
+  void update() override;
+
+ private:
+  Vec3 referenceOffsets_[Config::LED_COUNT];
 };
