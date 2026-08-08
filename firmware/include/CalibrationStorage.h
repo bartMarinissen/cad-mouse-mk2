@@ -29,20 +29,18 @@ namespace CalibrationStorage {
 //   offset  size  field
 //   0       4     magic, ASCII 'C' 'M' 'K' '2'
 //   4       4     version, uint32 LE
-//   8       300   payload, 75 x float32 LE
+//   8       300   payload: a CalibrationParams, verbatim
 //   308     4     crc32, uint32 LE over bytes [0, 308)
 //
 // Little-endian throughout: native for both the RP2040 and any host running
 // the Python tooling, so neither side ever byte-swaps.
 //
-// The payload is written field-by-field through Eigen's coefficient
-// accessors, never memcpy'd off the struct: Eigen::Matrix3f is column-major
-// internally, and the wire format is deliberately ROW-major so the Python
-// side is a plain numpy .ravel() that never has to know that. Matching the
-// struct's memory layout instead would couple the format to an Eigen
-// implementation detail for no gain.
+// The payload is the struct's own bytes. CalibrationParams is plain arrays
+// precisely so that it can be -- see the note there -- which leaves the host
+// as the only place that has to know the field order, and leaves this side
+// with a memcpy.
 constexpr size_t kBlobSize = 312;
-constexpr size_t kPayloadFloats = 75;
+constexpr size_t kPayloadSize = 300;
 constexpr size_t kHexChars = kBlobSize * 2;
 
 // Carried so a future format change has somewhere to announce itself. There
@@ -71,7 +69,6 @@ const char* resultText(Result result);
 // from the core so there is one definition to reason about.
 uint32_t crc32(const uint8_t* data, size_t len);
 
-void serialize(const CalibrationParams& in, uint8_t out[kBlobSize]);
 Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out);
 
 // Range checks applied to an already-CRC-clean blob. These are corruption

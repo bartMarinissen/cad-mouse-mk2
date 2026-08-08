@@ -40,6 +40,13 @@ public:
     // by handle_serial_command() when CAL_START arrives once already running.
     void start();
 
+    // Give up on a run without storing anything. Storing a calibration should
+    // be a decision, not the only way out: without this, a run either walks
+    // all seven steps or the knob needs a power cycle, because a host that
+    // disappears mid-run just leaves WAIT_FOR_ACK timing out back to
+    // WAIT_FOR_START_BTN forever. BundleState drives the actual exit.
+    void abort();
+
     bool is_active() const { return current_phase != CalibPhase::IDLE; }
     bool is_done() const { return current_step == CalibStep::COMPLETE; }
 

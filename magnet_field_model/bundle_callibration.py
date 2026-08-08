@@ -18,6 +18,7 @@ See calibration/ for the actual implementation:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -255,10 +256,10 @@ def _write_calibration_over_serial(
         console.print("[yellow]No response from the device.[/]")
         raise SystemExit(1)
     finally:
-        try:
+        # The device reboots out from under us on success, so closing the port
+        # can fail on a handle that is already gone. Nothing to do about it.
+        with contextlib.suppress(Exception):
             link.close()
-        except Exception:
-            pass
 
 
 def main() -> None:

@@ -28,6 +28,14 @@ void BundleCalibrationController::start() {
     change_phase(CalibPhase::WAIT_FOR_START_BTN);
 }
 
+void BundleCalibrationController::abort() {
+    // Straight back to the constructed state, so a later start() begins clean
+    // rather than resuming a half-finished run.
+    current_step = CalibStep::NONE;
+    current_phase = CalibPhase::IDLE;
+    Serial.println("STATUS CAL_ABORTED");
+}
+
 void BundleCalibrationController::handle_serial_command(const char* cmd) {
     if (strncmp(cmd, "CAL_START", 9) == 0) {
         start();

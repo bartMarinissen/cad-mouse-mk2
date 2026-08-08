@@ -72,9 +72,11 @@ const float sensor_offset_mT[3][3] = {
 // uncalibrated) unit -- identity magnet rotations and unit magnet strengths,
 // with magnet positions taken from the nominal CAD geometry in positions.h.
 //
-// A function rather than a constant on purpose: CalibrationParams holds Eigen
-// types, and a namespace-scope instance would be built during static init, in
-// an order nothing here controls.
+// A function rather than a constant on purpose. CalibrationParams is plain
+// data now, so the struct itself is no longer the reason -- but this builds
+// from Positions::Magnet_i_knob, which are Eigen constants in another
+// translation unit, so a namespace-scope instance would still depend on static
+// init running in an order nothing here controls.
 CalibrationParams defaultCalibration();
 
 // Uncomment this one and define it in config.cpp if you ran calibration and don't want to store it in flash.

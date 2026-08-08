@@ -15,14 +15,17 @@ CalibrationParams defaultCalibration() {
   };
 
   for (int i = 0; i < 3; i++) {
-    // Today's behaviour: a scalar gain per sensor, i.e. no cross-axis skew.
-    // The full 3x3 only ever comes from a real bundle calibration.
-    cal.sensor_gain[i] = magnet_gains[i] * Mat3::Identity();
-    cal.sensor_offset_mT[i] =
-        Vec3(sensor_offset_mT[i][0], sensor_offset_mT[i][1], sensor_offset_mT[i][2]);
+    for (int r = 0; r < 3; r++) {
+      for (int c = 0; c < 3; c++) {
+        // Today's behaviour: a scalar gain per sensor, i.e. no cross-axis
+        // skew. The full 3x3 only ever comes from a real bundle calibration.
+        cal.sensor_gain[i][r][c] = (r == c) ? magnet_gains[i] : 0.0f;
+        cal.magnet_rotation[i][r][c] = (r == c) ? 1.0f : 0.0f;
+      }
+      cal.sensor_offset_mT[i][r] = sensor_offset_mT[i][r];
+      cal.magnet_pos_knob[i][r] = nominal_magnet_pos[i](r);
+    }
 
-    cal.magnet_pos_knob[i] = nominal_magnet_pos[i];
-    cal.magnet_rotation[i] = Mat3::Identity();
     // BICUBIC_FIELD_REFERENCE_MT, not a placeholder: it makes
     // magnet_strength_mT[i] / BICUBIC_FIELD_REFERENCE_MT exactly 1.0, i.e.
     // "no separate strength correction", because magnet_gains above is a

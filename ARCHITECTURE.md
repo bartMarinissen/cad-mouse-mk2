@@ -68,7 +68,8 @@ States, all in `firmware/{include,src}/states/`:
   `Config::ZERO_SAMPLES` (200) samples to compute a baseline field offset and a
   baseline pose, then hands off to `IdleState`. Also the *only* place serial
   commands are accepted: it announces `STATUS TARE_BEGIN` on entry, then honours
-  `CAL_START` (enter `BundleState`) and `CAL_UPLOAD` (store a new calibration)
+  `CAL_START` (enter `BundleState`) and `CAL_UPLOAD` (store a new calibration;
+  `CAL_ABORT` leaves a run without storing, and is handled in `BundleState`)
   for the ~1.7s the tare lasts. Scoping both to a user-triggered window means
   neither can happen without someone physically holding the buttons.
   ⚠️ Still slated for replacement by a fuller "tare" step — see
@@ -222,13 +223,22 @@ Fitted calibrations reach the firmware on their own now. The whole fitted
 parameter set is one struct,
 [`CalibrationParams`](firmware/include/CalibrationParams.h), and
 [`CalibrationStorage`](firmware/include/CalibrationStorage.h) persists it to
-LittleFS as `/calibration.bin`: 312 bytes of `CMK2` magic, a version, 75
-little-endian float32s, and a CRC-32 over everything before it. Matrices are
-stored **row-major** and written through Eigen coefficient accessors, so the
-format does not encode the fact that `Matrix3f` is column-major internally and
-the Python side stays a plain `.ravel()`. `board_build.filesystem_size` in
-`platformio.ini` carves out the partition — without it the filesystem is 0MB
-and nothing mounts.
+LittleFS as `/calibration.bin`: 312 bytes of `CMK2` magic, a version, the
+struct's own 300 bytes, and a CRC-32 over everything before it.
+
+Reading one is a `memcpy` — check magic, version and CRC, copy the payload into
+the struct, then range-check it. That works because `CalibrationParams` is
+**plain arrays rather than Eigen types**, which buys three things at once:
+`memcpy` into it is defined behaviour (`Eigen::Matrix` has a user-provided copy
+constructor, so a struct of `Mat3`/`Vec3` is not trivially copyable), `sizeof ==
+300` is a language guarantee instead of an observation, and the layout can be
+**row-major** to match numpy rather than the column-major Eigen would impose —
+a transposed gain matrix passes both the CRC and every plausibility check, so
+that ordering is worth pinning down. Consumers convert with `toMat3()`/
+`toVec3()` at construction, where they already copied the values out.
+
+`board_build.filesystem_size` in `platformio.ini` carves out the partition —
+without it the filesystem is 0MB and nothing mounts.
 
 `SensorController` and `MotionController` are constructed from that struct and
 hold their calibration-derived state `const`, which is why they are no longer
@@ -265,7 +275,19 @@ Two routes in, the same bytes either way:
   reboots, since the controllers hold their calibration `const` from boot and
   cannot adopt a new one in place.
 
-`--emit-cpp` stays for reading and diffing the numbers.
+`--emit-cpp` stays for reading and diffing the numbers, now as a nested-brace
+aggregate initializer — possible since the struct became plain data, and the
+reason `tests/test_export.py` can compile that snippet on the host and diff its
+bytes against `format_binary()`. That is the only check that both ends of the
+format actually agree; a wrong field order still produces a valid blob with a
+valid CRC.
+
+**Storing is a decision, not the only exit.** Capture and fit never touch flash
+by themselves, and `CAL_ABORT` returns `BundleState` to idle without writing
+anything — which is also the only escape from a run whose host went away, since
+`WAIT_FOR_ACK` otherwise just times out back to `WAIT_FOR_START_BTN` forever.
+The host tooling does not send it yet. A knob-side escape still does not exist;
+see [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md).
 
 Two caveats on the exported numbers:
 

@@ -10,14 +10,14 @@ SensorController::SensorController(const CalibrationParams& cal)
       mag2Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       sensor_gain_{
-        cal.sensor_gain[0],
-        cal.sensor_gain[1],
-        cal.sensor_gain[2],
+        toMat3(cal.sensor_gain[0]),
+        toMat3(cal.sensor_gain[1]),
+        toMat3(cal.sensor_gain[2]),
       },
       sensor_offset_mT_{
-        cal.sensor_offset_mT[0],
-        cal.sensor_offset_mT[1],
-        cal.sensor_offset_mT[2],
+        toVec3(cal.sensor_offset_mT[0]),
+        toVec3(cal.sensor_offset_mT[1]),
+        toVec3(cal.sensor_offset_mT[2]),
       } {}
 
 void SensorController::powerOff(int pin) { digitalWrite(pin, LOW); }

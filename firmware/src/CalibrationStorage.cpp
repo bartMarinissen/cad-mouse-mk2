@@ -3,6 +3,8 @@
 #include <LittleFS.h>
 #include <string.h>
 
+#include <type_traits>
+
 namespace CalibrationStorage {
 namespace {
 
@@ -19,27 +21,23 @@ constexpr size_t kVersionOffset = 4;
 constexpr size_t kPayloadOffset = 8;
 constexpr size_t kCrcOffset = kBlobSize - 4;
 
-// Not load-bearing: the wire format is built from coefficient accessors, so
-// it stays correct whatever Eigen does with padding. This only catches the
-// struct quietly changing shape. If it ever fires, update the number -- do
-// not change the format to match.
-static_assert(sizeof(CalibrationParams) == 300,
-              "CalibrationParams changed size; the wire format is unaffected "
-              "but the change was probably not intentional");
+// This one IS load-bearing: the payload is a raw copy of the struct, so
+// memcpy'ing into it is only defined behaviour while it stays trivially
+// copyable. Keeping CalibrationParams plain arrays rather than Eigen types is
+// what buys that -- see the note in CalibrationParams.h.
+static_assert(std::is_trivially_copyable<CalibrationParams>::value,
+              "the stored format is a raw copy of CalibrationParams");
 
-static_assert(kPayloadOffset + kPayloadFloats * 4 == kCrcOffset,
+static_assert(sizeof(CalibrationParams) == kPayloadSize,
+              "CalibrationParams is the payload; changing its size changes the "
+              "format, which needs a kVersion bump");
+
+static_assert(kPayloadOffset + kPayloadSize == kCrcOffset,
               "payload does not fill the space between the header and the CRC");
 
 uint32_t readU32(const uint8_t* p) {
   return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
          (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-}
-
-void writeU32(uint8_t* p, uint32_t value) {
-  p[0] = static_cast<uint8_t>(value);
-  p[1] = static_cast<uint8_t>(value >> 8);
-  p[2] = static_cast<uint8_t>(value >> 16);
-  p[3] = static_cast<uint8_t>(value >> 24);
 }
 
 int hexNibble(char c) {
@@ -108,53 +106,6 @@ uint32_t crc32(const uint8_t* data, size_t len) {
   return ~crc;
 }
 
-void serialize(const CalibrationParams& in, uint8_t out[kBlobSize]) {
-  memcpy(out + kMagicOffset, kMagic, sizeof(kMagic));
-  writeU32(out + kVersionOffset, kVersion);
-
-  float payload[kPayloadFloats];
-  size_t k = 0;
-
-  // Row-major, matching numpy's default flatten. Keep this order in step with
-  // deserialize() and with format_binary() in
-  // magnet_field_model/calibration/export.py.
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      for (int c = 0; c < 3; c++) {
-        payload[k++] = in.sensor_gain[i](r, c);
-      }
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      payload[k++] = in.sensor_offset_mT[i](r);
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      payload[k++] = in.magnet_pos_knob[i](r);
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      for (int c = 0; c < 3; c++) {
-        payload[k++] = in.magnet_rotation[i](r, c);
-      }
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    payload[k++] = in.magnet_strength_mT[i];
-  }
-
-  for (size_t i = 0; i < kPayloadFloats; i++) {
-    uint32_t bits;
-    memcpy(&bits, &payload[i], sizeof(bits));
-    writeU32(out + kPayloadOffset + i * 4, bits);
-  }
-
-  writeU32(out + kCrcOffset, crc32(out, kCrcOffset));
-}
-
 Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
   if (memcmp(in + kMagicOffset, kMagic, sizeof(kMagic)) != 0) {
     return Result::BadMagic;
@@ -166,53 +117,29 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
     return Result::BadCrc;
   }
 
-  float payload[kPayloadFloats];
-  for (size_t i = 0; i < kPayloadFloats; i++) {
-    const uint32_t bits = readU32(in + kPayloadOffset + i * 4);
-    // Tested on the bit pattern, not with isfinite(): the build enables
-    // several -ffast-math-adjacent flags, and an exponent of all ones is
-    // NaN-or-Inf regardless of what the optimizer believes about float
-    // comparisons. Also the cheapest way to reject erased flash, where every
-    // byte reads 0xFF.
-    if ((bits & 0x7F800000u) == 0x7F800000u) {
-      return Result::NotFinite;
-    }
-    memcpy(&payload[i], &bits, sizeof(float));
-  }
-
-  size_t k = 0;
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      for (int c = 0; c < 3; c++) {
-        out.sensor_gain[i](r, c) = payload[k++];
-      }
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      out.sensor_offset_mT[i](r) = payload[k++];
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      out.magnet_pos_knob[i](r) = payload[k++];
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    for (int r = 0; r < 3; r++) {
-      for (int c = 0; c < 3; c++) {
-        out.magnet_rotation[i](r, c) = payload[k++];
-      }
-    }
-  }
-  for (int i = 0; i < 3; i++) {
-    out.magnet_strength_mT[i] = payload[k++];
-  }
+  // The payload is the struct. Everything about which float means what lives
+  // on the host, in format_binary() -- this side only has to agree on the
+  // length, which the static_asserts above pin down.
+  memcpy(&out, in + kPayloadOffset, kPayloadSize);
 
   return isPlausible(out) ? Result::Ok : Result::Implausible;
 }
 
 bool isPlausible(const CalibrationParams& params) {
+  // Finiteness first, over the whole struct at once. This used to be a bit
+  // test during unpacking; plain isfinite() is fine here, because the flag
+  // that would break it is -ffinite-math-only and this build does not set it
+  // (see build_flags in platformio.ini -- associative, reciprocal, no-errno,
+  // no-trapping, no-rounding, no-signed-zeros, none of which license the
+  // compiler to assume finiteness). It is also what rejects erased flash,
+  // where every byte reads 0xFF and every float comes out NaN.
+  const float* values = &params.sensor_gain[0][0][0];
+  for (size_t i = 0; i < kPayloadSize / sizeof(float); i++) {
+    if (!isfinite(values[i])) {
+      return false;
+    }
+  }
+
   for (int i = 0; i < 3; i++) {
     // Magnitude only. A magnet installed with reversed polarity fits to a
     // negative Br, and that is correct rather than corrupt: MagnetModel
@@ -230,7 +157,7 @@ bool isPlausible(const CalibrationParams& params) {
     // or an absurd one. Fitted lands near 1 under the det(G)=1 gauge; the
     // default's scalar gains land near 0.885. Two orders either way clears
     // both without encoding either gauge.
-    const float gainDet = fabsf(params.sensor_gain[i].determinant());
+    const float gainDet = fabsf(toMat3(params.sensor_gain[i]).determinant());
     if (gainDet < 0.01f || gainDet > 100.0f) {
       return false;
     }
@@ -238,10 +165,10 @@ bool isPlausible(const CalibrationParams& params) {
     for (int axis = 0; axis < 3; axis++) {
       // Real magnet spacing is ~28.58mm, so this only catches garbage that
       // happened to survive the CRC.
-      if (fabsf(params.magnet_pos_knob[i](axis)) > 200.0f) {
+      if (fabsf(params.magnet_pos_knob[i][axis]) > 200.0f) {
         return false;
       }
-      if (fabsf(params.sensor_offset_mT[i](axis)) > 1000.0f) {
+      if (fabsf(params.sensor_offset_mT[i][axis]) > 1000.0f) {
         return false;
       }
     }

@@ -28,22 +28,43 @@
 // fixes them as the definition of the world frame and absorbs real sensor
 // placement error into the magnet position offsets instead, so they are not a
 // fitted quantity. They stay in magnet_model/positions.h.
+//
+// PLAIN ARRAYS, NOT EIGEN TYPES. This struct is exactly what CalibrationStorage
+// copies to and from flash -- the stored file is a magic/version header, these
+// 300 bytes verbatim, and a CRC. That only works if the struct is trivially
+// copyable, and Eigen::Matrix is not: it declares a user-provided copy
+// constructor, so memcpy'ing into a struct of Mat3/Vec3 would be undefined
+// behaviour even though the storage underneath really is a bare float array.
+//
+// Two more things fall out of it. The layout is now the language's guarantee
+// rather than Eigen's implementation detail, so `sizeof == 300` is a fact
+// instead of an observation. And the ordering can be ROW-major, matching how
+// numpy ravels on the Python side that writes these files, instead of the
+// column-major Eigen would have imposed -- a transposed gain matrix survives
+// both the CRC and every plausibility check, so that was a silent failure
+// waiting to happen.
+//
+// Consumers convert with toMat3()/toVec3() below, at construction, which is
+// where they already copied these values out.
 struct CalibrationParams {
   // --- Sensor correction, applied by SensorController to the raw reading. ---
   // corrected = sensor_gain[i] * raw[i] - sensor_offset_mT[i]
-  Mat3 sensor_gain[3];
+  // Indexed [sensor][row][col].
+  float sensor_gain[3][3][3];
   // Per-sensor DC offset (Hall zero point plus ambient field), in mT, subtracted
   // after the gain matrix -- i.e. in read_mT()'s output space, not raw counts.
-  Vec3 sensor_offset_mT[3];
+  // Indexed [sensor][xyz].
+  float sensor_offset_mT[3][3];
 
   // --- Knob/magnet geometry, consumed by the forward model. ---
   // Knob-frame magnet positions, bottom-face reference. Replaces the nominal
   // Positions::Magnet_i_knob values as the model's actual geometry.
-  Vec3 magnet_pos_knob[3];
+  // Indexed [magnet][xyz].
+  float magnet_pos_knob[3][3];
   // Per-magnet axis tilt in the knob frame. Sensor::evaluate already rotates
   // into and out of the magnet frame with this; every construction site simply
-  // passed identity until now.
-  Mat3 magnet_rotation[3];
+  // passed identity until now. Indexed [magnet][row][col].
+  float magnet_rotation[3][3][3];
 
   // Per-magnet polarization (remanence, Br), in mT. Consumed by
   // MagnetModel::evaluate, which scales the six cylindrical field quantities
@@ -83,3 +104,23 @@ struct CalibrationParams {
   // (the gain-carries-scale gauge, not the fit's).
   float magnet_strength_mT[3];
 };
+
+// The stored file is a raw copy of the struct above, so this has to hold.
+// If it ever fires, the format changed -- bump kVersion in CalibrationStorage.h
+// rather than quietly updating the number.
+static_assert(sizeof(CalibrationParams) == 300,
+              "CalibrationParams is the on-disk payload; its size is the format");
+
+// --- Turning the stored arrays into the Eigen types the model works in. ---
+//
+// Row-major is stated here, once, rather than being spelled out by every
+// consumer: assigning a row-major Map to a column-major Mat3 makes Eigen do
+// the reordering, so no caller has to know which convention the file uses.
+// Map is a view, not an allocation, so this stays inside EIGEN_NO_MALLOC.
+inline Mat3 toMat3(const float m[3][3]) {
+  return Eigen::Map<const Eigen::Matrix<float, 3, 3, Eigen::RowMajor>>(&m[0][0]);
+}
+
+inline Vec3 toVec3(const float v[3]) {
+  return Eigen::Map<const Vec3>(v);
+}

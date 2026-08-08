@@ -1,6 +1,7 @@
 #include "states/BundleState.h"
 
 #include <Arduino.h>
+#include <string.h>
 
 #include "Config.h"
 #include "Controllers.h"
@@ -31,6 +32,16 @@ void BundleState::update() {
     // timeout, and handed the controller a zeroed buffer every idle tick.
     const char* command = serialController().takeLine();
     if (command != nullptr) {
+        // The way out that does not store anything. Capture and fit never
+        // touch flash on their own -- only an explicit CAL_UPLOAD does -- so
+        // this is what lets a session be run, looked at, and walked away from.
+        // It is also the only escape from a run whose host went away, since
+        // WAIT_FOR_ACK just times out back to WAIT_FOR_START_BTN forever.
+        if (strcmp(command, "CAL_ABORT") == 0) {
+            bundleCalibration.abort();
+            stateMachine.changeState(&StateMachine::idleState);
+            return;
+        }
         bundleCalibration.handle_serial_command(command);
     }
 

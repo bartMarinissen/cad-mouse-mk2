@@ -262,11 +262,13 @@ what distinguishes the two.
 
 ## Still open
 
-- Nothing checks the two ends of the `/calibration.bin` format against each
-  other. `calibration/export.py`'s `format_binary()` and the firmware's
-  `CalibrationStorage` have to agree byte for byte, and the only thing
-  guarding that is the pinned-CRC test in `tests/test_export.py` plus reading
-  both carefully. A C++ side that could run under pytest would be better.
+- The `/calibration.bin` contract is checked, but indirectly.
+  `tests/test_export.py` compiles `format_cpp()`'s snippet against a copy of
+  the `CalibrationParams` declaration and diffs the resulting struct bytes
+  against `format_binary()`, which catches a field order or matrix
+  transposition that a CRC never would. The copy is the weak point: it mirrors
+  `firmware/include/CalibrationParams.h` by hand, so the two can still drift —
+  the test failing is the intended way to notice.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
   already here, and the firmware has the same chain rule in `sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination
