@@ -11,18 +11,7 @@ above it:
 ```cpp
 //auto eig_vals = motionController.statistics.last_jacobian.jacobiSvd().singularValues();
 ```
-
-This isn't dead-code-by-accident — it's intentionally stubbed out because
-computing a condition number via SVD every frame is too expensive to do
-unconditionally on an FPU-less RP2040 in the solver's hot path. The value
-still gets threaded all the way through `TelemetryController::publish()` and
-rendered on the dashboard (`Rcond: %5.0f`), so right now it's a fixed,
-misleading number on the display rather than an omitted one.
-
-Options to weigh as part of the rework (not decided yet):
-- Compute it only every N ticks (amortize the SVD cost), rather than never.
-- Drop it from the dashboard entirely until there's a cheap way to get it.
-- Replace with a cheaper conditioning proxy that doesn't need a full SVD.
+We will just drop this
 
 ## Issue B: `TelemetryController::publish()`'s signature keeps growing
 
@@ -30,19 +19,24 @@ Currently 9 parameters (`motion`, `residual_percent`, `buttonBits`,
 `hidReportSent`, `stats`, `raw_field`, `last_pos`, `last_rot`, `rcond`) in
 `firmware/include/controllers/TelemetryController.h` /
 `firmware/src/controllers/TelemetryController.cpp`, and it's grown with every
-diagnostic added so far. The fixed-layout ASCII-dashboard approach
-(hand-indexed `char buffer[kRows][kCols]`, manual `memcpy` per row) also makes
-each new field a manual layout edit.
+diagnostic added so far. 
 
-## Scope of the rework
+## Issue C: we want more telemetry.
+Specifically, we want to know the number of iterations the solve took.
+Ideally we want some idea of how well the solve did (e.g. optimiality of the 
+jacobian, or something based on the local gradient).
 
-Fold both into one pass rather than patching `rcond` in isolation:
-- Collapse the parameter list into a single snapshot/struct passed by const
-  reference, so adding a new diagnostic doesn't mean touching the function
-  signature again.
-- Decide what `rcond` actually is going forward (see options above) as part of
-  deciding what the snapshot struct carries.
-- Worth revisiting whether the fixed-grid ASCII dashboard format itself is
-  still the right approach once the data being displayed is being redesigned
-  anyway (no decision here — just flagging it's in scope to reconsider while
-  touching this).
+The work here isn't just threading this data into the telemetry, but also figuring out how to display it.
+
+## Issue D: profiling
+We want to be able to profile things.
+For that, we should have a separate end-point at the telemetry controller (in the header, for inlining)
+to submit such information. With a separate way to get the profile information out.
+
+The interface should have a header-defined struct of things to profile. With one entry per interesting thing.
+Then at the call site we do: `telemetry.profile(ENUM_CONSTANT_THAT_DEFINES_OPERATION).start()` before
+and `telemetry.profile(ENUM_CONSTANT_THAT_DEFINES_OPERATION).stop()` after.
+Start just subtracts the current time from the accumulator, and stop adds the current time to the accumulator.
+Stop also increments a total runs counter.
+
+Some extra work to allow turning these function calls for a specific operation into a no-op would also be nice.
