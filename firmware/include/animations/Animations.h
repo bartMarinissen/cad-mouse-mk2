@@ -39,6 +39,11 @@ class OffAnimation : public AnimationBase {
 // the solid slides and turns past those stationary samplers, and each one
 // reads out whatever colour sits at its location inside the solid.
 //
+// The solid maps height to brightness, radius to green, and azimuth to a
+// red/blue triangle wave, so it is always fully saturated: tilt and heave
+// show as brightness, translation as green, twist as the red/blue pattern
+// turning.
+//
 // There are no gain factors anywhere -- every quantity is real millimetres.
 // The only thing to tune is the shape of the solid itself (see solidColor()
 // in the .cpp), i.e. how fast colour varies per millimetre of travel.

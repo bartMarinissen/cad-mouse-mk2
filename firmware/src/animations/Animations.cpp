@@ -66,39 +66,56 @@ constexpr float kSamplerRingRadiusMm = 20.0f;
 
 // --- Shape of the colour solid -------------------------------------------
 // The knob only travels a few millimetres, so the solid has to vary fast to
-// make that visible. Both channels below map a 10mm window (+/-5mm about
-// where the samplers sit at rest) onto the full byte range; motion past the
-// window clips, which is intended.
+// make that visible. The windows below are sized so that travel spans the
+// full range; motion past a window clips, which is intended.
 constexpr float kZWindowMm = 4.0f;
 constexpr float kRadiusWindowMm = 2.0f;
-// How many times hue wraps around the solid's axis. Raise to make twist more
-// visible (twist only moves azimuth), at the cost of the ring reading as a
-// repeating pattern instead of one clean hue wheel.
-constexpr float kHueWindings = 3.0f;
+// Times the red/blue wave winds around the solid's axis. Twist only moves
+// azimuth, so this is the knob for twist sensitivity. At 2 the ring's 8 LEDs
+// sample 4 per period -- comfortably clear of aliasing, and the pattern still
+// reads as a shape rather than a repeat.
+constexpr float kTriangleWindings = 2.0f;
 
-// Maps value linearly from [lo, hi] onto 0..255, clamping outside the range.
-uint8_t mapToByte(float value, float lo, float hi) {
-  const float frac = (value - lo) / (hi - lo);
-  return static_cast<uint8_t>(std::lround(std::clamp(frac, 0.0f, 1.0f) * 255.0f));
+// Maps value linearly from [lo, hi] onto 0..1, clamping outside the range.
+float mapToUnit(float value, float lo, float hi) {
+  return std::clamp((value - lo) / (hi - lo), 0.0f, 1.0f);
+}
+
+// Signed triangle wave over turns: +1 at whole turns, -1 at half turns.
+float triangleWave(float turns) {
+  const float phase = turns - std::floor(turns);
+  return 4.0f * std::fabs(phase - 0.5f) - 1.0f;
+}
+
+uint8_t toByte(float unit) {
+  return static_cast<uint8_t>(std::lround(std::clamp(unit, 0.0f, 1.0f) * 255.0f));
 }
 
 // Colour of the solid at a point in the knob's own frame, in millimetres.
 // The solid is rigidly attached to the knob, so this is the only place that
 // decides what a position looks like. It need not be HSV, cylindrical, or
 // even continuous -- nothing outside this function may assume it is.
+//
+// Built straight in RGB. Saturation is maximal everywhere by construction:
+// the tangential triangle wave puts red and blue on opposite signs, so one of
+// the two is always exactly zero and no point in the solid washes out.
+//
+//   z       -> brightness, scaling all three channels together
+//   radius  -> green
+//   azimuth -> triangle wave, red on its positive half, blue on its negative
 uint32_t solidColor(const Vec3& pKnob) {
   const float radius = std::sqrt(pKnob.x() * pKnob.x() + pKnob.y() * pKnob.y());
   const float azimuth = std::atan2(pKnob.y(), pKnob.x());
 
-  // Hue wraps rather than clamps, so it does not go through mapToByte().
-  const float turns = (azimuth / (2.0f * float(M_PI))) * kHueWindings;
-  const uint16_t hue = static_cast<uint16_t>(
-      std::lround((turns - std::floor(turns)) * 65535.0f));
-  const uint8_t sat = mapToByte(radius, kSamplerRingRadiusMm - kRadiusWindowMm,
+  const float wave =
+      triangleWave(azimuth / (2.0f * float(M_PI)) * kTriangleWindings);
+  const float green = mapToUnit(radius, kSamplerRingRadiusMm - kRadiusWindowMm,
                                         kSamplerRingRadiusMm + kRadiusWindowMm);
-  const uint8_t val = mapToByte(pKnob.z(), kZWindowMm, -kZWindowMm);
+  const float bright = mapToUnit(pKnob.z(), kZWindowMm, -kZWindowMm);
 
-  return Adafruit_NeoPixel::ColorHSV(hue, sat, val);
+  return Adafruit_NeoPixel::Color(toByte(std::max(wave, 0.0f) * bright),
+                                  toByte(green * bright),
+                                  toByte(std::max(-wave, 0.0f) * bright));
 }
 
 }  // namespace
