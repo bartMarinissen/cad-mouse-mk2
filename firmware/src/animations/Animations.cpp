@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Controllers.h"
+#include "magnet_model/positions.h"
 
 namespace {
 
@@ -59,29 +60,43 @@ void OffAnimation::update() {
 
 namespace {
 
-// Pose-color mapping constants. Calibrated to ~5mm translation, ~20 degrees
-// of tilt total from horizontal, ~10 degrees of twist -- expect heavy
-// retuning once this is running on hardware, possibly a different
-// parameterization entirely (that's why pointToColor() below is isolated
-// from the rotate/translate geometry in PoseColorAnimation::update()).
-constexpr float kR0 = 90.0f;
-constexpr float kZ0 = 128.0f;
-constexpr float kSatFloor = 70.0f;
-constexpr float kRMaxExpected = 190.0f;
-constexpr float kTransGainXY = 20.0f;
-constexpr float kTransGainZ = 20.0f;
+// Radius of the ring of virtual samplers, fixed in world space around the
+// knob's expected neutral position. A real dimension: 40mm diameter.
+constexpr float kSamplerRingRadiusMm = 20.0f;
 
-uint32_t pointToColor(const Vec3& transformed) {
-  const float radiusXY = std::sqrt(transformed.x() * transformed.x() +
-                                    transformed.y() * transformed.y());
-  const float height = kZ0 + transformed.z();
-  const float hueAngle = std::atan2(transformed.y(), transformed.x());
+// --- Shape of the colour solid -------------------------------------------
+// The knob only travels a few millimetres, so the solid has to vary fast to
+// make that visible. Both channels below map a 10mm window (+/-5mm about
+// where the samplers sit at rest) onto the full byte range; motion past the
+// window clips, which is intended.
+constexpr float kZWindowMm = 5.0f;
+constexpr float kRadiusWindowMm = 5.0f;
+// How many times hue wraps around the solid's axis. Raise to make twist more
+// visible (twist only moves azimuth), at the cost of the ring reading as a
+// repeating pattern instead of one clean hue wheel.
+constexpr float kHueWindings = 1.0f;
 
-  const float satFrac = std::clamp(radiusXY / kRMaxExpected, 0.0f, 1.0f);
-  const uint8_t sat = static_cast<uint8_t>(kSatFloor + (255.0f - kSatFloor) * satFrac);
-  const uint8_t val = static_cast<uint8_t>(std::clamp(height, 0.0f, 255.0f));
+// Maps value linearly from [lo, hi] onto 0..255, clamping outside the range.
+uint8_t mapToByte(float value, float lo, float hi) {
+  const float frac = (value - lo) / (hi - lo);
+  return static_cast<uint8_t>(std::lround(std::clamp(frac, 0.0f, 1.0f) * 255.0f));
+}
+
+// Colour of the solid at a point in the knob's own frame, in millimetres.
+// The solid is rigidly attached to the knob, so this is the only place that
+// decides what a position looks like. It need not be HSV, cylindrical, or
+// even continuous -- nothing outside this function may assume it is.
+uint32_t solidColor(const Vec3& pKnob) {
+  const float radius = std::sqrt(pKnob.x() * pKnob.x() + pKnob.y() * pKnob.y());
+  const float azimuth = std::atan2(pKnob.y(), pKnob.x());
+
+  // Hue wraps rather than clamps, so it does not go through mapToByte().
+  const float turns = (azimuth / (2.0f * float(M_PI))) * kHueWindings;
   const uint16_t hue = static_cast<uint16_t>(
-      (hueAngle + float(M_PI)) / (2.0f * float(M_PI)) * 65535.0f);
+      std::lround((turns - std::floor(turns)) * 65535.0f));
+  const uint8_t sat = mapToByte(radius, kSamplerRingRadiusMm - kRadiusWindowMm,
+                                        kSamplerRingRadiusMm + kRadiusWindowMm);
+  const uint8_t val = mapToByte(pKnob.z(), -kZWindowMm, kZWindowMm);
 
   return Adafruit_NeoPixel::ColorHSV(hue, sat, val);
 }
@@ -91,37 +106,40 @@ uint32_t pointToColor(const Vec3& transformed) {
 PoseColorAnimation::PoseColorAnimation(Adafruit_NeoPixel& ring) : AnimationBase(ring) {
   for (int i = 0; i < Config::LED_COUNT; i++) {
     const float angle = i * (2.0f * float(M_PI) / Config::LED_COUNT);
-    referenceOffsets_[i] = Vec3(kR0 * std::cos(angle), kR0 * std::sin(angle), 0.0f);
+    samplerWorld_[i] = Positions::approx_rest_pos +
+                       Vec3(kSamplerRingRadiusMm * std::cos(angle),
+                            kSamplerRingRadiusMm * std::sin(angle), 0.0f);
   }
 }
 
 void PoseColorAnimation::update() {
   MotionController& motion = motionController();
 
-  // [pitch, roll, yaw], degrees, relative to the calibrated rest pose.
-  const Vec3 rotDeltaDeg = motion.last_rot - motion.base_rot;
+  // last_rot is [pitch, roll, yaw] in degrees, absolute in the world frame.
   const float toRad = float(M_PI) / 180.0f;
-  const float pitch = rotDeltaDeg[0] * toRad;
-  const float roll = rotDeltaDeg[1] * toRad;
-  const float yaw = rotDeltaDeg[2] * toRad;
+  const float pitch = motion.last_rot[0] * toRad;
+  const float roll = motion.last_rot[1] * toRad;
+  const float yaw = motion.last_rot[2] * toRad;
   const float cp = std::cos(pitch), sp = std::sin(pitch);
   const float cr = std::cos(roll), sr = std::sin(roll);
   const float cy = std::cos(yaw), sy = std::sin(yaw);
 
-  // R = Rz(yaw) * Ry(pitch) * Rx(roll), matching extract_angles_robust()'s
-  // convention in MotionController.cpp exactly (verified by hand).
+  // R = Rz(yaw) * Ry(pitch) * Rx(roll), the inverse of the extraction that
+  // produced last_rot (extract_angles_robust(), MotionController.cpp).
+  // Maps knob frame -> world frame.
   Mat3 R;
   R << cy * cp,             cy * sp * sr - sy * cr,  cy * sp * cr + sy * sr,
        sy * cp,             sy * sp * sr + cy * cr,  sy * sp * cr - cy * sr,
        -sp,                 cp * sr,                 cp * cr;
 
-  const Vec3 t = motion.last_pos - motion.base_pos;  // mm, relative to rest
-  const Vec3 T(t.x() * kTransGainXY, t.y() * kTransGainXY, t.z() * kTransGainZ);
+  // World point -> knob frame, the same transform Sensor::evaluate() applies
+  // to the (likewise world-fixed) physical sensors.
+  const Mat3 worldToKnob = R.transpose();
 
   const int n = ring_.numPixels();
   for (int i = 0; i < n; i++) {
-    const Vec3 transformed = R * referenceOffsets_[i] + T;
-    ring_.setPixelColor(i, pointToColor(transformed));
+    const Vec3 pKnob = worldToKnob * (samplerWorld_[i] - motion.last_pos);
+    ring_.setPixelColor(i, solidColor(pKnob));
   }
   ring_.show();
 }

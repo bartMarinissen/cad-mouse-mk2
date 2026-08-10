@@ -31,15 +31,23 @@ class OffAnimation : public AnimationBase {
   bool wantsPower() const override { return false; }
 };
 
-// Represents the knob's live pose (rotation + translation, relative to its
-// calibrated rest pose) as colors sampled from a cylindrical-HSV color solid.
-// See TODO-plan discussion / commit message for the math; constants and the
-// point-to-color mapping are expected to need heavy retuning.
+// Shows the knob's live 6DOF pose as colour on the ring.
+//
+// A colour solid is rigidly attached to the knob, defined in the knob's own
+// frame in millimetres. Eight virtual samplers sit fixed in world space, in
+// a flat ring around the knob's expected neutral position. As the knob moves
+// the solid slides and turns past those stationary samplers, and each one
+// reads out whatever colour sits at its location inside the solid.
+//
+// There are no gain factors anywhere -- every quantity is real millimetres.
+// The only thing to tune is the shape of the solid itself (see solidColor()
+// in the .cpp), i.e. how fast colour varies per millimetre of travel.
 class PoseColorAnimation : public AnimationBase {
  public:
   explicit PoseColorAnimation(Adafruit_NeoPixel& ring);
   void update() override;
 
  private:
-  Vec3 referenceOffsets_[Config::LED_COUNT];
+  // Sampler positions in the world frame, fixed. Built once in the ctor.
+  Vec3 samplerWorld_[Config::LED_COUNT];
 };
