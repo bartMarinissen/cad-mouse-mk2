@@ -1,33 +1,48 @@
 # LED ring animations for bundle calibration
 
-Note: another Claude session is actively working on the calibration code —
-check current state of `BundleCalibrationController.cpp` and `LEDController.*`
-before implementing anything here, this file is scoping/design only.
+## Current state (updated — architecture pass landed)
 
-## Current state
+The animation architecture has been reworked. `LEDController`
+(`firmware/include/controllers/LEDController.h`,
+`firmware/src/controllers/LEDController.cpp`) no longer has per-effect
+methods (`setSolid`/`startSpinner`/`off` are gone). Instead:
 
-`LEDController` (`firmware/include/controllers/LEDController.h`,
-`firmware/src/controllers/LEDController.cpp`) only has three display modes:
-`setSolid(color)`, `startSpinner(color)` (a single-pixel sweep around the
-ring, one color, fixed 60ms step), and `off()`. `BundleState::enter()` just
-calls `startSpinner(0xFDFDFF)` once and leaves it running for the entire
-calibration session, regardless of step or phase.
+- `firmware/include/animations/AnimationBase.h` — abstract base class
+  (`update()`, `wantsPower()`), mirroring the existing `State` pattern.
+- `firmware/include/animations/Animations.h` /
+  `firmware/src/animations/Animations.cpp` — the concrete animations
+  (`SolidAnimation`, `SpinnerAnimation`, `OffAnimation`), all in one file
+  pair for now.
+- `LEDController` owns the ring and a single statically-allocated slot
+  (tagged union, no heap) for whichever animation is active, plus power
+  management. Callers construct the animation they want and load it via
+  `ledController.set(SomeAnimation(ledController.ring(), ...));`, then drive
+  it every tick with `ledController.update()`.
 
-But `BundleCalibrationController::update()`
-(`firmware/src/controllers/BundleCalibrationController.cpp`) already has the
-intended animation states marked inline, per calibration phase, none of them
-implemented:
+`BundleCalibrationController::change_phase()` now calls
+`ledController.set(SpinnerAnimation(ledController.ring(), Config::LED_CALIBRATING_COLOR));`
+once per phase transition — so calibration currently shows a single uniform
+placeholder spinner regardless of phase or step. The five `// LED RING: ...`
+comments in `BundleCalibrationController::update()`'s switch are still there,
+documenting the originally-intended per-phase look, e.g.:
 
 ```cpp
 case CalibPhase::WAIT_FOR_START_BTN:
-    // LED RING: animating the step with its specific animation
+    // LED RING: placeholder spinner set in change_phase(); intended
+    // look is a per-step identifying animation, still undesigned.
 case CalibPhase::COUNTDOWN:
-    // LED RING: filling up clockwise
+    // LED RING: placeholder spinner set in change_phase(); intended
+    // look is a clockwise fill, still undesigned.
 case CalibPhase::RECORDING:
-    // LED RING: animating the step with its specific animation
+    // LED RING: placeholder spinner set in change_phase(); intended
+    // look is a per-step identifying animation, still undesigned.
 case CalibPhase::WAIT_FOR_ACK:
-    // LED RING: dead
+    // LED RING: placeholder spinner set in change_phase(); intended
+    // look is "dead" (off), still undesigned.
 ```
+
+None of the actual per-phase/per-step visuals below are designed or
+implemented yet — that's the remaining work this doc scopes.
 
 ## What needs deciding
 
@@ -44,11 +59,12 @@ case CalibPhase::WAIT_FOR_ACK:
 - Whether a per-step "identifying animation" means 7 distinct animations
   (one per `CalibStep`) or a smaller shared vocabulary (e.g. color-coded by
   step, same animation shape).
-- Whether `LEDController` needs new primitives to support this (e.g. a
-  progress-fill mode for the countdown, a distinct "recording" pulse, a
-  "success" flourish) or whether `BundleCalibrationController` should drive
-  raw pixel control itself for calibration-specific effects instead of going
-  through `LEDController`'s existing solid/spinner modes.
+- New animations needed: a progress-fill for the countdown, a distinct
+  per-step "recording" animation, a "success" flourish for review, etc. Each
+  is a new `AnimationBase` subclass in `firmware/include/animations/Animations.h`
+  / `Animations.cpp` (or a new file, if that one gets unwieldy), constructed
+  and loaded the same way `SpinnerAnimation` is now:
+  `ledController.set(YourAnimation(ledController.ring(), ...));`.
 - How this interacts with `Config::LED_CALIBRATING_COLOR` /
   `LED_ERROR_COLOR` / `LED_IDLE_COLOR` conventions already used elsewhere —
   should calibration-step colors be added to `Config.h` alongside those, or

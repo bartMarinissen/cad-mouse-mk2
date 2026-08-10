@@ -5,9 +5,10 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void SleepState::enter() {
-  ledController().off();
+  ledController().set(OffAnimation(ledController().ring()));
 }
 
 void SleepState::update() {

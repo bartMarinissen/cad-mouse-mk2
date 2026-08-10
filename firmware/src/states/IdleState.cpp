@@ -5,11 +5,12 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void IdleState::enter() {
   lastUpdateMs_ = 0;
   lastActivityMs_ = millis();
-  ledController().setSolid(Config::LED_IDLE_COLOR);
+  ledController().set(PoseColorAnimation(ledController().ring()));
 }
 
 bool IdleState::handleCalibrationRequest() {
@@ -78,6 +79,7 @@ void IdleState::update() {
                                         : ((now - lastUpdateMs_) / 1000.0);
   lastUpdateMs_ = now;
   runMotionPipeline(dt, now);
+  ledController().update();
   handleSleepTransition(now);
 }
 

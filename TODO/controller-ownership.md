@@ -69,6 +69,37 @@ and `forward_model` as members, constructed from whatever config/calibration
 source is decided, with `J`/`B_field` either wired to an actual use or
 deleted.
 
+## Problem 3: `BundleCalibrationController` mixes both access patterns — RESOLVED
+
+Not actually an inconsistency: `BundleState.cpp` already documents why
+`SensorController` comes in as an explicit parameter to `update()` instead of
+through `sensorController()` — "so the callibrator can be selective in when
+it wants to read the sensor." That's a deliberate reason for the split, not
+two competing access patterns with none. The original description follows,
+for context.
+
+Every controller is reached through its own accessor function (`ledController()`,
+`sensorController()`, ...) declared in `Controllers.h` — that's the project's
+one consistent access pattern, and all five `State` subclasses use it. But
+`BundleCalibrationController` mixes two different ways of getting at its
+dependencies: it calls `ledController()` directly from inside `change_phase()`,
+while `SensorController` instead comes in as an explicit parameter —
+`BundleCalibrationController::update(uint16_t button_bits, SensorController
+&sensorController)`, passed in by `BundleState::update()`
+(`firmware/src/states/BundleState.cpp`) — even though `sensorController()` is
+sitting right there and would work exactly the same way `ledController()`
+does. So within this one class the access pattern is inconsistent, with no
+apparent reason for the split (e.g. `LEDController` isn't more "shared" or
+`SensorController` more "test-isolated" in any way that's evident from the
+code).
+
+(An earlier version of this section also flagged `SensorController.cpp`
+reaching `MotionController` via its own inline `extern MotionController
+motionController;` instead of going through `Controllers.h` like everyone
+else. That's now fixed — `SensorController.cpp` includes `Controllers.h` and
+calls `motionController()` like everything else does, as part of the same
+accessor-function migration that resolved Problem 2.)
+
 ## Note
 
 These two problems are linked: fixing #2 (giving the forward model a real

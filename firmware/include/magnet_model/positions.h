@@ -9,7 +9,7 @@ namespace Positions{
 
     // How far the magnets sit below the pivot point of the knob
     // That pivot point is the origin of the knob-frame
-    constexpr float magnet_z_pos_from_pivot = 14;
+    constexpr float magnet_z_pos_from_pivot = 15;
     // The aproximate expected distance form the sensor to the magnet
     constexpr float magnet_rest_distance_sensor = 6;
 
@@ -35,5 +35,5 @@ namespace Positions{
     inline const Vec3 Magnet_2_knob = { magnet_knob[1][0], magnet_knob[1][1], magnet_knob[1][2] };
     inline const Vec3 Magnet_3_knob = { magnet_knob[2][0], magnet_knob[2][1], magnet_knob[2][2] };
 
-    inline const Vec3 approx_rest_pos = {0.0f, 0.0f, magnet_z_pos_from_pivot};
+    inline const Vec3 approx_rest_pos = {0.0f, 0.0f, magnet_z_pos_from_pivot + magnet_rest_distance_sensor};
 }

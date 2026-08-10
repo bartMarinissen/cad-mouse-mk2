@@ -5,10 +5,11 @@
 #include "Config.h"
 #include "Controllers.h"
 #include "StateMachine.h"
+#include "animations/Animations.h"
 
 void BundleState::enter() {
     InputController& input = inputController();
-    ledController().startSpinner(0xFDFDFF);
+    ledController().set(SpinnerAnimation(ledController().ring(), 0xFDFDFF));
     input.takeActivity();
     input.takeCalibrationRequest();
 
@@ -23,7 +24,7 @@ void BundleState::update() {
     InputController& input = inputController();
     BundleCalibrationController& bundleCalibration = bundleCalibrationController();
 
-    ledController().updateSpinner();
+    ledController().update();
     input.update();
 
     // Non-blocking, and only dispatched when a line actually arrived -- the
