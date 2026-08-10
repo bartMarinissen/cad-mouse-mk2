@@ -9,7 +9,8 @@
 // This is constant for the lifetime of every controller that uses it.
 // sensorController() and motionController() (Controllers.h) are each
 // *constructed from* it and hold it const, rather than being reconfigured
-// later, so nothing can drift onto a different calibration mid-flight.
+// later: it lets the compiler fold the values into the hot paths, and it makes
+// reassigning one a compile error rather than a bug to find later.
 //
 // GAIN CONVENTION. The one genuinely subtle part, quoted from
 // magnet_field_model/calibration/export.py:

@@ -5,6 +5,8 @@
 
 #include <type_traits>
 
+#include "Config.h"
+
 namespace CalibrationStorage {
 namespace {
 
@@ -117,9 +119,9 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
     return Result::BadCrc;
   }
 
-  // The payload is the struct. Everything about which float means what lives
-  // on the host, in format_binary() -- this side only has to agree on the
-  // length, which the static_asserts above pin down.
+  // The payload is the struct, byte for byte. Which float means what is the
+  // host's problem, decided once in format_binary(); this side only has to
+  // agree on the length, which the static_asserts above pin down.
   memcpy(&out, in + kPayloadOffset, kPayloadSize);
 
   return isPlausible(out) ? Result::Ok : Result::Implausible;
@@ -183,7 +185,11 @@ bool load(CalibrationParams& out) {
 
   File file = LittleFS.open(kPath, "r");
   if (!file) {
-    Serial.println("CAL_LOAD using default (no stored calibration)");
+    // Not an error: this is every device that has never been calibrated. The
+    // failures below are different, and stay unconditional.
+    if (Config::ENABLE_TELEMETRY) {
+      Serial.println("CAL_LOAD using default (no stored calibration)");
+    }
     return false;
   }
 
@@ -204,7 +210,9 @@ bool load(CalibrationParams& out) {
     return false;
   }
 
-  Serial.println("CAL_LOAD stored calibration");
+  if (Config::ENABLE_TELEMETRY) {
+    Serial.println("CAL_LOAD stored calibration");
+  }
   return true;
 }
 
@@ -288,9 +296,9 @@ bool handleUploadCommand(const char* line) {
   }
 
   // SensorController and MotionController hold their calibration const from
-  // boot, deliberately, "so nothing can drift onto a different calibration
-  // mid-flight" (CalibrationParams.h). A reboot is therefore the only way the
-  // upload takes effect -- reloading in place would mean unpicking that.
+  // boot -- it lets the compiler fold the values in, and it stops anything
+  // reassigning them by mistake. A reboot is therefore the only way an upload
+  // takes effect; reloading in place would mean giving both of those up.
   Serial.println("CAL_UPLOAD_OK");
   Serial.println("STATUS REBOOTING");
   Serial.flush();

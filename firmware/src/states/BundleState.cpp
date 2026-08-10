@@ -1,7 +1,6 @@
 #include "states/BundleState.h"
 
 #include <Arduino.h>
-#include <string.h>
 
 #include "Config.h"
 #include "Controllers.h"
@@ -30,28 +29,23 @@ void BundleState::update() {
     // Non-blocking, and only dispatched when a line actually arrived -- the
     // old readBytesUntil() could stall the loop for up to Stream's 1000ms
     // timeout, and handed the controller a zeroed buffer every idle tick.
+    // The controller decides whether a command ends calibration.
     const char* command = serialController().takeLine();
-    if (command != nullptr) {
-        // The way out that does not store anything. Capture and fit never
-        // touch flash on their own -- only an explicit CAL_UPLOAD does -- so
-        // this is what lets a session be run, looked at, and walked away from.
-        // It is also the only escape from a run whose host went away, since
-        // WAIT_FOR_ACK just times out back to WAIT_FOR_START_BTN forever.
-        if (strcmp(command, "CAL_ABORT") == 0) {
-            bundleCalibration.abort();
-            stateMachine.changeState(&StateMachine::idleState);
-            return;
-        }
-        bundleCalibration.handle_serial_command(command);
+    if (command != nullptr && bundleCalibration.handle_serial_command(command)) {
+        stateMachine.changeState(&StateMachine::idleState);
+        return;
     }
 
     uint16_t button_bits = input.takeActivity();
     // We pass the sensorController so the callibrator can be selective in when it wants to read the sensor.
     bundleCalibration.update(button_bits, sensorController());
 
-   if (bundleCalibration.is_done()){
-       stateMachine.changeState(&StateMachine::idleState);
-   }
+    // Deliberately no exit on "all steps captured". The knob holds in
+    // AWAITING_UPLOAD so the host can solve and hand the result straight back;
+    // dropping to idle here meant the user had to walk it back into
+    // calibration mode to receive a calibration it had just finished
+    // capturing for. Leaving is now CAL_ABORT, or the reboot after
+    // CAL_UPLOAD.
 }
 
 void BundleState::exit() {}

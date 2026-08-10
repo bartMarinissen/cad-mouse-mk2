@@ -22,7 +22,8 @@ enum class CalibPhase {
     COUNTDOWN,          // 1s countdown active
     RECORDING,          // Streaming data to PC
     WAIT_FOR_ACK,       // Waiting for PC to say "CAL_ACK 60"
-    REVIEW              // Waiting for RIGHT (Next) or LEFT (Retry)
+    REVIEW,             // Waiting for RIGHT (Next) or LEFT (Retry)
+    AWAITING_UPLOAD     // All steps captured; holding for CAL_UPLOAD or CAL_ABORT
 };
 
 class BundleCalibrationController {
@@ -32,8 +33,11 @@ public:
     // Call this every cycle in your main loop()
     void update(uint16_t button_bits, SensorController &sensorController);
     
-    // Call this when a complete line is received over Serial
-    void handle_serial_command(const char* cmd);
+    // Call this when a complete line is received over Serial. Returns true if
+    // the caller should leave calibration entirely -- today only CAL_ABORT
+    // does that. Keeping the decision here rather than in the state means
+    // command parsing lives in one place.
+    bool handle_serial_command(const char* cmd);
 
     // Begin a run from the first step. Called by BundleState::enter(), since
     // the CAL_START that got us there was consumed by CalibratingState, and

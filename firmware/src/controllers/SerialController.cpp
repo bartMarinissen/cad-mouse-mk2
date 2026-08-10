@@ -2,12 +2,20 @@
 
 #include <string.h>
 
+#include "Config.h"
+
 void SerialController::begin() {
+  // Unconditional: the link carries the calibration protocol, not just
+  // telemetry, so it has to come up whether or not anyone is watching.
   Serial.begin(115200);
-  // Carried over from the setup() this replaced: gives USB CDC a moment to
-  // enumerate so early boot diagnostics -- including which calibration
-  // resolveCalibration() settled on -- have somewhere to land.
-  delay(1000);
+
+  // The wait is a different question, and is purely for a human. It gives USB
+  // CDC time to enumerate so early boot diagnostics have somewhere to land --
+  // worth a second of boot time when someone is reading the port, worth
+  // nothing when nobody is.
+  if (Config::ENABLE_TELEMETRY) {
+    delay(1000);
+  }
 }
 
 void SerialController::update() {

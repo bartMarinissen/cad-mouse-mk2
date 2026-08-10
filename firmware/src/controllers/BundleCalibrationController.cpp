@@ -1,10 +1,20 @@
 #include "controllers/BundleCalibrationController.h"
 
+#include <string.h>
 
+#include "CalibrationStorage.h"
 
 // Constants
 constexpr uint32_t COUNTDOWN_MS = 1000;
 constexpr uint32_t FRAME_INTERVAL_MS = 50; // 20Hz
+
+// How long a phase ignores the buttons after it starts. Entry into
+// calibration is a three-second both-button hold, so the buttons are still
+// down when the first WAIT_FOR_START_BTN begins looking at them and the step
+// fires instantly. A grace window off phase_start_time fixes that without
+// blocking, and covers every phase that reads buttons rather than just the
+// first one.
+constexpr uint32_t BUTTON_GRACE_MS = 400;
 
 BundleCalibrationController::BundleCalibrationController() 
     : current_step(CalibStep::NONE), current_phase(CalibPhase::IDLE) {}
@@ -36,7 +46,23 @@ void BundleCalibrationController::abort() {
     Serial.println("STATUS CAL_ABORTED");
 }
 
-void BundleCalibrationController::handle_serial_command(const char* cmd) {
+bool BundleCalibrationController::handle_serial_command(const char* cmd) {
+    if (strcmp(cmd, "CAL_ABORT") == 0) {
+        // The way out that stores nothing. Capture and fit never touch flash
+        // on their own -- only CAL_UPLOAD does -- so this is what lets a
+        // session be run, looked at, and walked away from. It is also the only
+        // escape from a run whose host went away, since WAIT_FOR_ACK just
+        // times out back to WAIT_FOR_START_BTN forever.
+        abort();
+        return true;
+    }
+
+    if (CalibrationStorage::handleUploadCommand(cmd)) {
+        // Reboots on success and does not return. If it did return the upload
+        // was rejected, and the host gets to retry without losing the capture.
+        return false;
+    }
+
     if (strncmp(cmd, "CAL_START", 9) == 0) {
         start();
     }
@@ -49,10 +75,11 @@ void BundleCalibrationController::handle_serial_command(const char* cmd) {
             } else {
                 // PC rejected or lost data, force a retry
                 Serial.printf("STATUS ACK_FAILED_INSUFFICIENT_DATA got %d expected %d\n", acked_samples, expected_samples);
-                change_phase(CalibPhase::WAIT_FOR_START_BTN); 
+                change_phase(CalibPhase::WAIT_FOR_START_BTN);
             }
         }
     }
+    return false;
 }
 
 void BundleCalibrationController::update(uint16_t button_bits, SensorController &sensorController) {
@@ -62,8 +89,9 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
 
     float raw_field[9];
     
-    // When done or waiting for serial start, do nothing
-    if (current_phase == CalibPhase::IDLE || current_step == CalibStep::COMPLETE) {
+    // Waiting for serial start. AWAITING_UPLOAD is deliberately not short-cut
+    // here -- it is a real phase now, handled in the switch below.
+    if (current_phase == CalibPhase::IDLE) {
         return;
     }
 
@@ -73,9 +101,8 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
     switch (current_phase) {
         case CalibPhase::WAIT_FOR_START_BTN:
             // LED RING: animating the step with its specific animation
-            if (btn_left_pressed) {
+            if (elapsed >= BUTTON_GRACE_MS && btn_left_pressed) {
                 change_phase(CalibPhase::COUNTDOWN);
-                
             }
             break;
 
@@ -114,15 +141,24 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
             }
             break;
 
+        case CalibPhase::AWAITING_UPLOAD:
+            // Every step captured. Stay put rather than dropping back to the
+            // mouse: the host is about to solve and hand back a calibration,
+            // and making the user walk the knob back into calibration mode to
+            // receive it is the wrong shape. Leaves on CAL_UPLOAD (which
+            // reboots) or CAL_ABORT.
+            break;
+
         case CalibPhase::REVIEW:
             // LED RING: repeating animation of completed step
-            if (button_bits) {
+            if (elapsed >= BUTTON_GRACE_MS && button_bits) {
                 // Next step!
                 int next_step = (int)current_step + 1;
                 if (next_step > (int)CalibStep::RANDOM) {
                     current_step = CalibStep::COMPLETE;
-                    change_phase(CalibPhase::IDLE);
+                    change_phase(CalibPhase::AWAITING_UPLOAD);
                     Serial.println("STATUS ALL_STEPS_COMPLETE");
+                    Serial.println("STATUS AWAITING_UPLOAD");
                 } else {
                     current_step = (CalibStep)next_step;
                     change_phase(CalibPhase::WAIT_FOR_START_BTN);

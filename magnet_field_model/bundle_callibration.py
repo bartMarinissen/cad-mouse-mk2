@@ -302,15 +302,18 @@ def main() -> None:
     parser.add_argument(
         "--write-serial",
         action="store_true",
-        help="Also push the fitted constants straight to a connected device. "
-             "Prompts you to trigger a tare, then sends the same bytes --emit-bin "
-             "writes; the device validates, stores and reboots into them.",
+        help="Keep the knob in calibration mode after capture, solve, then ask "
+             "whether to write the result to it. Without this the knob is "
+             "released as soon as capture finishes, since nothing is coming "
+             "back to it. With --replay there is no capture, so this instead "
+             "waits for you to put the knob into tare and pushes the re-fitted "
+             "result.",
     )
     args = parser.parse_args()
 
     console = Console()
 
-    def report(result: BundleCalibrationResult, port: str | None = None) -> None:
+    def report(result: BundleCalibrationResult) -> None:
         _print_calibration_summary(console, result)
         if args.emit_cpp:
             console.print("\n[bold]Firmware constants[/]")
@@ -323,16 +326,20 @@ def main() -> None:
             console.print(f"\nWrote {len(blob)} byte calibration blob to {args.emit_bin}")
             console.print("[grey50]Flash it with: pio run -t uploadfs[/]")
 
+
+    if args.replay:
+        # No capture, so no knob to hold: fit the dump, then push it the
+        # standalone way if asked. This is how you re-fit an old run and
+        # deliver it without recapturing.
+        result = run_bundle_calibration(_load_raw_datasets(args.replay), n_frames=args.frames)
+        report(result)
         if args.write_serial:
             _write_calibration_over_serial(
                 console,
-                port or args.port or _pick_port(console),
+                args.port or _pick_port(console),
                 args.baud,
                 format_binary(result.geometry),
             )
-
-    if args.replay:
-        report(run_bundle_calibration(_load_raw_datasets(args.replay), n_frames=args.frames))
         return
 
     port = args.port or _pick_port(console)
@@ -344,14 +351,36 @@ def main() -> None:
         console.print(f"[red]Failed to open {port}: {e}[/]")
         raise SystemExit(1) from e
 
+    def solve(datasets: dict[CalibStep, list[list[float]]]) -> BundleCalibrationResult:
+        return run_bundle_calibration(datasets, n_frames=args.frames)
+
+    def summarize(result: BundleCalibrationResult) -> str:
+        ok = all(s.success for s in result.stages)
+        status = "converged" if ok else "did NOT fully converge"
+        return (
+            f"Fit {status}. Field residual "
+            f"{result.initial_rel_pct:.2f}% at nominal -> {result.field_rel_pct:.2f}% fitted, "
+            f"over {len(result.selected_indices)} frames."
+        )
+
     try:
-        # Blocks for the whole calibration session - sending CAL_START,
-        # collecting/ACKing all 7 poses, and driving the Live display -
-        # until STATUS ALL_STEPS_COMPLETE or the user aborts (Ctrl+C).
-        session = collector.run_calibration_session(link)
+        # Blocks for the whole run: waiting for the knob to enter tare,
+        # collecting/ACKing all 7 poses, solving, and (with --write-serial)
+        # asking whether to write the result back - all inside one display.
+        outcome = collector.run_calibration_session(
+            link,
+            solve=solve,
+            summarize=summarize,
+            make_blob=(
+                (lambda result: format_binary(result.geometry))
+                if args.write_serial
+                else None
+            ),
+        )
     finally:
         link.close()
 
+    session = outcome.session
     dump_path = _dump_raw_datasets(session.datasets)
     console.print(f"Raw calibration data saved to {dump_path}")
 
@@ -359,11 +388,13 @@ def main() -> None:
         console.print("[yellow]Calibration aborted before all steps completed.[/]")
         raise SystemExit(1)
 
-    # The device stores a calibration on LittleFS now, so a fit can actually
-    # land on hardware: --write-serial pushes it over this same port, or
-    # --emit-bin writes the blob for `pio run -t uploadfs`. --emit-cpp stays
-    # for reading and diffing the numbers.
-    report(run_bundle_calibration(session.datasets, n_frames=args.frames), port=port)
+    if outcome.uploaded:
+        console.print("[green]Calibration written to the knob.[/] It is rebooting to apply it.")
+
+    # The fit already ran inside the session; this is the detailed report, plus
+    # whatever --emit-cpp / --emit-bin were asked for.
+    if outcome.result is not None:
+        report(outcome.result)
 
 
 if __name__ == "__main__":

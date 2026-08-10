@@ -9,6 +9,8 @@ when to redraw it.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import TracebackType
 
 from rich.console import Console, Group
@@ -84,6 +86,41 @@ def _current_panel(session: CalibrationSession) -> Panel:
     awaiting_confirmation = phase in (CalibPhase.WAIT_FOR_ACK, CalibPhase.REVIEW)
     header_style = "grey50" if awaiting_confirmation else "bold"
 
+    # The stages that happen off the knob get the panel to themselves: the
+    # step/phase machinery below has nothing to say once capture is over, and
+    # the solve and the write decision are still part of the same run.
+    if session.stage == "waiting_for_tare":
+        return Panel(
+            Group(
+                Text("Waiting for the knob", style="bold yellow"),
+                Text(""),
+                Text("Hold BOTH buttons for about 3 seconds to enter tare."),
+                Text("Calibration starts automatically once it does.", style="grey50"),
+            ),
+            title="Current Step",
+            border_style="yellow",
+        )
+
+    if session.stage == "solving":
+        elapsed_s = time.monotonic() - session.phase_started_at
+        return Panel(
+            Group(
+                Text("Solving the bundle adjustment...", style="bold cyan"),
+                Text(f"{elapsed_s:0.1f}s elapsed", style="grey50"),
+                Text(""),
+                Text("The knob is holding in calibration mode.", style="grey50"),
+            ),
+            title="Current Step",
+            border_style="cyan",
+        )
+
+    if session.stage in ("confirming", "finished") and session.summary:
+        return Panel(
+            Group(Text(session.summary)),
+            title="Fit result",
+            border_style="green",
+        )
+
     lines: list = [Text(STEP_NAMES.get(step, "Waiting to start..."), style=header_style)]
 
     if session.completed:
@@ -158,3 +195,18 @@ class LiveDisplay:
 
     def update(self, session: CalibrationSession) -> None:
         self._live.update(render(session))
+
+    @contextmanager
+    def paused(self) -> Iterator[Console]:
+        """Drop out of the live screen long enough to ask the user something.
+
+        Rich's Live owns the terminal, so a prompt drawn underneath it either
+        gets overwritten or fights the refresh. Stopping and restarting around
+        the question is the reliable way, and it keeps the whole run inside
+        one display rather than tearing it down to ask.
+        """
+        self._live.stop()
+        try:
+            yield self._live.console
+        finally:
+            self._live.start(refresh=True)

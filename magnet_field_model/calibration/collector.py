@@ -1,10 +1,10 @@
-"""Runs a bundle calibration data-collection session end to end.
+"""Runs a bundle calibration session end to end.
 
-This is the control-flow layer, and the thing entrypoints should call: it
-starts CAL_START, reads and ACKs frames for all 7 poses via
-CalibrationSession, and redraws the on-screen display as it goes. It
-blocks until either STATUS ALL_STEPS_COMPLETE arrives or the user aborts
-with Ctrl+C.
+This is the control-flow layer, and the thing entrypoints should call. It
+covers the whole run, not just the capture: wait for the knob to enter tare,
+drive the 7 poses, solve the fit, and decide what happens to the result. All
+of it inside one display, because tearing the screen down to run the solver
+and print tables underneath it made the run feel like two separate programs.
 
 tui.py, by contrast, only knows how to draw a session - it has no idea a
 serial port, or a "when are we done" question, even exists. That split is
@@ -21,28 +21,104 @@ own receive buffer comfortably absorbs the gap between reads.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from rich.prompt import Confirm
+
+from .protocol import CalibStep
 from .serial_link import SerialLink
 from .session import CalibrationSession
 from .tui import LiveDisplay
 
+Datasets = dict[CalibStep, list[list[float]]]
 
-def run_calibration_session(link: SerialLink) -> CalibrationSession:
-    """Run the full calibration data-collection session end to end.
 
-    Returns the CalibrationSession so the caller can check `.completed`
-    and read `.datasets` regardless of how the run ended.
+@dataclass
+class SessionOutcome:
+    """Everything a caller might want to know about how a run ended."""
+
+    session: CalibrationSession
+    result: Any | None = None
+    uploaded: bool = False
+
+
+def _capture(link: SerialLink, session: CalibrationSession, display: LiveDisplay) -> None:
+    """Wait for a tare window, then drive capture until the knob says done."""
+    session.start()
+    while not session.completed:
+        line = link.readline()
+        if line:
+            session.feed_line(line)
+        display.update(session)
+
+
+def run_calibration_session(
+    link: SerialLink,
+    *,
+    solve: Callable[[Datasets], Any] | None = None,
+    summarize: Callable[[Any], str] | None = None,
+    make_blob: Callable[[Any], bytes] | None = None,
+) -> SessionOutcome:
+    """Capture, optionally solve, and optionally offer to write the result.
+
+    `make_blob` is what decides whether the knob is held after capture. With
+    it, the knob stays in calibration mode while the fit runs and the user is
+    asked whether to write - which is the whole point of it holding. Without
+    it there is nothing coming back, so the knob is released immediately
+    rather than being left parked waiting for a result that will never arrive.
+
+    Returns the session regardless of how the run ended, so the caller can
+    still dump raw frames after a Ctrl+C.
     """
     session = CalibrationSession(send_fn=link.send)
+    outcome = SessionOutcome(session=session)
 
     try:
         with LiveDisplay(session) as display:
-            session.start()
-            while not session.completed:
-                line = link.readline()
-                if line:
-                    session.feed_line(line)
-                display.update(session)
-    except KeyboardInterrupt:
-        pass
+            _capture(link, session, display)
 
-    return session
+            if not session.completed:
+                return outcome
+
+            # No result is coming back, so do not make the user watch the knob
+            # sit in calibration mode waiting for one.
+            if make_blob is None:
+                session.abort()
+                display.update(session)
+
+            if solve is not None:
+                session.set_stage("solving")
+                display.update(session)
+                outcome.result = solve(session.datasets)
+                if summarize is not None:
+                    session.summary = summarize(outcome.result)
+
+            if make_blob is None or outcome.result is None:
+                session.set_stage("finished")
+                display.update(session)
+                return outcome
+
+            session.set_stage("confirming")
+            display.update(session)
+            with display.paused() as console:
+                console.print(session.summary or "")
+                write = Confirm.ask("Write this calibration to the knob?", default=True)
+
+            if write:
+                session.upload(make_blob(outcome.result))
+                outcome.uploaded = True
+            else:
+                session.abort()
+
+            session.set_stage("finished")
+            display.update(session)
+    except KeyboardInterrupt:
+        # The knob is probably still holding in calibration mode. Best effort:
+        # if the port is still usable, let it go rather than leaving it stuck.
+        with contextlib.suppress(Exception):
+            session.abort()
+
+    return outcome

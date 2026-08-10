@@ -10,11 +10,17 @@
 // Serial itself.
 //
 // This replaces the Serial.readBytesUntil('\n', ...) that used to live in
-// BundleState::update(). That call blocks until the delimiter arrives or
-// Stream's 1000ms timeout expires, which was survivable for a short "CAL_ACK
-// 60" but is not for a ~640 character calibration upload: those take ~55ms to
-// arrive at 115200 baud, and stalling the ~120Hz loop that long would stutter
-// HID. Here each update() takes only the bytes already buffered and returns.
+// BundleState::update(). Message size is not really the argument -- normal
+// operation never sees a long line. The problem is that readBytesUntil blocks
+// until the delimiter arrives *or* Stream's 1000ms timeout expires, so any
+// line that never completes stalls the ~120Hz loop for a full second and
+// stutters HID. A host dying midway through "CAL_ACK 60" does that just as
+// well as anything long. Here each update() takes only the bytes already
+// buffered and returns, so an unfinished line costs nothing.
+//
+// A calibration upload is ~640 characters, which is the one case where even a
+// complete line takes a visible ~55ms at 115200 baud, but that is a second
+// reason rather than the main one.
 //
 // Output is deliberately not routed through this class. Telemetry,
 // SensorController and the bundle protocol keep printing to Serial directly;

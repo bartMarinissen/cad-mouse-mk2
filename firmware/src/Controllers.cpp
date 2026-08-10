@@ -8,7 +8,7 @@ CalibrationParams resolveCalibration() {
   if (CalibrationStorage::load(stored)) {
     return stored;
   }
-  return Config::defaultCalibration();
+  return Config::defaultCalibration;
 }
 
 namespace {

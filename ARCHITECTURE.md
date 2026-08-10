@@ -290,12 +290,20 @@ reason the same test can compile that snippet against the extracted
 declaration and diff its bytes against `format_binary()`, checking cffi's ABI
 model against a real compiler.
 
-**Storing is a decision, not the only exit.** Capture and fit never touch flash
-by themselves, and `CAL_ABORT` returns `BundleState` to idle without writing
-anything — which is also the only escape from a run whose host went away, since
-`WAIT_FOR_ACK` otherwise just times out back to `WAIT_FOR_START_BTN` forever.
-The host tooling does not send it yet. A knob-side escape still does not exist;
-see [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md).
+**The knob holds after capture.** Finishing the last pose moves it to
+`AWAITING_UPLOAD` rather than back to `IdleState`: the host is about to solve
+and hand a calibration straight back, and making the user walk the knob into
+calibration mode again to receive it was the wrong shape. `CAL_UPLOAD` is
+therefore accepted in `BundleState` as well as during tare.
+
+**Storing is still a decision, not the only exit.** Capture and fit never touch
+flash by themselves, and `CAL_ABORT` returns to idle without writing — also the
+only escape from a run whose host went away, since `WAIT_FOR_ACK` otherwise
+times out back to `WAIT_FOR_START_BTN` forever. The host sends it when
+`--write-serial` was not passed (nothing is coming back, so the knob should not
+be left parked) or when the user declines the write prompt. A knob-side escape
+still does not exist; see
+[`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md).
 
 Two caveats on the exported numbers:
 
