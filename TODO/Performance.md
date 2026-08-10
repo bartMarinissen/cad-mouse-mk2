@@ -284,12 +284,6 @@ differences were **1.2e-6 (field), 3.1e-6 (Jacobian), 2.9e-6 mm (solved
 translation), 2.4e-7 (solved rotation)** — float32 round-off. `test_jacobian.cpp`
 also passes on the host, 384/384 grid points.
 
-**Correction to the tally above:** it undercounts `solve_knob_pose`'s own cost.
-Counts were taken by following `bl` targets, but an Eigen kernel entered once
-loops internally — `H = JᵀJ` alone is ~612 flops, not the ~150 implied. A
-recounted iteration is roughly 2970 flops: 3 × ~610 for the sensor chain, ~1140
-for the normal equations.
-
 - **`micros()` instead of `millis()`** for the solve timer. At ~7.5ms per call
   the millisecond clock quantised at ±13%, coarser than most changes worth
   measuring. `Statistics::time_tot`/`n_time` are `uint32_t` (a signed int of
@@ -299,28 +293,116 @@ for the normal equations.
   every frame under a TODO saying not to, so the solver re-converged the
   rotation from scratch each frame while translation was hot-started. The
   rotation now lives in `MotionController::last_R`. Payoff is data-dependent:
-  near-free at rest, largest while the knob is moving.
+  near-free at rest, largest while the knob is moving; not captured by the
+  fixed-iteration benchmark below, which hot-starts every run identically.
 - **`R_mag` folded into `R_total`** (`sensor.cpp`). `R·(R_mag·J·R_magᵀ)·Rᵀ`
   is `R_total·J·R_totalᵀ`; four 3×3 products become two, and the field rotation
-  collapses the same way. ~6%.
+  collapses the same way.
 - **`R_magᵀ·m` precomputed** into `MagnetModel::magnet_offset_local`, per
-  Math.md §3.2 — it is a frozen calibration constant. ~1.5%.
+  Math.md §3.2 — it is a frozen calibration constant.
 - **Skew products written out.** `[a]_x` has a zero diagonal, so the general
   3×3 product spent a third of its multiplies on structural zeros, and
-  `−[B]_x` touches six entries rather than nine. ~1.8%.
+  `−[B]_x` touches six entries rather than nine.
 - **`H = JᵀJ` exploits symmetry**: 21 dot products for the lower triangle,
-  mirrored, instead of all 36 entries. ~8.6%.
+  mirrored, instead of all 36 entries.
 - **Dead work deleted.** `Statistics::avg_jacobian` ran a 54-element EMA every
-  frame (~162 flops) and nothing ever read it; `raw_full` in `read_pose` was
-  assigned every frame for a commented-out debug block; `forward_model.cpp`
-  computed an unused `R_T`. `solve_knob_pose` also copied 63 floats into its
-  out-params on every call — with `Config::statistics` true that copy was live,
-  so it now writes into the caller's buffers directly (the TODO at the top of
-  that function).
+  frame and nothing ever read it; `raw_full` in `read_pose` was assigned every
+  frame for a commented-out debug block; `forward_model.cpp` computed an unused
+  `R_T`. `solve_knob_pose` also copied 63 floats into its out-params on every
+  call — with `Config::statistics` true that copy was live, so it now writes
+  into the caller's buffers directly (the TODO at the top of that function).
 
-Not yet measured on hardware — all of the above is static/host verification.
-The `micros()` figure in the telemetry dashboard is the number to trust, and
-the changes were kept separable so they can be landed and timed individually.
+### Measured, not estimated
+
+The first two optimization passes above stopped at static/host verification
+with hand-counted flop estimates. Those estimates turned out to be wrong enough
+in places to be worth redoing properly, so this pass was measured two more ways
+before landing: a real ARM build through `pio run`, and dynamic instruction
+counts via `valgrind --tool=callgrind` on the host build.
+
+**The toolchain is available in a sandbox like this one — an earlier attempt in
+this same investigation wrongly concluded otherwise.** `pip install
+platformio` then `pio run -e seeed_xiao_rp2040` succeeds end to end, packages
+and all. The false negative came from probing `api.github.com` (403, repo-scoped)
+and treating that as proof the toolchain was unreachable — but
+`toolchain-rp2040-earlephilhower` ships from `github.com/.../releases/download/`,
+which is not the API host, and PlatformIO's package manager falls back across
+mirrors for the pieces that do go through the registry API. Worth checking this
+directly (`pio pkg install`) before assuming a sandboxed environment can't build
+the real firmware.
+
+**Dynamic instruction counts, static-linked host build, 4000 hot-started solves
+(so process-startup cost is negligible and the count is dominated by the
+algorithm), pre-change tree vs this commit:**
+
+| | per solve | vs pre-change |
+|---|---:|---:|
+| pre-change, `-O2` | 23,139 | — |
+| **post-change, `-O2`** | **18,377** | **−20.6%** |
+
+`BicubicField::evaluate`, `MagnetModel::evaluate`, `ForwardModel::evaluate`, and
+Eigen's LDLT solve came out **bit-for-bit identical in executed instructions**
+between the two trees — proof the solver still takes the same number of LM
+iterations on this workload, so the −20.6% is genuinely per-iteration work, not
+an accidental change in convergence.
+
+Attribution (same 4000-solve run, instructions by function):
+
+| | pre-change | post-change | delta |
+|---|---:|---:|---:|
+| Eigen `gebp_kernel` + `gemm_pack` (general blocked matmul) | 16,758,522 | **0** | −16.8M |
+| `Sensor::evaluate` | 17,525,448 | 12,260,127 | −5.3M |
+| `solve_knob_pose` | 4,877,296 | 9,251,607 | +4.4M |
+
+The symmetric-`JᵀJ` change was the single biggest win, bigger than estimated:
+`jacobian.transpose() * jacobian` was dispatching into Eigen's general blocked
+matrix-multiply kernel (`gebp_kernel`/`gemm_pack_lhs`, meant for large matrices,
+not a 9×6), and replacing it with 21 explicit dot products deletes that whole
+code path — hence 16.8M instructions to zero, not a partial reduction. The rise
+in `solve_knob_pose`'s own count is that deleted work moving *into* the function
+as inlined scalar code rather than a remote call, which is why it shows up
+there instead of vanishing outright. `sensor.cpp`'s own algebra changes landed
+smaller than estimated (~5.7% of the pre-change total vs an early ~9.3% guess).
+
+**Real ARM build** (`toolchain-rp2040-earlephilhower`, `pio run -e
+seeed_xiao_rp2040`): flash **4,960 B smaller** than pre-change (266,668 vs
+271,628 B used); RAM +48 B (61,952 vs 61,904 B, of 262,144 total).
+
+**The static `bl`-tally method this document uses elsewhere gives the wrong
+answer for this class of change, and should not be trusted here without the
+dynamic cross-check above.** Tallying `bl` targets in the real ARM disassembly
+the same way as the passes above shows the per-iteration soft-float count
+*rising* — 972 calls pre-change vs 1078 post-change, i.e. apparently +10.9%,
+the opposite of what actually happens. This isn't a mistake in that count, it's
+what the method structurally cannot see: the deleted work was inside an Eigen
+loop kernel, counted once in the static tally no matter how many times its
+internal loop actually executes, whereas the replacement is straight-line
+scalar code that the tally counts in full. The BicubicField rewrite earlier in
+this document flagged the same trap for static-vs-dynamic counting; this is
+another instance of it, this time bad enough to flip the sign.
+
+**Unity build** (`env:seeed_xiao_rp2040_unity`, `platformio.ini`): confirmed via
+`pio run` that it compiles exactly one object,
+`magnet_model_unity.cpp.o`, in place of the five separate ones — so
+`build_src_filter` behaves as intended here and the PlatformIO LDF concern
+raised when this environment was added does not bite in practice. Measured
+effect on host dynamic instruction count: **−1.3% at `-O2`, ~0% at `-O3`**
+(the two optimization levels converge to similar codegen once GCC has whole-TU
+visibility either way it gets there). Kept as opt-in given the small win; worth
+dropping instead if a second build environment isn't worth carrying for ~1%.
+
+**`-O3`**: **−14.8%** executed instructions on top of the `-O2` post-change
+number (host measurement), but real cost on target: **+6,576 B RAM, +14,688 B
+flash** (RAM 61,952 → 68,528 of 262,144 total). Not switched by default —
+RAM is the binding constraint here since the interpolation table must stay
+resident, and 6.6 KB is meaningful headroom to give up pre-emptively. Worth a
+one-line `PLATFORMIO_BUILD_FLAGS="-O3" pio run` experiment against the new
+`micros()` timing on real hardware before deciding either way.
+
+Wall-clock on the actual device is still unmeasured — that needs hardware, and
+is what the new `micros()` instrumentation is for. Executed-instruction counts
+on a pure-software-float target should track closely (nearly every float op is
+a call there), but that is reasoning, not a measurement in hand.
 
 ### Found while doing this, not acted on
 
