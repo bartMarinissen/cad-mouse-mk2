@@ -6,7 +6,9 @@
 MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
                          const Mat3 &magnet_rotation, float magnet_strength_mT)
     : magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
-      magnet_strength_mT(magnet_strength_mT), field_model_(field_model),
+      magnet_strength_mT(magnet_strength_mT),
+      magnet_offset_local(magnet_rotation.transpose() * m_local),
+      field_model_(field_model),
       strength_ratio_(magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT) {}
 
 

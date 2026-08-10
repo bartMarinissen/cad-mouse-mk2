@@ -10,25 +10,35 @@ using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
 struct Statistics {
   static constexpr float smoothing = 0.99f;
 
-  // profiling
-  int time_tot = {};
-  int n_time = {};
-  
+  // profiling. Microseconds -- solve_knob_pose runs ~7.5ms, so the millisecond
+  // clock this used to sample quantised it at about +/-13%, which is coarser
+  // than most of the optimisations worth measuring. uint32_t because at ~7500us
+  // per call and 80Hz a signed int overflows in a little over an hour.
+  uint32_t time_tot = {};
+  uint32_t n_time = {};
+
   // Mean tracking
   Vector9f avg_residual = {};
-  Matrix9x6f avg_jacobian = {};
-  
+
   // Variance tracking (second moment for EMA)
   Vector9f avg_residual_sq = {};
-  
+
   // Latest values
   Vector9f last_residual = {};
   Matrix9x6f last_jacobian = {};
-  
-  void update(int time = 0);
+
+  void update(uint32_t time = 0);
   void reset();
   Vector9f get_residual_stddev() const;
 };
+
+// Extracts Z-Y-X Euler angles (Yaw, Pitch, Roll), in degrees, from a rotation
+// matrix, with a fixed convention (see the .cpp) for reporting pose over HID
+// and for calibration logging. Free function rather than a MotionController
+// method: it's a pure function of R, not solver state, and both
+// MotionController::compute() and SensorController's calibration path need it
+// on a result they got back from read_pose().
+Vec3 extract_angles_robust(const Mat3& R);
 
 class MotionController {
  public:
@@ -39,11 +49,21 @@ class MotionController {
   float compute(const float raw[9], const float* baseline, float dt, float out[6]);
   bool hasMotionActivity() const;
   void set_base_pose(const Vec3 pos, const Vec3 rot);
-  // Returns the residual
-  float read_pose(const float raw[9], Vec3 &position, Vec3 &rot);
+  // Returns the residual. `position` and `R` are in/out: they carry the previous
+  // frame's estimate in as the solver's starting point and the new one out.
+  // This is purely the solve -- it does not derive a reporting representation
+  // (Euler degrees, HID axes, ...) from the result. Callers that want that call
+  // extract_angles_robust(R) themselves afterward; folding it in here would
+  // make every caller pay for a conversion only some of them want, and mixes
+  // "solve a pose" with "format a pose for reporting."
+  float read_pose(const float raw[9], Vec3 &position, Mat3 &R);
   Statistics statistics{};
   Vec3 last_pos = Positions::approx_rest_pos;
   Vec3 last_rot {};
+  // The rotation half of the hot start. Kept as a matrix rather than rebuilt
+  // from last_rot each frame: going back through Euler angles is both lossy and
+  // expensive, and this is the solver's actual state variable.
+  Mat3 last_R = Mat3::Identity();
 
  private:
   static float clampf(float v, float lo, float hi);

@@ -30,8 +30,6 @@ void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t,
                             const Mat3& R, 
                             Eigen::Matrix<float, 9, 1> &B_field, 
                             Eigen::Matrix<float, 9, 6> &J) const {
-                            
-    Mat3 R_T = R.transpose();
 
     for (int i = 0; i < 3; ++i) {
 
