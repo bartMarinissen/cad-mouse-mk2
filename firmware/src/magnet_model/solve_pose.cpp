@@ -1,6 +1,7 @@
 #include "magnet_model/solve_pose.h"
 #include <ArduinoEigenDense.h>
 #include <magnet_model/forward_model.h>
+#include "math3D.h"
 
 using Vector6f = Eigen::Matrix<float, 6, 1>;
 using Vector9f = Eigen::Matrix<float, 9, 1>;
@@ -89,5 +90,18 @@ float __not_in_flash_func(solve_knob_pose)(
     // been writing straight into them.
     // TODO check jacobian well-formedness
     // TODO deal with residual
+
+    // R is now caller-persisted state, hot-started back in on the next call
+    // rather than reset to identity every time -- so unlike a value that's
+    // rebuilt from scratch each call, small float error in the per-iteration
+    // AngleAxisf update above can accumulate across many thousands of calls.
+    // The whole forward-model/Jacobian chain assumes R^T == R^-1, so this
+    // matters for correctness, not just cosmetics. One correction per call
+    // (not per iteration -- drift within a single solve's handful of
+    // iterations is negligible; it's the cross-call accumulation that isn't)
+    // is cheap enough to apply unconditionally rather than track how much
+    // drift has actually built up.
+    R = orthonormalize_approx(R);
+
     return residual.norm();
 }

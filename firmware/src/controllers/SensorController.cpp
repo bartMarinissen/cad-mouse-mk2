@@ -203,7 +203,6 @@ void SensorController::updateCalibration() {
   read_mT(raw);
 
   Vec3 pos = Positions::approx_rest_pos - Vec3(0.1, 0.1, 0.1);
-  Vec3 rot = Vec3::Zero();
   // Deliberately a local identity rather than the controller's hot-start state:
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.
@@ -212,7 +211,8 @@ void SensorController::updateCalibration() {
   // NOTE: reaching into the sibling controller from here is the coupling
   // TODO/controller-ownership.md problem #1 is about. Unchanged by this work,
   // just re-spelled -- it is entangled with the tare redesign.
-  float res = motionController().read_pose(raw, pos, R, rot);
+  float res = motionController().read_pose(raw, pos, R);
+  Vec3 rot = extract_angles_robust(R);
   calibration_pos += pos;
   calibration_rot += rot;
   // Per-sample, so this is the chattiest thing in the firmware.

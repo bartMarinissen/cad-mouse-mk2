@@ -83,6 +83,8 @@ float MotionController::axisBaseDead(int i) {
 
 // Extracts Z-Y-X Euler angles (Yaw, Pitch, Roll) from a rotation matrix.
 // Forces Pitch into the human-intuitive [-90, +90] degree range to prevent 180-deg flips.
+// Declared in MotionController.h; see that declaration for why this is a free
+// function rather than a method.
 Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
     float pitch, roll, yaw;
 
@@ -114,7 +116,7 @@ Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
 }
 
 // Return residual and other quality reports
-float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R, Vec3 &rot_degrees){
+float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R){
   const Vec3 measured[3] = {
     Vec3(raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]),
     Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]),
@@ -128,13 +130,13 @@ float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R, V
   // the live path that is the previous frame's pose -- and the solver refines
   // them in place. R used to be reset to identity here, which threw away half
   // the hot start and made the solver re-converge the rotation every frame.
+  // solve_knob_pose also re-orthonormalizes R before returning, since it's now
+  // long-lived state rather than rebuilt from scratch each call.
   const uint32_t before = micros();
   float residual_magnitude = solve_knob_pose(position, R, forward_model_, measured, residual_vec_ptr, jacobian_ptr);
   const uint32_t after = micros();
   if (Config::statistics)
     statistics.update(after - before);
-  // retrieve underlying angles
-  rot_degrees = extract_angles_robust(R);
   return residual_magnitude;
 }
 
@@ -144,7 +146,8 @@ float MotionController::compute(const float raw[9], const float baseline[9], flo
   // hot start from previous value
 
   // TODO: as a backup if this is a bad result, try the base position from calibration
-  float residual = read_pose(raw, last_pos, last_R, last_rot);
+  float residual = read_pose(raw, last_pos, last_R);
+  last_rot = extract_angles_robust(last_R);
 
   Eigen::Matrix<float, 9, 1> raw_vec = Eigen::Matrix<float, 9, 1>(raw);
   float residual_percent = 100 * residual / raw_vec.norm();

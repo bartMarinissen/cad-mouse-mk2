@@ -32,6 +32,14 @@ struct Statistics {
   Vector9f get_residual_stddev() const;
 };
 
+// Extracts Z-Y-X Euler angles (Yaw, Pitch, Roll), in degrees, from a rotation
+// matrix, with a fixed convention (see the .cpp) for reporting pose over HID
+// and for calibration logging. Free function rather than a MotionController
+// method: it's a pure function of R, not solver state, and both
+// MotionController::compute() and SensorController's calibration path need it
+// on a result they got back from read_pose().
+Vec3 extract_angles_robust(const Mat3& R);
+
 class MotionController {
  public:
   explicit MotionController(const CalibrationParams& cal);
@@ -43,8 +51,12 @@ class MotionController {
   void set_base_pose(const Vec3 pos, const Vec3 rot);
   // Returns the residual. `position` and `R` are in/out: they carry the previous
   // frame's estimate in as the solver's starting point and the new one out.
-  // `rot_degrees` is output only, derived from `R` for reporting.
-  float read_pose(const float raw[9], Vec3 &position, Mat3 &R, Vec3 &rot_degrees);
+  // This is purely the solve -- it does not derive a reporting representation
+  // (Euler degrees, HID axes, ...) from the result. Callers that want that call
+  // extract_angles_robust(R) themselves afterward; folding it in here would
+  // make every caller pay for a conversion only some of them want, and mixes
+  // "solve a pose" with "format a pose for reporting."
+  float read_pose(const float raw[9], Vec3 &position, Mat3 &R);
   Statistics statistics{};
   Vec3 last_pos = Positions::approx_rest_pos;
   Vec3 last_rot {};
