@@ -65,6 +65,7 @@ bundle_params.py       priors, residual weighting, BundleCalibrationProblem, cov
 pose_solver.py         batched Levenberg-Marquardt: every frame's pose at once
 calibration_algorithm.py  the fit that drives all of the above (single joint solve)
 export.py              fitted geometry -> firmware constants
+report.py              fitted result -> the Rich content the TUI and CLI show
 protocol.py / serial_link.py / session.py / collector.py / tui.py   capture side
 ```
 

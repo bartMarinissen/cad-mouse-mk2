@@ -12,9 +12,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
-from typing import Literal
-
-from rich.console import RenderableType
+from typing import TYPE_CHECKING, Literal
 
 from .protocol import (
     STEP_NAMES,
@@ -26,6 +24,12 @@ from .protocol import (
     Unknown,
     parse_line,
 )
+
+if TYPE_CHECKING:
+    # Only for the type hint on `summary` below - session.py stays a pure
+    # protocol state machine at runtime, not pulling in the whole
+    # scipy/numpy fit-report stack just to store a reference to its result.
+    from .report import FitReport
 
 StepStatus = Literal["done", "active", "pending"]
 
@@ -45,11 +49,11 @@ class CalibrationSession:
     phase_started_at: float
     completed: bool
     stage: Stage
-    # The full judgment-quality fit report (tables and all), set once solving
-    # finishes. A Rich renderable rather than a string so the live display
-    # can show the actual thing a human would use to decide whether to write
-    # it, not a one-line paraphrase of it.
-    summary: RenderableType | None
+    # The fit report, set once solving finishes. Pre-split (see FitReport)
+    # rather than one blob so the live display can put the fitted parameters,
+    # the trust diagnostics, and the write prompt in three different panels
+    # instead of one wall of text.
+    summary: FitReport | None
     log: deque[str]
 
     def __init__(self, send_fn: Callable[[str], None]):

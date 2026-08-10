@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from types import TracebackType
 
-from rich.console import Console, Group, RenderableType
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -72,6 +72,17 @@ def _step_tracker(session: CalibrationSession) -> Table:
         else:
             glyph, style = "[ ]", "grey50"
         table.add_row(Text(glyph, style=style), Text(STEP_NAMES.get(step, str(step)), style=style))
+
+    # Solving happens on the PC, not the knob, so it has no CalibStep of its
+    # own - approximate it from the session stage instead so the tracker
+    # doesn't just stop at RANDOM as if there were nothing left to do.
+    if session.stage == "solving":
+        glyph, style = "[>]", "bold yellow"
+    elif session.stage in ("confirming", "finished"):
+        glyph, style = "[x]", "green"
+    else:
+        glyph, style = "[ ]", "grey50"
+    table.add_row(Text(glyph, style=style), Text("COMPUTE CALIBRATION", style=style))
     return table
 
 
@@ -114,18 +125,33 @@ def _current_panel(session: CalibrationSession) -> Panel:
             border_style="cyan",
         )
 
-    if session.stage in ("confirming", "finished") and session.summary is not None:
-        # The full report (tables and all) - this is what the write decision
-        # actually gets judged against, so it belongs in the display the user
-        # is looking at when asked, not a one-line paraphrase of it.
-        return Panel(session.summary, title="Fit result", border_style="green")
+    if session.stage == "confirming" and session.summary is not None:
+        # Just the question - the numbers to judge it by are already sitting
+        # in the steps/log panels either side of this one, in the same
+        # positions they've been in the whole run.
+        return Panel(
+            Group(
+                Text("Write this calibration to the knob?", style="bold yellow"),
+                Text(""),
+                Text("Type y or n on your keyboard, then press Enter.", style="grey50"),
+            ),
+            title="Decision",
+            border_style="yellow",
+        )
+
+    if session.stage == "finished" and session.summary is not None:
+        # Whatever upload()/abort() last logged - "Sent N byte calibration...
+        # will reboot" or "Released the knob (no calibration written)" -
+        # already says exactly what happened.
+        outcome_text = session.log[-1] if session.log else "Done."
+        return Panel(Text(outcome_text, style="bold green"), title="Result", border_style="green")
 
     lines: list = [Text(STEP_NAMES.get(step, "Waiting to start..."), style=header_style)]
 
     if session.completed:
         lines.append(Text("All done!", style="bold green"))
     elif phase == CalibPhase.WAIT_FOR_START_BTN:
-        lines.append(Text("Press the LEFT button on the knob to begin recording."))
+        lines.append(Text("Press any button on the knob to begin recording."))
     elif phase == CalibPhase.COUNTDOWN:
         remaining_s = max(0.0, (COUNTDOWN_MS - elapsed_ms) / 1000)
         lines.append(Text(f"Get ready... {remaining_s:0.1f}s", style="yellow"))
@@ -144,36 +170,51 @@ def _current_panel(session: CalibrationSession) -> Panel:
 
 
 def _log_panel(session: CalibrationSession) -> Panel:
+    if session.stage in ("confirming", "finished") and session.summary is not None:
+        # Trust diagnostics, not the event log - once there's a fit, whether
+        # it converged and how much the data actually pinned down is more
+        # useful here than a scrollback of CAL_FRAME/CAL_STATE chatter.
+        return Panel(
+            Group(session.summary.headline, session.summary.diagnostics),
+            title="Fit diagnostics",
+            border_style="grey50",
+        )
     tail = list(session.log)[-LOG_TAIL:]
     return Panel(Text("\n".join(tail)), title="Log", border_style="grey50")
+
+
+def _left_panel(session: CalibrationSession) -> Panel:
+    if session.stage in ("confirming", "finished") and session.summary is not None:
+        # What got fitted, in the same slot the step tracker was in a moment
+        # ago - the panel that answers "is this run going okay" during
+        # capture is the one that answers "is this result okay" once it ends.
+        return Panel(session.summary.parameters, title="Fitted parameters", border_style="grey50")
+    return Panel(_step_tracker(session), title="Steps", border_style="grey50")
 
 
 _HEADER = Panel(Text("Bundle Calibration", justify="center", style="bold cyan"))
 
 
-def render(session: CalibrationSession) -> RenderableType:
-    """Build the renderable for the current session state.
+def render(session: CalibrationSession) -> Layout:
+    """Build the Layout for the current session state.
 
-    Capture uses a fixed-size Layout grid, sized to the terminal - fine for
-    the step tracker and a handful of status lines. The fit report does not
-    fit that mould: it is several tables tall, and a Layout region clips
-    whatever doesn't fit its allotted rows rather than growing for it, which
-    would quietly truncate the exact numbers a write decision is supposed to
-    be judged against. So once there is a report to show, drop the grid and
-    return a plain top-to-bottom Group instead - Rich sizes that to its
-    content and lets the terminal scroll, same as any normal printed output.
+    Always the same three regions (steps | current / log), start to finish -
+    solving and the write decision change what each region shows, never
+    where they are. Panels swapping position between "still running" and
+    "done" was disorienting, is the whole reason this isn't still a Group
+    that bypasses the grid for those stages.
     """
-    if session.stage in ("confirming", "finished") and session.summary is not None:
-        return Group(_HEADER, _current_panel(session), _log_panel(session))
-
     layout = Layout()
     layout.split_column(Layout(name="header", size=3), Layout(name="body"))
     layout["header"].update(_HEADER)
 
-    layout["body"].split_row(Layout(name="steps", ratio=1), Layout(name="main", ratio=2))
-    layout["steps"].update(Panel(_step_tracker(session), title="Steps", border_style="grey50"))
+    # Even split, not the 1:2 a bare step list would prefer: once there's a
+    # fit, this column carries the sensor gain-matrix table, which wraps
+    # every value onto its own line if it's squeezed much narrower than this.
+    layout["body"].split_row(Layout(name="steps", ratio=1), Layout(name="main", ratio=1))
+    layout["steps"].update(_left_panel(session))
 
-    layout["main"].split_column(Layout(name="current"), Layout(name="log"))
+    layout["main"].split_column(Layout(name="current", size=8), Layout(name="log", ratio=1))
     layout["main"]["current"].update(_current_panel(session))
     layout["main"]["log"].update(_log_panel(session))
     return layout

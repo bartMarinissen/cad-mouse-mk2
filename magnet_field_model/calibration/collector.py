@@ -26,10 +26,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from rich.console import RenderableType
 from rich.prompt import Confirm
 
 from .protocol import CalibStep
+from .report import FitReport
 from .serial_link import SerialLink
 from .session import CalibrationSession
 from .tui import LiveDisplay
@@ -60,7 +60,7 @@ def run_calibration_session(
     link: SerialLink,
     *,
     solve: Callable[[Datasets], Any] | None = None,
-    summarize: Callable[[Any], RenderableType] | None = None,
+    summarize: Callable[[Any], FitReport] | None = None,
     make_blob: Callable[[Any], bytes] | None = None,
 ) -> SessionOutcome:
     """Capture, optionally solve, and optionally offer to write the result.
