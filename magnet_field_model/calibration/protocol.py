@@ -34,8 +34,7 @@ class CalibPhase(IntEnum):
     COUNTDOWN = 2
     RECORDING = 3
     WAIT_FOR_ACK = 4
-    REVIEW = 5
-    AWAITING_UPLOAD = 6
+    AWAITING_UPLOAD = 5
 
 
 STEP_NAMES: dict[CalibStep, str] = {

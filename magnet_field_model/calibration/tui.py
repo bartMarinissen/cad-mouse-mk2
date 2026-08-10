@@ -52,8 +52,8 @@ def _next_step(step: CalibStep) -> CalibStep | None:
 def _next_step_preview(step: CalibStep) -> Text:
     """What's coming up once the knob moves on from `step`.
 
-    Shown as soon as we've got a step's data (WAIT_FOR_ACK/REVIEW), so the
-    user knows what movement to do next before they confirm continuing.
+    Shown as soon as we've got a step's data (WAIT_FOR_ACK), so the user
+    knows what movement to do next before the knob advances.
     """
     next_step = _next_step(step)
     if next_step is not None:
@@ -80,10 +80,10 @@ def _current_panel(session: CalibrationSession) -> Panel:
     phase = session.current_phase
     elapsed_ms = (time.monotonic() - session.phase_started_at) * 1000
 
-    # Once a step's data is in and we're just waiting for the user to
-    # confirm (WAIT_FOR_ACK/REVIEW), that step is effectively done -
-    # fade it out so the "Next up" preview reads as the thing to focus on.
-    awaiting_confirmation = phase in (CalibPhase.WAIT_FOR_ACK, CalibPhase.REVIEW)
+    # Once a step's data is in and the knob is about to advance on its own
+    # (WAIT_FOR_ACK), that step is effectively done - fade it out so the
+    # "Next up" preview reads as the thing to focus on.
+    awaiting_confirmation = phase == CalibPhase.WAIT_FOR_ACK
     header_style = "grey50" if awaiting_confirmation else "bold"
 
     # The stages that happen off the knob get the panel to themselves: the
@@ -137,9 +137,6 @@ def _current_panel(session: CalibrationSession) -> Panel:
         lines.append(Text(f"{session.frame_count(step)} frames captured"))
     elif phase == CalibPhase.WAIT_FOR_ACK:
         lines.append(Text("Sending confirmation to the knob...", style="grey50"))
-        lines.append(_next_step_preview(step))
-    elif phase == CalibPhase.REVIEW:
-        lines.append(Text("Press a button on the knob to continue.", style="grey50"))
         lines.append(_next_step_preview(step))
     else:
         lines.append(Text("Waiting for the knob..."))

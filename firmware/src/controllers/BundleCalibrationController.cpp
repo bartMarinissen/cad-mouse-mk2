@@ -71,7 +71,20 @@ bool BundleCalibrationController::handle_serial_command(const char* cmd) {
             acked_samples = atoi(cmd + 8);
             // Check if PC got enough samples (allow 10% drop rate tolerance)
             if (acked_samples == expected_samples) {
-                change_phase(CalibPhase::REVIEW);
+                // Straight on to the next step (or AWAITING_UPLOAD if that was
+                // the last one) -- no button press in between. There is no
+                // way back to redo a step, so there was nothing for a review
+                // pause to do except make the user press again.
+                int next_step = (int)current_step + 1;
+                if (next_step > (int)CalibStep::RANDOM) {
+                    current_step = CalibStep::COMPLETE;
+                    change_phase(CalibPhase::AWAITING_UPLOAD);
+                    Serial.println("STATUS ALL_STEPS_COMPLETE");
+                    Serial.println("STATUS AWAITING_UPLOAD");
+                } else {
+                    current_step = (CalibStep)next_step;
+                    change_phase(CalibPhase::WAIT_FOR_START_BTN);
+                }
             } else {
                 // PC rejected or lost data, force a retry
                 Serial.printf("STATUS ACK_FAILED_INSUFFICIENT_DATA got %d expected %d\n", acked_samples, expected_samples);
@@ -149,28 +162,6 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
             // reboots) or CAL_ABORT.
             break;
 
-        case CalibPhase::REVIEW:
-            // LED RING: repeating animation of completed step
-            if (elapsed >= BUTTON_GRACE_MS && button_bits) {
-                // Next step!
-                int next_step = (int)current_step + 1;
-                if (next_step > (int)CalibStep::RANDOM) {
-                    current_step = CalibStep::COMPLETE;
-                    change_phase(CalibPhase::AWAITING_UPLOAD);
-                    Serial.println("STATUS ALL_STEPS_COMPLETE");
-                    Serial.println("STATUS AWAITING_UPLOAD");
-                } else {
-                    current_step = (CalibStep)next_step;
-                    change_phase(CalibPhase::WAIT_FOR_START_BTN);
-                }
-            }
-            // TODO: handle retries
-            // } else if (btn_left_pressed) {
-            //     // Retry same step
-            //     change_phase(CalibPhase::WAIT_FOR_START_BTN);
-            // }
-            break;
-            
         default:
             break;
     }

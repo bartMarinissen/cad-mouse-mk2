@@ -137,13 +137,6 @@ class CalibrationSession:
             self.log.append(f"Done recording. Received {count} frames.")
             self._send(f"CAL_ACK {count}")
 
-        elif message.phase == CalibPhase.REVIEW:
-            # NOTE: the firmware currently advances on ANY button press here
-            # (see BundleCalibrationController::update, REVIEW case) - the
-            # left-button-to-retry path is a TODO on the firmware side and
-            # isn't wired up yet, so we don't promise it in the UI.
-            self.log.append("Press a button on the knob to continue to the next step.")
-
     def frame_count(self, step: CalibStep) -> int:
         return len(self.datasets[step])
 

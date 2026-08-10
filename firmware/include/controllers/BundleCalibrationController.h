@@ -21,8 +21,9 @@ enum class CalibPhase {
     WAIT_FOR_START_BTN, // Waiting for user to press LEFT
     COUNTDOWN,          // 1s countdown active
     RECORDING,          // Streaming data to PC
-    WAIT_FOR_ACK,       // Waiting for PC to say "CAL_ACK 60"
-    REVIEW,             // Waiting for RIGHT (Next) or LEFT (Retry)
+    WAIT_FOR_ACK,       // Waiting for PC to say "CAL_ACK 60", then straight on
+                        // to the next step -- there is no way back to redo a
+                        // step, so there is nothing for a review pause to do.
     AWAITING_UPLOAD     // All steps captured; holding for CAL_UPLOAD or CAL_ABORT
 };
 

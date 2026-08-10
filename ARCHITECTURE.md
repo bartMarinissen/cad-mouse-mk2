@@ -190,10 +190,14 @@ in progress):** a guided multi-step capture routine intended to solve the
 Phantom Tilt problem via bundle adjustment. Step sequence:
 `STATIONARY → FLAT_CIRCLE → PITCH → ROLL → TWIST → HEAVE → RANDOM → COMPLETE`.
 Each step is a little sub-state-machine (`CalibPhase`:
-`WAIT_FOR_START_BTN → COUNTDOWN → RECORDING → WAIT_FOR_ACK → REVIEW`) that
-streams `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
+`WAIT_FOR_START_BTN → COUNTDOWN → RECORDING → WAIT_FOR_ACK`) that streams
+`CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 [`bundle_callibration.py`](magnet_field_model/bundle_callibration.py), which
-ACKs frame counts back over the same link.
+ACKs frame counts back over the same link. A successful ACK moves straight on
+to the next step's `WAIT_FOR_START_BTN` (or `AWAITING_UPLOAD` after the last
+one) with no confirmation step in between -- there is no way to go back and
+redo a step, so there is nothing for a pause to do there except cost the user
+an extra button press.
 
 **Status: capture, fit, and delivery all work.** The
 Python side fits 54 shared parameters (per-magnet position, tilt and strength;
