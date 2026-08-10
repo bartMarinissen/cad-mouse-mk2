@@ -69,12 +69,12 @@ constexpr float kSamplerRingRadiusMm = 20.0f;
 // make that visible. Both channels below map a 10mm window (+/-5mm about
 // where the samplers sit at rest) onto the full byte range; motion past the
 // window clips, which is intended.
-constexpr float kZWindowMm = 5.0f;
-constexpr float kRadiusWindowMm = 5.0f;
+constexpr float kZWindowMm = 4.0f;
+constexpr float kRadiusWindowMm = 2.0f;
 // How many times hue wraps around the solid's axis. Raise to make twist more
 // visible (twist only moves azimuth), at the cost of the ring reading as a
 // repeating pattern instead of one clean hue wheel.
-constexpr float kHueWindings = 1.0f;
+constexpr float kHueWindings = 3.0f;
 
 // Maps value linearly from [lo, hi] onto 0..255, clamping outside the range.
 uint8_t mapToByte(float value, float lo, float hi) {
@@ -96,7 +96,7 @@ uint32_t solidColor(const Vec3& pKnob) {
       std::lround((turns - std::floor(turns)) * 65535.0f));
   const uint8_t sat = mapToByte(radius, kSamplerRingRadiusMm - kRadiusWindowMm,
                                         kSamplerRingRadiusMm + kRadiusWindowMm);
-  const uint8_t val = mapToByte(pKnob.z(), -kZWindowMm, kZWindowMm);
+  const uint8_t val = mapToByte(pKnob.z(), kZWindowMm, -kZWindowMm);
 
   return Adafruit_NeoPixel::ColorHSV(hue, sat, val);
 }
@@ -105,10 +105,10 @@ uint32_t solidColor(const Vec3& pKnob) {
 
 PoseColorAnimation::PoseColorAnimation(Adafruit_NeoPixel& ring) : AnimationBase(ring) {
   for (int i = 0; i < Config::LED_COUNT; i++) {
-    const float angle = i * (2.0f * float(M_PI) / Config::LED_COUNT);
+    const float angle = (i + 1/16) * (-2.0f * float(M_PI) / Config::LED_COUNT);
     samplerWorld_[i] = Positions::approx_rest_pos +
-                       Vec3(kSamplerRingRadiusMm * std::cos(angle),
-                            kSamplerRingRadiusMm * std::sin(angle), 0.0f);
+                       Vec3(kSamplerRingRadiusMm * std::sin(angle),
+                            kSamplerRingRadiusMm * std::cos(angle), 0.0f);
   }
 }
 
@@ -128,9 +128,9 @@ void PoseColorAnimation::update() {
   // produced last_rot (extract_angles_robust(), MotionController.cpp).
   // Maps knob frame -> world frame.
   Mat3 R;
-  R << cy * cp,             cy * sp * sr - sy * cr,  cy * sp * cr + sy * sr,
-       sy * cp,             sy * sp * sr + cy * cr,  sy * sp * cr - cy * sr,
-       -sp,                 cp * sr,                 cp * cr;
+  R << cy * cp,     cy * sp * sr - sy * cr,    cy * sp * cr + sy * sr,
+       sy * cp,     sy * sp * sr + cy * cr,    sy * sp * cr - cy * sr,
+       -sp,         cp * sr,                   cp * cr;
 
   // World point -> knob frame, the same transform Sensor::evaluate() applies
   // to the (likewise world-fixed) physical sensors.
