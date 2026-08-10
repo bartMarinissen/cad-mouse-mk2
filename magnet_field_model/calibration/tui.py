@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from types import TracebackType
 
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -114,12 +114,11 @@ def _current_panel(session: CalibrationSession) -> Panel:
             border_style="cyan",
         )
 
-    if session.stage in ("confirming", "finished") and session.summary:
-        return Panel(
-            Group(Text(session.summary)),
-            title="Fit result",
-            border_style="green",
-        )
+    if session.stage in ("confirming", "finished") and session.summary is not None:
+        # The full report (tables and all) - this is what the write decision
+        # actually gets judged against, so it belongs in the display the user
+        # is looking at when asked, not a one-line paraphrase of it.
+        return Panel(session.summary, title="Fit result", border_style="green")
 
     lines: list = [Text(STEP_NAMES.get(step, "Waiting to start..."), style=header_style)]
 
@@ -149,11 +148,27 @@ def _log_panel(session: CalibrationSession) -> Panel:
     return Panel(Text("\n".join(tail)), title="Log", border_style="grey50")
 
 
-def render(session: CalibrationSession) -> Layout:
-    """Build the full-screen Layout for the current session state."""
+_HEADER = Panel(Text("Bundle Calibration", justify="center", style="bold cyan"))
+
+
+def render(session: CalibrationSession) -> RenderableType:
+    """Build the renderable for the current session state.
+
+    Capture uses a fixed-size Layout grid, sized to the terminal - fine for
+    the step tracker and a handful of status lines. The fit report does not
+    fit that mould: it is several tables tall, and a Layout region clips
+    whatever doesn't fit its allotted rows rather than growing for it, which
+    would quietly truncate the exact numbers a write decision is supposed to
+    be judged against. So once there is a report to show, drop the grid and
+    return a plain top-to-bottom Group instead - Rich sizes that to its
+    content and lets the terminal scroll, same as any normal printed output.
+    """
+    if session.stage in ("confirming", "finished") and session.summary is not None:
+        return Group(_HEADER, _current_panel(session), _log_panel(session))
+
     layout = Layout()
     layout.split_column(Layout(name="header", size=3), Layout(name="body"))
-    layout["header"].update(Panel(Text("Bundle Calibration", justify="center", style="bold cyan")))
+    layout["header"].update(_HEADER)
 
     layout["body"].split_row(Layout(name="steps", ratio=1), Layout(name="main", ratio=2))
     layout["steps"].update(Panel(_step_tracker(session), title="Steps", border_style="grey50"))
@@ -165,18 +180,25 @@ def render(session: CalibrationSession) -> Layout:
 
 
 class LiveDisplay:
-    """A full-screen Rich display that knows how to draw a CalibrationSession.
+    """A Rich display that knows how to draw a CalibrationSession.
 
     This is the only piece of tui.py that touches the terminal. It has no
     opinion on where session updates come from or when the session is
     done - the caller (collector.py) decides that and just calls
     `update()` whenever it wants the screen redrawn.
+
+    Deliberately not `screen=True`: an alternate-screen Live redraws in a
+    reserved region and wipes it the moment it stops, which is exactly what
+    made the write-confirmation prompt appear to blank the whole display.
+    Without it, `update()` redraws in place like any other Rich Live, and
+    `stop()` just leaves the last frame sitting in the normal scrollback -
+    nothing to wipe, so nothing disappears.
     """
 
     _live: Live
 
     def __init__(self, session: CalibrationSession, console: Console | None = None) -> None:
-        self._live = Live(render(session), console=console, refresh_per_second=10, screen=True)
+        self._live = Live(render(session), console=console, refresh_per_second=10)
 
     def __enter__(self) -> LiveDisplay:
         self._live.__enter__()
@@ -195,12 +217,14 @@ class LiveDisplay:
 
     @contextmanager
     def paused(self) -> Iterator[Console]:
-        """Drop out of the live screen long enough to ask the user something.
+        """Pause auto-refresh long enough to ask the user something.
 
-        Rich's Live owns the terminal, so a prompt drawn underneath it either
-        gets overwritten or fights the refresh. Stopping and restarting around
-        the question is the reliable way, and it keeps the whole run inside
-        one display rather than tearing it down to ask.
+        Live's background thread redraws on a timer, which would stomp on a
+        prompt's characters as they're typed if left running underneath one.
+        Stopping it is still required for that reason - but since this isn't
+        an alternate screen, stopping just freezes the last frame in place in
+        the normal scrollback rather than clearing it, so the prompt appears
+        as the next line of terminal output, not in place of the display.
         """
         self._live.stop()
         try:

@@ -26,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from rich.console import RenderableType
 from rich.prompt import Confirm
 
 from .protocol import CalibStep
@@ -59,7 +60,7 @@ def run_calibration_session(
     link: SerialLink,
     *,
     solve: Callable[[Datasets], Any] | None = None,
-    summarize: Callable[[Any], str] | None = None,
+    summarize: Callable[[Any], RenderableType] | None = None,
     make_blob: Callable[[Any], bytes] | None = None,
 ) -> SessionOutcome:
     """Capture, optionally solve, and optionally offer to write the result.
@@ -104,8 +105,12 @@ def run_calibration_session(
             session.set_stage("confirming")
             display.update(session)
             with display.paused() as console:
-                console.print(session.summary or "")
-                write = Confirm.ask("Write this calibration to the knob?", default=True)
+                # The report is already sitting in the frozen last frame right
+                # above this prompt (see LiveDisplay.paused) - printing it
+                # again here would just duplicate it.
+                write = Confirm.ask(
+                    "Write this calibration to the knob?", default=True, console=console
+                )
 
             if write:
                 session.upload(make_blob(outcome.result))

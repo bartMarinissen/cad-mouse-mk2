@@ -14,6 +14,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import Literal
 
+from rich.console import RenderableType
+
 from .protocol import (
     STEP_NAMES,
     CalFrame,
@@ -43,7 +45,11 @@ class CalibrationSession:
     phase_started_at: float
     completed: bool
     stage: Stage
-    summary: str
+    # The full judgment-quality fit report (tables and all), set once solving
+    # finishes. A Rich renderable rather than a string so the live display
+    # can show the actual thing a human would use to decide whether to write
+    # it, not a one-line paraphrase of it.
+    summary: RenderableType | None
     log: deque[str]
 
     def __init__(self, send_fn: Callable[[str], None]):
@@ -54,7 +60,7 @@ class CalibrationSession:
         self.phase_started_at = time.monotonic()
         self.completed = False
         self.stage = "waiting_for_tare"
-        self.summary = ""
+        self.summary = None
         self.log = deque(maxlen=self.LOG_MAXLEN)
 
     def start(self) -> None:

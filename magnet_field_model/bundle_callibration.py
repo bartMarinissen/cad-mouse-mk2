@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from rich.console import Console
+from rich.console import Console, Group, RenderableType
 from rich.prompt import IntPrompt
 from rich.table import Table
 
@@ -71,11 +71,20 @@ def _load_raw_datasets(path: Path) -> dict[CalibStep, list[list[float]]]:
     return {CalibStep[name]: frames for name, frames in raw.items()}
 
 
-def _print_calibration_summary(console: Console, result: BundleCalibrationResult) -> None:
+def build_calibration_report(result: BundleCalibrationResult) -> Group:
+    """The full judgment-quality fit report, as a single Rich renderable.
+
+    This is what a write decision should actually be judged against, so it
+    is built once here and reused both as the live display's "confirming"
+    panel content and as the plain-terminal dump after the run - one report,
+    not two copies that could drift apart.
+    """
+    items: list[RenderableType] = []
+
     ok = all(s.success for s in result.stages)
     status = "[green]converged[/]" if ok else "[yellow]did NOT fully converge[/]"
-    console.print(
-        f"\nBundle calibration {status}. Field residual "
+    items.append(
+        f"Bundle calibration {status}. Field residual "
         f"{result.initial_rms_mT:.3f} mT ({result.initial_rel_pct:.2f}%) at nominal "
         f"-> [bold]{result.field_rms_mT:.3f} mT ({result.field_rel_pct:.2f}%)[/] fitted, "
         f"over {len(result.selected_indices)} frames."
@@ -95,7 +104,7 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         for s in result.stages:
             stages.add_row(s.name, str(s.n_free_shared), f"{s.field_rms_mT:.3f}",
                            f"{s.field_rel_pct:.2f}", f"{s.seconds:.1f}")
-        console.print(stages)
+        items.append(stages)
 
     geometry = result.geometry
 
@@ -118,7 +127,7 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         magnets.add_row(str(i + 1), f"{d[0]:+.3f}", f"{d[1]:+.3f}", f"{d[2]:+.3f}",
                         f"{tilt[0]:+.3f}", f"{tilt[1]:+.3f}",
                         f"{geometry.magnet_strength[i]:.4f}")
-    console.print(magnets)
+    items.append(magnets)
 
     # Absolute field scale deserves its error bar right next to it: with no
     # prior on the common mode, the fitted value is whatever the data prefers,
@@ -130,7 +139,7 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         sigmas_from_nominal = abs(mean_strength - 1.0) / mean_sd if mean_sd > 0 else 0.0
         verdict = ("[green]consistent with nominal[/]" if sigmas_from_nominal < 2
                    else "[yellow]notably above nominal[/]")
-        console.print(
+        items.append(
             f"Common-mode strength [bold]{mean_strength:.3f} ± {mean_sd:.3f}[/] "
             f"({sigmas_from_nominal:.1f}σ from nominal) — {verdict}"
         )
@@ -145,7 +154,7 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         rows = "\n".join("  ".join(f"{v:+.4f}" for v in row) for row in g)
         off = "\n".join(f"{v:+.3f}" for v in geometry.sensor_offset[i])
         sensors.add_row(str(i + 1), rows, f"{np.linalg.det(g):.4f}", off)
-    console.print(sensors)
+    items.append(sensors)
 
     # How much each group was actually pinned down by the data, as opposed to
     # left sitting at its prior. Low information gain is not a bug - some of
@@ -175,11 +184,13 @@ def _print_calibration_summary(console: Console, result: BundleCalibrationResult
         colour = "green" if gain.mean() > 0.4 else ("yellow" if gain.mean() > 0.15 else "red")
         info.add_row(name, f"{prior:.3f}", f"{post.mean():.3f}",
                      f"[{colour}]{gain.mean():.0%}[/]")
-    console.print(info)
-    console.print("[grey50]Information gain = 1 - posterior/prior sd. Low means the fit "
-                  "mostly kept the prior, so treat that group as assumed, not measured. "
-                  "'data only' means the group carries no prior - read its posterior sd "
-                  "as the real uncertainty.[/]")
+    items.append(info)
+    items.append("[grey50]Information gain = 1 - posterior/prior sd. Low means the fit "
+                 "mostly kept the prior, so treat that group as assumed, not measured. "
+                 "'data only' means the group carries no prior - read its posterior sd "
+                 "as the real uncertainty.[/]")
+
+    return Group(*items)
 
 
 def _pick_port(console: Console) -> str:
@@ -314,7 +325,7 @@ def main() -> None:
     console = Console()
 
     def report(result: BundleCalibrationResult) -> None:
-        _print_calibration_summary(console, result)
+        console.print(build_calibration_report(result))
         if args.emit_cpp:
             console.print("\n[bold]Firmware constants[/]")
             console.print(format_cpp(result.geometry))
@@ -354,23 +365,18 @@ def main() -> None:
     def solve(datasets: dict[CalibStep, list[list[float]]]) -> BundleCalibrationResult:
         return run_bundle_calibration(datasets, n_frames=args.frames)
 
-    def summarize(result: BundleCalibrationResult) -> str:
-        ok = all(s.success for s in result.stages)
-        status = "converged" if ok else "did NOT fully converge"
-        return (
-            f"Fit {status}. Field residual "
-            f"{result.initial_rel_pct:.2f}% at nominal -> {result.field_rel_pct:.2f}% fitted, "
-            f"over {len(result.selected_indices)} frames."
-        )
-
     try:
         # Blocks for the whole run: waiting for the knob to enter tare,
         # collecting/ACKing all 7 poses, solving, and (with --write-serial)
         # asking whether to write the result back - all inside one display.
+        # The report shown at "confirming" is the same full report printed
+        # below and the one that decides a --write-serial write: one
+        # build_calibration_report call feeds both, not a paraphrase for the
+        # display and the real thing for afterwards.
         outcome = collector.run_calibration_session(
             link,
             solve=solve,
-            summarize=summarize,
+            summarize=build_calibration_report,
             make_blob=(
                 (lambda result: format_binary(result.geometry))
                 if args.write_serial
