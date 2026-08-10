@@ -1,12 +1,14 @@
 #include "Controllers.h"
 
+#include "CalibrationStorage.h"
 #include "Config.h"
 
 CalibrationParams resolveCalibration() {
-  // Stage 2 hook: read /calibration.bin off LittleFS here, validate it, and
-  // fall back to the line below when there is nothing stored or what is stored
-  // does not survive its CRC and plausibility checks.
-  return Config::defaultCalibration();
+  CalibrationParams stored;
+  if (CalibrationStorage::load(stored)) {
+    return stored;
+  }
+  return Config::defaultCalibration;
 }
 
 namespace {
@@ -15,6 +17,7 @@ LEDController ledControllerInstance;
 HIDController hidControllerInstance;
 TelemetryController telemetryControllerInstance;
 BundleCalibrationController bundleCalibrationControllerInstance;
+SerialController serialControllerInstance;
 }  // namespace
 
 InputController& inputController() { return inputControllerInstance; }
@@ -22,6 +25,7 @@ LEDController& ledController() { return ledControllerInstance; }
 HIDController& hidController() { return hidControllerInstance; }
 TelemetryController& telemetryController() { return telemetryControllerInstance; }
 BundleCalibrationController& bundleCalibrationController() { return bundleCalibrationControllerInstance; }
+SerialController& serialController() { return serialControllerInstance; }
 
 SensorController& sensorController() {
   // Function-local static rather than a namespace-scope global: it defers

@@ -10,14 +10,14 @@ SensorController::SensorController(const CalibrationParams& cal)
       mag2Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       sensor_gain_{
-        cal.sensor_gain[0],
-        cal.sensor_gain[1],
-        cal.sensor_gain[2],
+        toMat3(cal.sensor_gain[0]),
+        toMat3(cal.sensor_gain[1]),
+        toMat3(cal.sensor_gain[2]),
       },
       sensor_offset_mT_{
-        cal.sensor_offset_mT[0],
-        cal.sensor_offset_mT[1],
-        cal.sensor_offset_mT[2],
+        toVec3(cal.sensor_offset_mT[0]),
+        toVec3(cal.sensor_offset_mT[1]),
+        toVec3(cal.sensor_offset_mT[2]),
       } {}
 
 void SensorController::powerOff(int pin) { digitalWrite(pin, LOW); }
@@ -100,14 +100,19 @@ bool SensorController::begin() {
     Serial.println("Failed to setup sensor 3!");
     return false;
   }
-  Serial.println("All sensors initialized successfully.");
-  Serial.println("sensor1 has valid data: " + String(mag1Sensor_.hasValidData()));
-  Serial.println("sensor2 has valid data: " + String(mag2Sensor_.hasValidData()));
-  Serial.println("sensor3 has valid data: " + String(mag3Sensor_.hasValidData()));
+  // Bring-up chatter, only useful to someone reading the port. The failures
+  // above stay unconditional -- a sensor that did not come up needs to say so
+  // whether or not telemetry is on.
+  if (Config::ENABLE_TELEMETRY) {
+    Serial.println("All sensors initialized successfully.");
+    Serial.println("sensor1 has valid data: " + String(mag1Sensor_.hasValidData()));
+    Serial.println("sensor2 has valid data: " + String(mag2Sensor_.hasValidData()));
+    Serial.println("sensor3 has valid data: " + String(mag3Sensor_.hasValidData()));
 
-  Serial.println("sensor1 I2C address: " + String(mag1Sensor_.getI2CAddress()));
-  Serial.println("sensor2 I2C address: " + String(mag2Sensor_.getI2CAddress()));
-  Serial.println("sensor3 I2C address: " + String(mag3Sensor_.getI2CAddress()));
+    Serial.println("sensor1 I2C address: " + String(mag1Sensor_.getI2CAddress()));
+    Serial.println("sensor2 I2C address: " + String(mag2Sensor_.getI2CAddress()));
+    Serial.println("sensor3 I2C address: " + String(mag3Sensor_.getI2CAddress()));
+  }
   return true;
 }
 
@@ -206,11 +211,14 @@ void SensorController::updateCalibration() {
   float res = motionController().read_pose(raw, pos, rot);
   calibration_pos += pos;
   calibration_rot += rot;
-  Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f", 
-    pos[0], pos[1], pos[2], 
-    rot[0], rot[1], rot[2],
-    res
-  );
+  // Per-sample, so this is the chattiest thing in the firmware.
+  if (Config::ENABLE_TELEMETRY) {
+    Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f",
+      pos[0], pos[1], pos[2],
+      rot[0], rot[1], rot[2],
+      res
+    );
+  }
 
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] += raw[i];
@@ -224,25 +232,29 @@ void SensorController::updateCalibration() {
 
   calibration_pos /= Config::ZERO_SAMPLES;
   calibration_rot /= Config::ZERO_SAMPLES;
-  Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ", 
-    calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
-  );
+  if (Config::ENABLE_TELEMETRY) {
+    Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ",
+      calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
+    );
+  }
   motionController().set_base_pose(calibration_pos, calibration_rot);
 
   for (int i = 0; i < 9; i++) {
     baseline_[i] = calibrationSum_[i] / Config::ZERO_SAMPLES;
   }
 
-  Serial.println("Calibration complete. Baseline values:");
-  for (int i = 0; i < 9; i++) {
-    Serial.print(baseline_[i], 6);
-    if (i < 8) {
-      Serial.print(", ");
-    } else {
-      Serial.println();
+  if (Config::ENABLE_TELEMETRY) {
+    Serial.println("Calibration complete. Baseline values:");
+    for (int i = 0; i < 9; i++) {
+      Serial.print(baseline_[i], 6);
+      if (i < 8) {
+        Serial.print(", ");
+      } else {
+        Serial.println();
+      }
     }
+    Serial.flush();
   }
-  Serial.flush();
   calibrationActive_ = false;
   calibrationDone_ = true;
 }

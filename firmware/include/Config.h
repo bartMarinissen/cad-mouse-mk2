@@ -3,6 +3,8 @@
 #include <Arduino.h>
 
 #include "CalibrationParams.h"
+#include "magnet_model/magnet_model_table.h"
+#include "magnet_model/positions.h"
 
 namespace Config {
 
@@ -56,11 +58,11 @@ const unsigned long LED_ERROR_COLOR = 0xFF0000;
 // FSM timing
 const long IDLE_SLEEP_TIMEOUT_MS = 2 * 60 * 1000;
 
-const float magnet_gains[3] = {-0.96, -1.2, -0.98};
+constexpr float magnet_gains[3] = {-0.96, -1.2, -0.98};
 
 // Per-sensor XYZ offset, in mT, subtracted after the gain matrix is applied
 // (i.e. in read_mT()'s output space, not raw sensor counts).
-const float sensor_offset_mT[3][3] = {
+constexpr float sensor_offset_mT[3][3] = {
   {0.1f,  -1.4f, 0.0f},
   {-1.6f, -0.2f, 0.0f},
   {0.0f,   0.0f, 0.0f},
@@ -72,10 +74,59 @@ const float sensor_offset_mT[3][3] = {
 // uncalibrated) unit -- identity magnet rotations and unit magnet strengths,
 // with magnet positions taken from the nominal CAD geometry in positions.h.
 //
-// A function rather than a constant on purpose: CalibrationParams holds Eigen
-// types, and a namespace-scope instance would be built during static init, in
-// an order nothing here controls.
-CalibrationParams defaultCalibration();
+// A genuine compile-time constant: CalibrationParams is plain data and every
+// input here is constexpr, so this is constant-initialised into flash rather
+// than built on each of the two calls resolveCalibration() makes at boot. It
+// used to be a function because the struct held Eigen types and the positions
+// were dynamically initialised Vec3s; neither is true any more.
+//
+// Spelled out rather than loop-filled so the shape is readable against the
+// struct, and so it matches what export.py's format_cpp() emits for a fitted
+// calibration -- default and fitted now read alike.
+constexpr CalibrationParams defaultCalibration = {
+    // sensor_gain: a scalar gain per sensor, i.e. no cross-axis skew. The
+    // full 3x3 only ever comes from a real bundle calibration.
+    {
+        {{magnet_gains[0], 0.0f, 0.0f},
+         {0.0f, magnet_gains[0], 0.0f},
+         {0.0f, 0.0f, magnet_gains[0]}},
+        {{magnet_gains[1], 0.0f, 0.0f},
+         {0.0f, magnet_gains[1], 0.0f},
+         {0.0f, 0.0f, magnet_gains[1]}},
+        {{magnet_gains[2], 0.0f, 0.0f},
+         {0.0f, magnet_gains[2], 0.0f},
+         {0.0f, 0.0f, magnet_gains[2]}},
+    },
+
+    // sensor_offset_mT
+    {
+        {sensor_offset_mT[0][0], sensor_offset_mT[0][1], sensor_offset_mT[0][2]},
+        {sensor_offset_mT[1][0], sensor_offset_mT[1][1], sensor_offset_mT[1][2]},
+        {sensor_offset_mT[2][0], sensor_offset_mT[2][1], sensor_offset_mT[2][2]},
+    },
+
+    // magnet_pos_knob: nominal CAD geometry, bottom-face reference.
+    {
+        {Positions::magnet_knob[0][0], Positions::magnet_knob[0][1], Positions::magnet_knob[0][2]},
+        {Positions::magnet_knob[1][0], Positions::magnet_knob[1][1], Positions::magnet_knob[1][2]},
+        {Positions::magnet_knob[2][0], Positions::magnet_knob[2][1], Positions::magnet_knob[2][2]},
+    },
+
+    // magnet_rotation: identity, i.e. no fitted tilt.
+    {
+        {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+    },
+
+    // magnet_strength_mT: BICUBIC_FIELD_REFERENCE_MT, not a placeholder. It
+    // makes magnet_strength_mT[i] / BICUBIC_FIELD_REFERENCE_MT exactly 1.0,
+    // i.e. "no separate strength correction", because magnet_gains above is a
+    // hand-tuned scalar that already carries the entire field scale -- these
+    // defaults are in the gain-carries-scale gauge, not the fit's det(G)=1
+    // one. See CalibrationParams.h.
+    {BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT},
+};
 
 // Uncomment this one and define it in config.cpp if you ran calibration and don't want to store it in flash.
 // CalibrationParams fittedCalibration();

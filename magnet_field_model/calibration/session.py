@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .protocol import (
     STEP_NAMES,
@@ -25,7 +25,18 @@ from .protocol import (
     parse_line,
 )
 
+if TYPE_CHECKING:
+    # Only for the type hint on `summary` below - session.py stays a pure
+    # protocol state machine at runtime, not pulling in the whole
+    # scipy/numpy fit-report stack just to store a reference to its result.
+    from .report import FitReport
+
 StepStatus = Literal["done", "active", "pending"]
+
+# Where the run is, beyond what the knob itself reports. The knob only knows
+# about capture; solving and the write decision happen here, and the display
+# needs to show them too rather than tearing itself down halfway through.
+Stage = Literal["waiting_for_tare", "capturing", "solving", "confirming", "finished"]
 
 
 class CalibrationSession:
@@ -37,6 +48,12 @@ class CalibrationSession:
     current_phase: CalibPhase
     phase_started_at: float
     completed: bool
+    stage: Stage
+    # The fit report, set once solving finishes. Pre-split (see FitReport)
+    # rather than one blob so the live display can put the fitted parameters,
+    # the trust diagnostics, and the write prompt in three different panels
+    # instead of one wall of text.
+    summary: FitReport | None
     log: deque[str]
 
     def __init__(self, send_fn: Callable[[str], None]):
@@ -46,11 +63,37 @@ class CalibrationSession:
         self.current_phase = CalibPhase.IDLE
         self.phase_started_at = time.monotonic()
         self.completed = False
+        self.stage = "waiting_for_tare"
+        self.summary = None
         self.log = deque(maxlen=self.LOG_MAXLEN)
 
     def start(self) -> None:
-        self.log.append("Initiating calibration protocol...")
-        self._send("CAL_START")
+        """Begin waiting for a tare window; CAL_START goes out when one opens.
+
+        Deliberately does not send anything. The knob only accepts CAL_START
+        during its ~1.7s tare window, so firing it here meant the command
+        landed nowhere whenever the script was started before the knob was put
+        into tare - which is the normal order to do things in.
+        """
+        self.stage = "waiting_for_tare"
+        self.log.append("Waiting for the knob. Hold both buttons for ~3 seconds.")
+
+    def note(self, message: str) -> None:
+        self.log.append(message)
+
+    def set_stage(self, stage: Stage) -> None:
+        self.stage = stage
+        self.phase_started_at = time.monotonic()
+
+    def abort(self) -> None:
+        """Release the knob without storing anything."""
+        self._send("CAL_ABORT")
+        self.log.append("Released the knob (no calibration written).")
+
+    def upload(self, blob: bytes) -> None:
+        """Send a fitted calibration. The knob stores it and reboots."""
+        self._send(f"CAL_UPLOAD {blob.hex()}")
+        self.log.append(f"Sent {len(blob)} byte calibration; the knob will reboot.")
 
     def feed_line(self, line: str) -> None:
         message = parse_line(line)
@@ -64,9 +107,18 @@ class CalibrationSession:
             self._handle_state(message)
 
         elif isinstance(message, Status):
-            if message.is_complete:
+            if message.is_tare_begin:
+                # The window is open. Only claim it once -- a second tare
+                # during an active run should not restart capture.
+                if self.stage == "waiting_for_tare":
+                    self.set_stage("capturing")
+                    self.log.append("Knob is in tare. Starting calibration...")
+                    self._send("CAL_START")
+            elif message.is_complete:
                 self.completed = True
                 self.log.append("All hardware calibration steps complete!")
+            elif message.is_awaiting_upload:
+                self.log.append("Knob is holding, ready to receive a calibration.")
             else:
                 self.log.append(f"[KNOB ALERT] {message.raw}")
 
@@ -94,13 +146,6 @@ class CalibrationSession:
             count = len(self.datasets[message.step])
             self.log.append(f"Done recording. Received {count} frames.")
             self._send(f"CAL_ACK {count}")
-
-        elif message.phase == CalibPhase.REVIEW:
-            # NOTE: the firmware currently advances on ANY button press here
-            # (see BundleCalibrationController::update, REVIEW case) - the
-            # left-button-to-retry path is a TODO on the firmware side and
-            # isn't wired up yet, so we don't promise it in the UI.
-            self.log.append("Press a button on the knob to continue to the next step.")
 
     def frame_count(self, step: CalibStep) -> int:
         return len(self.datasets[step])

@@ -21,8 +21,10 @@ enum class CalibPhase {
     WAIT_FOR_START_BTN, // Waiting for user to press LEFT
     COUNTDOWN,          // 1s countdown active
     RECORDING,          // Streaming data to PC
-    WAIT_FOR_ACK,       // Waiting for PC to say "CAL_ACK 60"
-    REVIEW              // Waiting for RIGHT (Next) or LEFT (Retry)
+    WAIT_FOR_ACK,       // Waiting for PC to say "CAL_ACK 60", then straight on
+                        // to the next step -- there is no way back to redo a
+                        // step, so there is nothing for a review pause to do.
+    AWAITING_UPLOAD     // All steps captured; holding for CAL_UPLOAD or CAL_ABORT
 };
 
 class BundleCalibrationController {
@@ -32,8 +34,23 @@ public:
     // Call this every cycle in your main loop()
     void update(uint16_t button_bits, SensorController &sensorController);
     
-    // Call this when a complete line is received over Serial
-    void handle_serial_command(const char* cmd);
+    // Call this when a complete line is received over Serial. Returns true if
+    // the caller should leave calibration entirely -- today only CAL_ABORT
+    // does that. Keeping the decision here rather than in the state means
+    // command parsing lives in one place.
+    bool handle_serial_command(const char* cmd);
+
+    // Begin a run from the first step. Called by BundleState::enter(), since
+    // the CAL_START that got us there was consumed by CalibratingState, and
+    // by handle_serial_command() when CAL_START arrives once already running.
+    void start();
+
+    // Give up on a run without storing anything. Storing a calibration should
+    // be a decision, not the only way out: without this, a run either walks
+    // all seven steps or the knob needs a power cycle, because a host that
+    // disappears mid-run just leaves WAIT_FOR_ACK timing out back to
+    // WAIT_FOR_START_BTN forever. BundleState drives the actual exit.
+    void abort();
 
     bool is_active() const { return current_phase != CalibPhase::IDLE; }
     bool is_done() const { return current_step == CalibStep::COMPLETE; }

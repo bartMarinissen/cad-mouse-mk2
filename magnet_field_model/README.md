@@ -65,6 +65,7 @@ bundle_params.py       priors, residual weighting, BundleCalibrationProblem, cov
 pose_solver.py         batched Levenberg-Marquardt: every frame's pose at once
 calibration_algorithm.py  the fit that drives all of the above (single joint solve)
 export.py              fitted geometry -> firmware constants
+report.py              fitted result -> the Rich content the TUI and CLI show
 protocol.py / serial_link.py / session.py / collector.py / tui.py   capture side
 ```
 
@@ -262,20 +263,24 @@ what distinguishes the two.
 
 ## Still open
 
-- No persistence path into the firmware. There is no flash/EEPROM storage
-  anywhere in this firmware yet, so `--emit-cpp` printing a pasteable snippet
-  is as far as a result can travel.
-- The firmware has no per-magnet strength multiplier, so the fitted strengths
-  cannot be consumed as-is — `MagnetModel::evaluate` would need to scale its
-  result. `--emit-cpp` emits them with that caveat attached.
+- The `/calibration.bin` layout is no longer duplicated:
+  `calibration/firmware_struct.py` extracts the `CalibrationParams`
+  declaration straight out of `firmware/include/CalibrationParams.h` and hands
+  it to cffi, so `format_binary()` fills the struct by field *name* and the
+  order is only ever stated in the header. `tests/test_export.py` pins the
+  resulting offsets and compiles the same extracted declaration with g++ to
+  check cffi's ABI model against a real compiler. Both still only describe the
+  *host* — the firmware's own `static_assert`s are what pin the target, and
+  nothing here has run on hardware yet.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
   already here, and the firmware has the same chain rule in `sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination
   driving the actual solve (not just the reporting-only covariance
   `covariance_shared` computes today via a plain dense inverse, which is
   simpler at this problem's desktop-scale size but not embedded-friendly) —
-  see git history for a prior implementation of that reduction — plus the
-  persistence layer above.
+  see git history for a prior implementation of that reduction. The storage
+  half of that is done: a result fitted on the knob would have somewhere to
+  land, via `CalibrationStorage`.
 - Magnet strength stays weakly determined (~7% information gain). Scaling a
   magnet and moving it closer both scale |B|; only the shape of |B| versus
   distance separates them, and HEAVE supplies ~3mm of travel to do it with.

@@ -42,6 +42,26 @@ own bit-testing (the `& 1` / `& 2` checks inside it) has already been fixed by
 the other session, but this caller is still handing it the wrong value to
 test in the first place.
 
+## Decided since (entry), still open (exit)
+
+The first bullet below is answered: **bundle calibration starts from the PC.**
+`CalibratingState` (the tare step) announces `STATUS TARE_BEGIN` on entry and
+accepts `CAL_START` for the ~1.7s it runs; the any-button-activity jump is
+gone, so a stray tap during boot no longer drops the mouse into a serial
+protocol with nobody on the other end. Entry is a two-part handshake — the user
+opens the window with the existing both-buttons-3s tare gesture, the host
+decides what happens in it — which sidesteps the "which gesture" question
+without giving up deliberateness. No new gesture was added, so the three-way
+collision risk in the second bullet never materialised.
+
+`CAL_ABORT` now leaves a run without storing anything. That covers a host that
+changes its mind, but **not a host that disappears**: with no PC to send the
+command, a knob in `BundleState` still has no way out but a power cycle, since
+`WAIT_FOR_ACK` times out back to `WAIT_FOR_START_BTN` indefinitely. A knob-side
+escape is the remaining gap, and it runs straight into the `buttonBits` item
+below — `buttonBits()` is level-triggered where the phase logic wants edges, so
+"hold both buttons to bail out" needs that sorted first.
+
 ## What needs deciding
 
 This isn't just "swap in the right function call" — the actual question is

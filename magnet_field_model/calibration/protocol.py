@@ -34,7 +34,7 @@ class CalibPhase(IntEnum):
     COUNTDOWN = 2
     RECORDING = 3
     WAIT_FOR_ACK = 4
-    REVIEW = 5
+    AWAITING_UPLOAD = 5
 
 
 STEP_NAMES: dict[CalibStep, str] = {
@@ -78,6 +78,13 @@ class CalState:
 class Status:
     raw: str
     is_complete: bool
+    # The knob has entered tare and will accept CAL_START / CAL_UPLOAD for the
+    # ~1.7s that lasts. Waiting for this instead of firing CAL_START blind is
+    # what makes starting the script before touching the knob work.
+    is_tare_begin: bool = False
+    # All poses captured; the knob is holding in calibration mode rather than
+    # dropping back to being a mouse, so a fitted result can go straight back.
+    is_awaiting_upload: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,6 +127,11 @@ def parse_line(line: str) -> ProtocolMessage | None:
         return CalState(step=CalibStep(step_id), phase=CalibPhase(phase_id))
 
     if cmd == "STATUS":
-        return Status(raw=line, is_complete="ALL_STEPS_COMPLETE" in line)
+        return Status(
+            raw=line,
+            is_complete="ALL_STEPS_COMPLETE" in line,
+            is_tare_begin="TARE_BEGIN" in line,
+            is_awaiting_upload="AWAITING_UPLOAD" in line,
+        )
 
     return Unknown(line)

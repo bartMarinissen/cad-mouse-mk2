@@ -27,8 +27,6 @@ case CalibPhase::RECORDING:
     // LED RING: animating the step with its specific animation
 case CalibPhase::WAIT_FOR_ACK:
     // LED RING: dead
-case CalibPhase::REVIEW:
-    // LED RING: repeating animation of completed step
 ```
 
 ## What needs deciding
@@ -37,9 +35,12 @@ case CalibPhase::REVIEW:
   least: a per-*step* identifying animation (distinguishing STATIONARY /
   FLAT_CIRCLE / PITCH / ROLL / TWIST / HEAVE / RANDOM from each other, shown
   during `WAIT_FOR_START_BTN` and `RECORDING`), a clockwise fill during the
-  1s `COUNTDOWN`, going dark during `WAIT_FOR_ACK`, and some kind of
-  "success" loop during `REVIEW`. None of that is designed yet beyond the
-  comment placeholders.
+  1s `COUNTDOWN`, and going dark during `WAIT_FOR_ACK`. None of that is
+  designed yet beyond the comment placeholders. (There used to be a `REVIEW`
+  phase with its own "success" loop between a step's data landing and the
+  user confirming to continue; it's gone now -- a successful ACK moves
+  straight to the next step's `WAIT_FOR_START_BTN`, since there was never a
+  way to go back and a confirmation press had nothing to decide.)
 - Whether a per-step "identifying animation" means 7 distinct animations
   (one per `CalibStep`) or a smaller shared vocabulary (e.g. color-coded by
   step, same animation shape).

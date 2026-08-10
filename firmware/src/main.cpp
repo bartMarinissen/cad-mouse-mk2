@@ -9,10 +9,12 @@ void setup() {
   // Initialize USB HID first
   hidController().begin();
 
-  if (Config::ENABLE_TELEMETRY) {
-    Serial.begin(115200);
-    delay(1000);
-  }
+  // Unconditional, where the Serial.begin() this replaces was gated on
+  // Config::ENABLE_TELEMETRY. Serial now carries the calibration protocol as
+  // well as telemetry, so the link has to come up either way -- and the boot
+  // diagnostics from resolveCalibration() below need somewhere to land.
+  // TelemetryController still decides for itself whether to *print*.
+  serialController().begin();
 
   inputController().begin();
   ledController().begin();
@@ -30,6 +32,9 @@ void setup() {
 
 void loop() {
   hidController().task();
+  // Before the state machine, so whichever state is active sees a line on the
+  // same tick it finished arriving.
+  serialController().update();
   stateMachine.update();
 }
 #endif

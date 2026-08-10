@@ -8,12 +8,13 @@
 #include "controllers/SensorController.h"
 #include "controllers/TelemetryController.h"
 #include "controllers/BundleCalibrationController.h"
+#include "controllers/SerialController.h"
 
 // Every controller is reached through an accessor function, never a bare
 // global -- one consistent access pattern regardless of how each one
 // actually needs to be constructed.
 //
-// input/led/hid/telemetry/bundleCalibration are trivially default-
+// input/led/hid/telemetry/bundleCalibration/serial are trivially default-
 // constructible and have no dependency on anything resolved in setup(), so
 // their accessors just return a reference to a static-init global -- same
 // construction as a plain extern, just reached through a function.
@@ -22,6 +23,7 @@ LEDController& ledController();
 HIDController& hidController();
 TelemetryController& telemetryController();
 BundleCalibrationController& bundleCalibrationController();
+SerialController& serialController();
 
 // sensor/motion cannot be static-init globals: their calibration-derived
 // members are const, so they have to be *constructed from* a
@@ -41,11 +43,12 @@ MotionController& motionController();
 
 // Where the calibration comes from at boot.
 //
-// Stage 1: always Config::defaultCalibration(). Stage 2 replaces the body with
-// a LittleFS read that falls back to exactly that when there is no stored
-// calibration, or when the stored one fails its CRC or plausibility checks.
+// Reads /calibration.bin off LittleFS via CalibrationStorage, falling back to
+// Config::defaultCalibration() when there is nothing stored or when what is
+// stored does not survive its CRC and plausibility checks. Which of those
+// happened is printed, so a unit quietly running on defaults is diagnosable.
 //
-// Called once each by sensorController() and motionController() -- in Stage 2
-// that's one extra flash read at boot over sharing a single resolved value,
-// which is negligible next to USB enumeration latency.
+// Called once each by sensorController() and motionController() -- one extra
+// flash read at boot over sharing a single resolved value, which is
+// negligible next to USB enumeration latency.
 CalibrationParams resolveCalibration();
