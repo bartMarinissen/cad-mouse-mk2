@@ -102,9 +102,9 @@ too, not just the file.
   copy. Telemetry is a third channel that doesn't fit that shape and is
   undesigned; nothing is implemented.
 - **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
-  documents the old per-axis-averaging motion heuristic this fork replaced
-  with the Gauss-Newton solver. Needs its "current implementation" section
-  rewritten to match `ARCHITECTURE.md`.
+  documents the old per-axis-averaging motion heuristic this fork replaced.
+  The fix is to delete that section and point at `ARCHITECTURE.md`, not to
+  rewrite it — per `CLAUDE.md`, READMEs don't describe current code state.
 - **[`tare-and-calibration.md`](tare-and-calibration.md)** — `CalibratingState`'s
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.
