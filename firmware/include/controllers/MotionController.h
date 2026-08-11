@@ -72,10 +72,10 @@ class MotionController {
   static float axisBaseDead(int i);
 
   // The model the pose solve runs against. Previously three translation-unit
-  // globals in MotionController.cpp, which TODO/controller-ownership.md flagged
-  // as the reason a calibration write-back had no path to the running
-  // Sensor/MagnetModel instances. Now owned, and const because it is built from
-  // this controller's calibration and never changes after that.
+  // globals in MotionController.cpp, which was the reason a calibration
+  // write-back had no path to the running Sensor/MagnetModel instances. Now
+  // owned, and const because it is built from this controller's calibration
+  // and never changes after that.
   const ForwardModel forward_model_;
 
   float filt_[6] = {};

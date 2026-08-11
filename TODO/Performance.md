@@ -405,23 +405,31 @@ is what the new `micros()` instrumentation is for. Executed-instruction counts
 on a pure-software-float target should track closely (nearly every float op is
 a call there), but that is reasoning, not a measurement in hand.
 
-### Found while doing this, not acted on
+### Found while doing this — since fixed elsewhere
 
-`Positions::approx_rest_pos` is `{0, 0, magnet_z_pos_from_pivot}` = `{0,0,14}`,
-which puts the magnet-local query at exactly **(r=0, z=0)** — the magnet's
+`Positions::approx_rest_pos` was `{0, 0, magnet_z_pos_from_pivot}` = `{0,0,14}`,
+which put the magnet-local query at exactly **(r=0, z=0)** — the magnet's
 bottom face centre, outside the bicubic table's `z ∈ [-20,-0.5]` domain and at
-the field's singular point. `magnet_z_pos_from_pivot + magnet_rest_distance_sensor`
-= 20 lands at (0, -6), comfortably inside, and matches the 6mm standoff the
-geometry comment describes. `magnet_rest_distance_sensor` is defined in
-`positions.h` and referenced nowhere else in the repo, which is consistent with
-it having been dropped from this expression by accident.
+the field's singular point. `magnet_rest_distance_sensor` was defined in
+`positions.h` and referenced nowhere else, consistent with having been dropped
+from this expression by accident.
 
-This is the boot value of `last_pos`, the reset value of the hot start, and the
-starting guess `SensorController::updateCalibration()` perturbs by 0.1mm — so
-it affects the calibration baseline, not just the first frame. Left alone here
-because correcting it shifts the calibration baseline and therefore the tuned
-`Config::GAIN_T`/`GAIN_R`, which is a behavioural change rather than a
-performance one. Probably belongs with `TODO/tare-and-calibration.md`.
+This mattered beyond the first frame: it is the boot value of `last_pos`, the
+reset value of the hot start, and the starting guess
+`SensorController::updateCalibration()` perturbs by 0.1mm, so it fed the
+calibration baseline too. It was left alone *in this pass* because correcting
+it shifts that baseline and therefore the tuned `Config::GAIN_T`/`GAIN_R` — a
+behavioural change, not a performance one.
+
+**It has since been fixed**, in `c08329e` ("Fix constants and led
+positioning") on a parallel branch that merged within a minute of this
+section being written — cleanly, since the two touch different files, which
+is why this note survived describing it as open. `positions.h` now reads
+`approx_rest_pos = {0, 0, magnet_z_pos_from_pivot + magnet_rest_distance_sensor}`,
+and `magnet_z_pos_from_pivot` is 15 rather than 14, so the rest guess is
+`{0,0,21}` and the magnet-local query lands at (0, -6) — inside the table,
+matching the 6mm standoff. Note the numbers above (14, and 20 as the intended
+value) are the pre-fix ones and no longer describe the code.
 
 ## Open next steps (not yet acted on)
 

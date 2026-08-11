@@ -5,10 +5,10 @@ boot-time tare step; this one is specifically about the UX for entering the
 guided PC-assisted bundle calibration (`BundleState` /
 `BundleCalibrationController`). Needs real UX thinking, not just a bug fix.
 
-Note: another Claude session is actively working on the calibration code
-(`firmware/src/controllers/BundleCalibrationController.cpp`,
-`magnet_field_model/calibration/`) — check current state of those files
-before touching the C++ side here, this file is scoping/design only.
+(This file used to warn that another session was actively working on
+`BundleCalibrationController.cpp` / `magnet_field_model/calibration/`. That
+work has landed — capture, fit and delivery all work now — so the warning is
+gone; the section below is what's left.)
 
 ## Current state (as of this writing)
 
@@ -29,7 +29,7 @@ trigger it. This is very likely how the entry point was left as a
 placeholder/dev shortcut rather than a designed gesture.
 
 Related caller-side bug still present in `BundleState::update()`
-(`firmware/src/states/BundleState.cpp:25`):
+(`firmware/src/states/BundleState.cpp:40` — was :25 when this was written):
 
 ```cpp
 uint16_t button_bits = inputController().takeActivity();  // should this be buttonBits()?
@@ -87,8 +87,11 @@ think through:
 
 ## Also in scope once the above is decided
 
-- Fix `BundleState.cpp:25` to pass the real button bitmask instead of
+- Fix `BundleState.cpp:40` to pass the real button bitmask instead of
   `takeActivity()`, consistent with whatever entry design is chosen.
+  Confirmed still present: `InputController::takeActivity()` is declared
+  `bool` (`InputController.h:14`) while `buttonBits()` is the `uint16_t`
+  accessor, so the value handed to `update()` is 0 or 1, never a bitmask.
 - See `TODO/calibration-led-animations.md` for the separate (but related)
   question of what the LED ring should show during each phase — entry-mode UX
   and in-progress animation are two different problems, tracked separately.

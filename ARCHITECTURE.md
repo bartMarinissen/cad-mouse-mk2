@@ -98,16 +98,53 @@ and defined in `Controllers.cpp`. This is the project's entire DI mechanism —
 there is no container, no interfaces, states and controllers reach each other
 through these accessors directly.
 
+**No controller owns another, and that is the whole ownership rule.** Every
+controller is reached through its `Controllers.h` accessor, by states and by
+other controllers alike; a controller calling a sibling's accessor is the
+sanctioned pattern, not a coupling smell. There is no dependency hierarchy to
+respect and nothing to invert. What is *not* allowed is bypassing the
+accessors — the `extern MotionController motionController;` that
+`SensorController.cpp` once declared inline is the thing that was wrong, and
+it is gone. Passing a controller in as an explicit parameter instead
+(`BundleCalibrationController::update()` takes `SensorController&`) is also
+fine where there's a reason, such as letting the callee control *when* the
+read happens. This settles what used to be tracked as issues #4/#5 below.
+
 | Controller | File | Responsibility |
 |---|---|---|
 | `InputController` | `controllers/InputController.*` | Debounces 2 buttons via AceButton; exposes `buttonBits()`, `takeActivity()` (edge-triggered, consumed on read), `takeCalibrationRequest()` (both buttons held 3s) |
 | `LEDController` | `controllers/LEDController.*` | NeoPixel ring: owns one `std::variant`-held `AnimationBase` slot (`animations/`) plus power management; callers `set()` a `SolidAnimation`/`SpinnerAnimation`/`OffAnimation`/`PoseColorAnimation` and drive it with `update()` each tick |
-| `SensorController` | `controllers/SensorController.*` | Owns the 3 TLx493D sensor objects, power-sequences them onto distinct I2C addresses at boot, `readRaw()` → 9 floats, runs the boot baseline calibration |
+| `SensorController` | `controllers/SensorController.*` | Owns the 3 TLx493D sensor objects, power-sequences them onto distinct I2C addresses at boot, `readUncorrected()`/`read_mT()` → 9 floats, applies gain + DC offset, runs the boot baseline calibration |
 | `MotionController` | `controllers/MotionController.*` | The pose pipeline: raw field → solved pose → filtered/mapped HID axes (detail below) |
 | `HIDController` | `controllers/HIDController.*` | Owns the USB HID descriptor + report state, dedupes unchanged reports before sending |
 | `TelemetryController` | `controllers/TelemetryController.*` | Formats a big fixed-layout ASCII dashboard to Serial every 20 ticks when `Config::ENABLE_TELEMETRY` |
 | `BundleCalibrationController` | `controllers/BundleCalibrationController.*` | Serial-driven state machine for the guided hardware calibration capture |
 | `SerialController` | `controllers/SerialController.*` | Assembles incoming bytes into whole lines without blocking; `takeLine()` hands the active state one line per tick. Transport only — command meaning stays with the caller, and outbound prints still go to `Serial` directly |
+
+### Sensor read timing
+
+The three TLI493D-A2B6s are **not** in their power-on-reset Low Power Mode
+(160 Hz, ~6.25ms worst-case staleness). `SensorController::setup_sensor()`
+puts each into **Master-Controlled Mode** (`setPowerMode`) with
+**trigger-on-read** (`setTrigger(TLx493D_ADC_ON_READ_AFTER_REG_05_e)`), so
+every `getMagneticFieldAndTemperature()` both returns the previous
+measurement and re-arms the next conversion. Reading the three back-to-back
+therefore costs about one I2C round-trip of staleness rather than a fixed
+conversion period. The PCB forces this: all three `SCL/INT` pins share one
+net wired only to the MCU's plain `SCL`, so there is no `/INT` line to
+synchronize on and it has to happen over the bus itself.
+
+Two dependencies worth knowing:
+
+- **This leans on I2C clock stretching** (the driver's default `CA=0`/`INT=1`
+  config) to make a read block until its conversion finishes. Whether the
+  RP2040 Arduino `Wire` implementation honours slave clock stretching is
+  **unverified on real hardware** — the design assumes it.
+- **Self-triggering only works if reads keep happening.** After a >100ms gap
+  the armed conversion is stale, so `readUncorrected()` throws away one round
+  purely to re-trigger before reading for real. Bus stays at 400kHz
+  deliberately; Master-Controlled Mode doesn't need Fast Mode, and raising it
+  risks signal integrity across three sensors on fixed 1.2kOhm pull-ups.
 
 ## The pose pipeline (the core of the project)
 
@@ -338,8 +375,7 @@ Two caveats on the exported numbers:
   `TODO/cross-magnet-interference.md` for the measurements and the one-constant
   path back.
 - `Sensor` no longer carries a gain; correction happens entirely in
-  `SensorController::read_mT()`, which is what
-  `TODO/sensor-gain-calibration.md` asked for.
+  `SensorController::read_mT()` (issue #6 below).
 
 ## Quick file index
 
@@ -367,22 +403,43 @@ Two caveats on the exported numbers:
 
 Tracked as of the initial read-through. Status as of the follow-up pass:
 
-1. **`CalibratingState` → `BundleState` transition looks accidental** and
-   2. **`BundleState` passes the wrong value as "button bits"** — both being
-   superseded by a boot-time "tare" redesign rather than patched in place.
-   See [`TODO/tare-and-calibration.md`](TODO/tare-and-calibration.md).
+1. **`CalibratingState` → `BundleState` transition looks accidental** —
+   **fixed.** The any-button-activity jump is gone; entry now requires the
+   host to send `CAL_START` during the tare window, so a stray tap at boot
+   can no longer drop the knob into a serial protocol with nobody on the
+   other end. See
+   [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md) for the
+   reasoning and for the knob-side *exit* gap that remains.
+
+2. **`BundleState` passes the wrong value as "button bits"** — still open.
+   `BundleState::update()` hands `takeActivity()` (a `bool`) where a
+   `buttonBits()` bitmask belongs. Tracked in
+   [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md), since
+   the fix depends on the entry/exit gesture design.
+
+   The wider boot-calibration redesign these two were originally folded into
+   is still tracked separately in
+   [`TODO/tare-and-calibration.md`](TODO/tare-and-calibration.md).
 
 3. `solve_knob_pose()` not writing its Jacobian out-param — **fixed.**
 
 4. **Circular coupling between `SensorController` and `MotionController`**
-   and 5. **the forward model's state living outside any controller** — real
-   architecture issues, tracked in
-   [`TODO/controller-ownership.md`](TODO/controller-ownership.md).
+   and 5. **the forward model's state living outside any controller** — both
+   **resolved.** The forward model is now a `const ForwardModel` member of
+   `MotionController`, built from `CalibrationParams`. The
+   `SensorController` → `MotionController` call in `updateCalibration()`
+   stays, and is fine: it goes through the `motionController()` accessor like
+   everything else, which is the project's ownership rule (see "Controllers"
+   above), not a violation of it. The raw `extern` that *was* the violation
+   is gone.
 
-6. **`Config::magnet_gains` can't express what the math supports** — widened
-   into a decision to own sensor gain/skew correction in `SensorController`
-   entirely outside the motion system, tracked in
-   [`TODO/sensor-gain-calibration.md`](TODO/sensor-gain-calibration.md).
+6. **`Config::magnet_gains` can't express what the math supports** —
+   **resolved.** Sensor gain/skew correction is owned entirely by
+   `SensorController::read_mT()`, outside the motion system; `Sensor` no
+   longer carries a gain at all, and the coefficients come from
+   `CalibrationParams` rather than `Config` scalars. `calibration/export.py`
+   emits real polarization in mT (`firmware_magnet_strength_mT()`), closing
+   the last gap this issue tracked.
 
 7. **`rcond` is a hardcoded stub** (deliberately — computing it via SVD every
    frame is too expensive on this FPU-less MCU, not an oversight) and

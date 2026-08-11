@@ -11,16 +11,20 @@ methods (`setSolid`/`startSpinner`/`off` are gone). Instead:
   (`update()`, `wantsPower()`), mirroring the existing `State` pattern.
 - `firmware/include/animations/Animations.h` /
   `firmware/src/animations/Animations.cpp` — the concrete animations
-  (`SolidAnimation`, `SpinnerAnimation`, `OffAnimation`), all in one file
-  pair for now.
-- `LEDController` owns the ring and a single statically-allocated slot
-  (tagged union, no heap) for whichever animation is active, plus power
-  management. Callers construct the animation they want and load it via
-  `ledController.set(SomeAnimation(ledController.ring(), ...));`, then drive
-  it every tick with `ledController.update()`.
+  (`SolidAnimation`, `SpinnerAnimation`, `OffAnimation`, and since the pose
+  work, `PoseColorAnimation`), all in one file pair for now.
+- `LEDController` owns the ring and a single statically-allocated slot for
+  whichever animation is active, plus power management. The slot is a
+  `std::variant` over the animation types (the hand-rolled tagged union it
+  started as was replaced in `090dbbd`); `set()` is a template using
+  `emplace<T>()`, because `AnimationBase` holds a reference member and so the
+  alternatives are move-constructible but not move-assignable. Callers
+  construct the animation they want and load it via
+  `ledController().set(SomeAnimation(ledController().ring(), ...));`, then
+  drive it every tick with `ledController().update()`.
 
 `BundleCalibrationController::change_phase()` now calls
-`ledController.set(SpinnerAnimation(ledController.ring(), Config::LED_CALIBRATING_COLOR));`
+`ledController().set(SpinnerAnimation(ledController().ring(), Config::LED_CALIBRATING_COLOR));`
 once per phase transition — so calibration currently shows a single uniform
 placeholder spinner regardless of phase or step. The five `// LED RING: ...`
 comments in `BundleCalibrationController::update()`'s switch are still there,
@@ -62,9 +66,10 @@ implemented yet — that's the remaining work this doc scopes.
 - New animations needed: a progress-fill for the countdown, a distinct
   per-step "recording" animation, a "success" flourish for review, etc. Each
   is a new `AnimationBase` subclass in `firmware/include/animations/Animations.h`
-  / `Animations.cpp` (or a new file, if that one gets unwieldy), constructed
-  and loaded the same way `SpinnerAnimation` is now:
-  `ledController.set(YourAnimation(ledController.ring(), ...));`.
+  / `Animations.cpp` (or a new file, if that one gets unwieldy), added to the
+  `Animation` variant in `LEDController.h`, and constructed and loaded the same
+  way `SpinnerAnimation` is now:
+  `ledController().set(YourAnimation(ledController().ring(), ...));`.
 - How this interacts with `Config::LED_CALIBRATING_COLOR` /
   `LED_ERROR_COLOR` / `LED_IDLE_COLOR` conventions already used elsewhere —
   should calibration-step colors be added to `Config.h` alongside those, or

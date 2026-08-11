@@ -24,9 +24,15 @@ about also updates its summary line here in the same commit.
   committed plan — just enough direction that whoever picks it up isn't
   starting from zero.
 - Update a file in place as understanding deepens, rather than leaving it
-  stale (see `controller-ownership.md`'s "Problem 3" for an example — a
-  later investigation surfaced a related issue and it was added as a new
-  section instead of a separate file).
+  stale. `Performance.md` is the model here: each optimization pass appended
+  its own section and amended the earlier ones it invalidated, so the file
+  reads as a running investigation rather than a stale first draft.
+- **When you implement part of a TODO, update that TODO in the same commit.**
+  The two worst drifts found so far both came from skipping this:
+  `sensor-read-speed.md` was implemented 11 minutes after it was written and
+  still claimed nothing had been done, and `Performance.md` described a
+  constants bug as open that a parallel branch had fixed a minute earlier.
+  Neither conflicted, so git had nothing to complain about.
 - If a new problem turns out to be tightly coupled with an existing file's
   topic, add a section there instead of creating a duplicate.
 - Add a 2-line summary entry below, in the index, in the same commit.
@@ -59,10 +65,6 @@ too, not just the file.
   bundle calibration is now PC-initiated via `CAL_START`, closing the old
   accidental-entry bug. A knob-side exit gesture and `BundleState.cpp`'s
   `takeActivity()`-instead-of-`buttonBits()` bug are still open.
-- **[`controller-ownership.md`](controller-ownership.md)** — Of the three
-  controller-coupling problems flagged in the architecture review, two are
-  resolved. `SensorController` calling directly into `MotionController`
-  during calibration is still open, tied to the tare redesign.
 - **[`cross-magnet-interference.md`](cross-magnet-interference.md)** —
   Cross-magnet field coupling (measured 1.7–4.5% of the signal) is
   quantified but not modelled in firmware; a Python-side fitting workaround
@@ -70,22 +72,13 @@ too, not just the file.
   parameters. A cheap dipole-correction fix is proposed, not implemented.
 - **[`multicore.md`](multicore.md)** — Decided: core1 runs the pose solve
   continuously; sensor readings and pose results cross the core boundary via
-  two double-buffered, counter-gated channels. Torn-read safety, telemetry
-  sizing, and the interaction with tare/calibration are still open;
-  nothing is implemented yet.
+  two double-buffered channels, each gated by a spinlocked counter held
+  across the copy. Telemetry's channel shape and the interaction with
+  tare/calibration are still open; nothing is implemented yet.
 - **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
   documents the old per-axis-averaging motion heuristic this fork replaced
   with the Gauss-Newton solver. Needs its "current implementation" section
   rewritten to match `ARCHITECTURE.md`.
-- **[`sensor-gain-calibration.md`](sensor-gain-calibration.md)** — Sensor
-  gain/skew correction now lives entirely in `SensorController`, resolving
-  the original architecture-review issue. One follow-up gap remains:
-  `calibration/export.py` still emits a dimensionless multiplier instead of
-  a real mT `magnet_strength_mT` value.
-- **[`sensor-read-speed.md`](sensor-read-speed.md)** — Decided: move all
-  three Hall sensors to Master-Controlled Mode with per-read trigger bits,
-  cutting staleness from ~6.25ms to under 1ms. Not yet implemented; open
-  questions on library/hardware support for the trigger bits remain.
 - **[`tare-and-calibration.md`](tare-and-calibration.md)** — `CalibratingState`'s
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.

@@ -48,9 +48,10 @@ Real calibration (fixing per-magnet/per-sensor tolerance, i.e. what
 for) is a separate, still-under-construction effort with its own open design
 question ("how is yet to be determined") — don't conflate tare with it. Tare
 is a fast/automatic per-boot sanity+zero step; bundle calibration is a slower,
-guided, PC-assisted one-time-per-unit hardware calibration. See also the
-sensor-gain ownership question in `TODO/sensor-gain-calibration.md`, which the
-eventual bundle calibration design will need to feed into, and
+guided, PC-assisted one-time-per-unit hardware calibration. Both now work end
+to end (capture, fit, and delivery back to the device — see `ARCHITECTURE.md`),
+so the sensor-gain ownership question this file used to defer to is settled:
+gain lives in `SensorController`, fed from `CalibrationParams`. See
 `TODO/calibration-mode-entry.md` / `TODO/calibration-led-animations.md` for
 the two C++-side calibration-UX TODOs (entry gesture, LED ring animations).
 

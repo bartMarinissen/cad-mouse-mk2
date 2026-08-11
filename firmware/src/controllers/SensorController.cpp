@@ -123,7 +123,7 @@ bool SensorController::begin() {
 // stretching (the driver's default CA=0/INT=1 config) makes a read block
 // for as long as its conversion is still running, so cycling through the 3
 // sensors back-to-back keeps each one's data fresh with no manual delay --
-// see TODO/sensor-read-speed.md for the full design.
+// see ARCHITECTURE.md's "Sensor read timing" for the full design.
 //
 // That self-triggering only works if reads keep happening often enough. If
 // nobody has called this in a while, the sensor's last-armed conversion
@@ -207,10 +207,9 @@ void SensorController::updateCalibration() {
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.
   Mat3 R = Mat3::Identity();
-  // Track pose aswell
-  // NOTE: reaching into the sibling controller from here is the coupling
-  // TODO/controller-ownership.md problem #1 is about. Unchanged by this work,
-  // just re-spelled -- it is entangled with the tare redesign.
+  // Track pose aswell. Reaching a sibling controller through its
+  // Controllers.h accessor is the project's normal pattern -- no controller
+  // owns another, see ARCHITECTURE.md's "Controllers" section.
   float res = motionController().read_pose(raw, pos, R);
   Vec3 rot = extract_angles_robust(R);
   calibration_pos += pos;
