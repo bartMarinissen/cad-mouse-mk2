@@ -10,6 +10,11 @@ serially on core0. Core1 sits idle.
 
 ## Why it matters
 
+Mostly: performance. If the solve can run without needing to wait for other
+things, then the solve runs faster and we get more updates (or a more complex
+solve).
+
+Another reason:
 Sensor staleness and loop rate are currently coupled to *everything* the
 firmware does. The sensors are already in Master-Controlled Mode with
 trigger-on-read, so a read is fresh to within about one I2C round-trip — but
@@ -81,6 +86,22 @@ Running the solve continuously rather than once per core0 tick also
 simplifies hot-start: `MotionController::last_R` and the translation
 hot-start become core1's own loop-local state between iterations, no longer
 something threaded across the core boundary every tick.
+
+### Alternative buffering strategies
+We might consider triple-buffering. This way the reader can hold one buffer 
+locker for reading, and the writer can just switch between the two non-locked
+buffers for writing. This way we can have at the same time:
+- A buffer with a fresh value
+- A buffer actively being written to
+- A buffer actively being read from.
+
+This allows a reader to lock a buffer for as long as it needs, so there is no 
+need for a reader to copy data to a local buffer.
+
+**Downside** the accounting gets a bit more complicated, because the index of 
+the fresh buffer is no longer just the number of writes mod 2 (or 3). This also
+requires more locks, which might hurt performance more than we gain by reducing
+(potentially very low) lock contention for buffers.
 
 ## Open questions
 

@@ -187,6 +187,10 @@ void SensorController::beginCalibration() {
   calibration_rot = Vec3::Zero();
 }
 
+// Note, this should be folded into MotionController.
+// This used to zero-out the magnetic field at the rest pose.
+// Now it just measures the rest pose directly.
+// See 'TODO/tare-and-calibration.md'
 void SensorController::updateCalibration() {
   if (!calibrationActive_) {
     return;
@@ -194,7 +198,7 @@ void SensorController::updateCalibration() {
 
   const unsigned long now = millis();
   if (lastCalibrationSampleMs_ != 0 &&
-      (now - lastCalibrationSampleMs_) < 10) {
+      (now - lastCalibrationSampleMs_) < 2) {
     return;
   }
   lastCalibrationSampleMs_ = now;
@@ -207,21 +211,10 @@ void SensorController::updateCalibration() {
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.
   Mat3 R = Mat3::Identity();
-  // Track pose aswell. Reaching a sibling controller through its
-  // Controllers.h accessor is the project's normal pattern -- no controller
-  // owns another, see ARCHITECTURE.md's "Controllers" section.
   float res = motionController().read_pose(raw, pos, R);
   Vec3 rot = extract_angles_robust(R);
   calibration_pos += pos;
   calibration_rot += rot;
-  // Per-sample, so this is the chattiest thing in the firmware.
-  if (Config::ENABLE_TELEMETRY) {
-    Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f",
-      pos[0], pos[1], pos[2],
-      rot[0], rot[1], rot[2],
-      res
-    );
-  }
 
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] += raw[i];

@@ -4,8 +4,8 @@
 
 #include "CalibrationStorage.h"
 #include "Config.h"
-#include "Controllers.h"
 #include "animations/Animations.h"
+#include "Controllers.h"
 
 // Constants
 constexpr uint32_t COUNTDOWN_MS = 1000;
@@ -103,7 +103,8 @@ bool BundleCalibrationController::handle_serial_command(const char* cmd) {
     return false;
 }
 
-void BundleCalibrationController::update(uint16_t button_bits, SensorController &sensorController) {
+void BundleCalibrationController::update(uint16_t button_bits) {
+    SensorController &sensor_controller = sensorController();
 
     bool btn_left_pressed = button_bits & 1;
     bool btn_right_pressed = button_bits & 2;
@@ -144,7 +145,7 @@ void BundleCalibrationController::update(uint16_t button_bits, SensorController 
                 // TODO consider 2 quick reads in succession for smoothing
 
                 // Only read the sensors if we need them, keeps things fast.
-                sensorController.readUncorrected(raw_field);
+                sensor_controller.readUncorrected(raw_field);
                 last_frame_time = now;
                 send_frame(raw_field);
                 expected_samples++;

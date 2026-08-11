@@ -1,8 +1,6 @@
 #pragma once
 #include <Arduino.h>
 #include "math3D.h" // Assuming your Vec3/Mat3 are here
-// We need this to contditionally read the sensor
-#include "controllers/SensorController.h"
 
 enum class CalibStep {
     NONE = -1,
@@ -32,7 +30,7 @@ public:
     BundleCalibrationController();
     
     // Call this every cycle in your main loop()
-    void update(uint16_t button_bits, SensorController &sensorController);
+    void update(uint16_t button_bits);
     
     // Call this when a complete line is received over Serial. Returns true if
     // the caller should leave calibration entirely -- today only CAL_ABORT

@@ -23,20 +23,11 @@ Every fact has one authoritative home, and everywhere else points at it
 instead of restating it. `magnet_model_table.h` owns the interpolation grid's
 bounds; `CalibrationStorage.h` owns the stored-blob layout; `ARCHITECTURE.md`
 owns how the pipeline fits together; `TODO/` owns what is and isn't done. A
-second copy isn't redundancy, it's a future contradiction — and that is this
-repo's dominant failure mode, not a hypothetical one.
+second copy isn't redundancy, it's a future contradiction.
 
 Prefer "the grid bounds live in `magnet_model_table.h`" over quoting them.
 
-**READMEs are where this goes wrong most, so hold them to it hardest.** A
-README is read casually and reviewed rarely, and it is almost never the owner
-of a code fact — so benchmark numbers, fitted residuals, "N tests pass", and
-restated constants or struct layouts don't belong in one. What does: what the
-thing is for, how to run it, and what you need to know before touching it. A
-sentence of orientation that will outlive the next refactor is fine ("motion
-is a Gauss-Newton pose solve — see `ARCHITECTURE.md`"); a paragraph
-paraphrasing the current implementation is not.
-
+**READMEs are where this goes wrong most, so hold them to it hardest.** 
 One README is not an exception to the above but worth naming:
 **`TODO/README.md` does own implementation status.** Being an index of open
 work is its whole job, so it states plainly what's done and what isn't.

@@ -35,13 +35,11 @@ static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm (or your length unit)
 static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
-// Don't hardcode the domain here -- read BICUBIC_ORIGIN / BICUBIC_FAR in
-// magnet_model_table.h, which is generated. (This comment used to name
-// (0,-12)..(6,-0.5); the table has been regenerated wider than that since,
-// and the stale bounds went unnoticed because the points below stayed
-// interior either way.) z is always negative -- the sensor plane sits below
-// the magnet. The points below sit well inside the current domain, with
-// margin >> FD_STEP_LINEAR, and deliberately cluster in the region real knob
+// read BICUBIC_ORIGIN / BICUBIC_FAR in magnet_model_table.h, for the actual
+// domain. This file is generated. 
+// z is always negative -- the sensor plane sits below
+// the magnet. The points below are chosen to sit well inside the current domain, 
+// with margin >> FD_STEP_LINEAR, and deliberately cluster in the region real knob
 // poses actually reach rather than spanning the whole table.
 struct RZSample { float r; float z; };
 static constexpr RZSample BICUBIC_TEST_POINTS[] = {
@@ -96,7 +94,6 @@ static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 // ======================================================================
 // Helpers
 // ======================================================================
-
 
 
 

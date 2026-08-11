@@ -38,8 +38,7 @@ void BundleState::update() {
     }
 
     uint16_t button_bits = input.takeActivity();
-    // We pass the sensorController so the callibrator can be selective in when it wants to read the sensor.
-    bundleCalibration.update(button_bits, sensorController());
+    bundleCalibration.update(button_bits);
 
     // Deliberately no exit on "all steps captured". The knob holds in
     // AWAITING_UPLOAD so the host can solve and hand the result straight back;

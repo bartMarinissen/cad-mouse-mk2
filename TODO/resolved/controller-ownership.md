@@ -6,8 +6,12 @@
 >   by the `CalibrationParams` work — `1883bc2` gave the calibration an owner
 >   and `20f5f4d` replaced the controller globals with per-controller
 >   accessors. `MotionController` now holds a `const ForwardModel` member.
-> - **Problem 3** turned out not to be an inconsistency; `BundleState.cpp`
->   documents why `SensorController` is passed in explicitly.
+> - **Problem 3** is closed by code: `BundleCalibrationController::update()` no
+>   longer takes a `SensorController&`: it reaches for `sensorController()` like
+>   it already did for `ledController()`, so the class uses one access pattern
+>   throughout. The "only read the sensors if we need them" rationale that the
+>   parameter used to carry now sits at the read itself in
+>   `BundleCalibrationController.cpp`.
 > - **Problem 1** is closed by decision rather than by code change: no
 >   controller owns another, and reaching a sibling through its
 >   `Controllers.h` accessor is the project's sanctioned pattern. The thing
@@ -93,12 +97,14 @@ deleted.
 
 ## Problem 3: `BundleCalibrationController` mixes both access patterns — RESOLVED
 
-Not actually an inconsistency: `BundleState.cpp` already documents why
-`SensorController` comes in as an explicit parameter to `update()` instead of
-through `sensorController()` — "so the callibrator can be selective in when
-it wants to read the sensor." That's a deliberate reason for the split, not
-two competing access patterns with none. The original description follows,
-for context.
+Closed by dropping the parameter: `update()` now takes only `button_bits` and
+calls `sensorController()` itself, matching the `ledController()` call it
+already made. This was reconsidered once — the explicit parameter was briefly
+read as deliberate, on the strength of a `BundleState.cpp` comment saying it
+let the calibrator "be selective in when it wants to read the sensor." But
+selectivity never depended on how the controller got its reference, only on
+where it chose to call `readUncorrected()`, so the parameter bought nothing the
+accessor didn't. The original description follows, for context.
 
 Every controller is reached through its own accessor function (`ledController()`,
 `sensorController()`, ...) declared in `Controllers.h` — that's the project's

@@ -32,9 +32,7 @@ description lives. Don't cite `resolved/` as a statement about the tree.
 - **Head that section "Design", not "Decision".** A design is what you intend
   to build; a decision is a question that is closed, and calling a sketch a
   decision hides the fact that it can still change. Reserve "Decided" for
-  parts that are actually settled — usually meaning implemented, as with
-  `calibration-mode-entry.md`'s entry gesture. A file with load-bearing open
-  questions has a design, not a decision.
+  parts that are actually settled.
 - Update a file in place as understanding deepens, rather than leaving it
   stale. `Performance.md` is the model here: each optimization pass appended
   its own section and amended the earlier ones it invalidated, so the file
@@ -120,11 +118,6 @@ archived file's own header has the detail.
   owner (`1883bc2`/`20f5f4d`); the remaining "circular coupling" was settled
   by deciding the accessor pattern *is* the rule — see `ARCHITECTURE.md` →
   "Controllers".
-- **[`resolved/readme-refresh.md`](resolved/readme-refresh.md)** —
-  `firmware/README.md` documented the motion heuristic this fork replaced.
-  Closed by deleting that README: everything in it besides the stale
-  pseudocode was already owned by `Config.h`, `positions.h` or
-  `platformio.ini`.
 - **[`resolved/sensor-gain-calibration.md`](resolved/sensor-gain-calibration.md)** —
   Moving sensor gain/skew out of the solver. Now applied in
   `SensorController::read_mT()` from `CalibrationParams`; the last gap

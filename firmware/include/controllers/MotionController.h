@@ -10,10 +10,8 @@ using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
 struct Statistics {
   static constexpr float smoothing = 0.99f;
 
-  // profiling. Microseconds -- solve_knob_pose runs ~7.5ms, so the millisecond
-  // clock this used to sample quantised it at about +/-13%, which is coarser
-  // than most of the optimisations worth measuring. uint32_t because at ~7500us
-  // per call and 80Hz a signed int overflows in a little over an hour.
+  // Profiling, in microseconds. Wraps after roughly an hour of solving, which
+  // is fine for profiling.
   uint32_t time_tot = {};
   uint32_t n_time = {};
 

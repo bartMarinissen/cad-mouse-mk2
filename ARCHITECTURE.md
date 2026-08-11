@@ -7,10 +7,8 @@ while — see `design documentation/context.md` for the *why*, this file is the
 *where/how*.
 
 **The repo root `README.md` is the maintainer's personal file, off-limits to
-edits from this doc's audit/consistency-keeping loop** — its "Current state
-of the project" numbers are expected to lag what's described here. Don't
-"fix" it to match this file; that's the maintainer's call, not a doc-sync
-task.
+edits from this doc's audit/consistency-keeping loop** — it may be out of date.
+That is not your problem to solve. And be careful with relying on it to be up to date.
 
 ## What this project is
 
@@ -20,15 +18,10 @@ a PCB. Firmware infers the knob's full pose (X/Y/Z + pitch/roll/yaw) from the ra
 magnetic field and reports it to the host as a USB HID multi-axis controller
 (3Dconnexion-style), for CAD navigation.
 
-The fork's whole reason to exist (per `design documentation/context.md`): the
-upstream project mapped raw field strength to position with a naive linear
+The upstream project mapped raw field strength to position with a naive linear
 heuristic. This fork rips that out and replaces it with a real magnetic
 forward model + Gauss-Newton solver, because field strength doesn't map
-linearly to distance,
-and because per-magnet manufacturing tolerance causes "Phantom Tilt" (a magnet
-5% stronger than its siblings looks, to naive math, like it moved closer). Fixing
-that tolerance problem is what the in-progress bundle-calibration subsystem is
-for.
+linearly to distance.
 
 ## Three top-level areas
 
@@ -53,11 +46,6 @@ fixed order (HID → serial → input → LED → sensors → motion → telemet
 incoming serial line, then `stateMachine.update()` — a classic non-blocking
 super-loop, no RTOS.
 
-`Serial.begin()` happens unconditionally in `serialController().begin()`, not
-gated on `Config::ENABLE_TELEMETRY` as it once was: the link now carries the
-calibration protocol as well as telemetry. `TelemetryController` still decides
-for itself whether to *print*.
-
 ### State machine
 
 [`firmware/include/State.h`](firmware/include/State.h) — trivial interface:
@@ -65,7 +53,7 @@ for itself whether to *print*.
 [`firmware/include/StateMachine.h`](firmware/include/StateMachine.h) /
 [`.cpp`](firmware/src/StateMachine.cpp) — holds one `currentState*`, calls
 `exit()`/`enter()` on transition. States are **static members of StateMachine**
-(singletons, no dynamic allocation — consistent with `EIGEN_NO_MALLOC`).
+(singletons, no dynamic allocation).
 
 States, all in `firmware/{include,src}/states/`:
 
@@ -76,9 +64,7 @@ States, all in `firmware/{include,src}/states/`:
   commands are accepted: it announces `STATUS TARE_BEGIN` on entry, then honours
   `CAL_START` (enter `BundleState`) and `CAL_UPLOAD` (store a new calibration;
   `CAL_ABORT` leaves a run without storing, and is handled in `BundleState`)
-  for the ~1.7s the tare lasts. Scoping both to a user-triggered window means
-  neither can happen without someone physically holding the buttons.
-  ⚠️ Still slated for replacement by a fuller "tare" step — see
+  for the ~1.7s the tare lasts.
   [`TODO/tare-and-calibration.md`](TODO/tare-and-calibration.md).
 - **IdleState** — the main operating state. Reads sensors → runs the pose solve →
   maps to HID axes → sends HID report → publishes telemetry → watches for the
@@ -86,7 +72,9 @@ States, all in `firmware/{include,src}/states/`:
 - **SleepState** — LEDs off, waits for any button activity to return to `IdleState`.
 - **ErrorState** — entered if `SensorController::begin()` fails at boot. LED
   spinner in red, otherwise inert (no recovery path).
-- **BundleState** — hosts the serial-driven multi-step hardware calibration
+- **BundleState** — This is where actual callibration happens. We use bundle
+  callibration and taring was called callibration. Hence the bad name. 
+  This hosts the serial-driven multi-step hardware calibration
   routine (see "Calibration subsystem" below). Entered only from
   `CalibratingState` on `CAL_START`; `enter()` kicks the run off directly,
   since the command that got it there was already consumed.
@@ -103,12 +91,7 @@ controller is reached through its `Controllers.h` accessor, by states and by
 other controllers alike; a controller calling a sibling's accessor is the
 sanctioned pattern, not a coupling smell. There is no dependency hierarchy to
 respect and nothing to invert. What is *not* allowed is bypassing the
-accessors — the `extern MotionController motionController;` that
-`SensorController.cpp` once declared inline is the thing that was wrong, and
-it is gone. Passing a controller in as an explicit parameter instead
-(`BundleCalibrationController::update()` takes `SensorController&`) is also
-fine where there's a reason, such as letting the callee control *when* the
-read happens. This settles what used to be tracked as issues #4/#5 below.
+accessors.
 
 | Controller | File | Responsibility |
 |---|---|---|
@@ -134,13 +117,7 @@ conversion period. The PCB forces this: all three `SCL/INT` pins share one
 net wired only to the MCU's plain `SCL`, so there is no `/INT` line to
 synchronize on and it has to happen over the bus itself.
 
-Two dependencies worth knowing:
-
-- **This leans on I2C clock stretching** (the driver's default `CA=0`/`INT=1`
-  config) to make a read block until its conversion finishes. Whether the
-  RP2040 Arduino `Wire` implementation honours slave clock stretching is
-  **unverified on real hardware** — the design assumes it.
-- **Self-triggering only works if reads keep happening.** After a >100ms gap
+worth knowing: **Self-triggering only works if reads keep happening.** After a >100ms gap
   the armed conversion is stale, so `readUncorrected()` throws away one round
   purely to re-trigger before reading for real. Bus stays at 400kHz
   deliberately; Master-Controlled Mode doesn't need Fast Mode, and raising it
@@ -221,20 +198,18 @@ it imports the magnet/grid definitions from `bicubic_table.py` rather than
 duplicating them. `field_approximation.ipynb` imports the same module to
 inspect/visualize the table (field plots, dipole-approximation comparison,
 interpolation error); it no longer writes the firmware files itself.
-**This file is generated, not hand-written** — if the magnet spec, grid bounds
+**The `magnet_model_table.cpp` file is generated, not hand-written** — if the magnet spec, grid bounds
 (`BICUBIC_ORIGIN`/`BICUBIC_FAR` in `magnet_model_table.h`), or grid resolution
 change, they need to change in both the notebook and the header in lockstep, by
 hand. There's no build-time codegen step; it's a manual copy-paste pipeline.
 
 ## Calibration subsystem — two independent layers
 
-**1. Boot baseline (`CalibratingState`, always runs):** zeroes out ambient
-field offset and establishes a rest pose by averaging 200 samples. Fast,
-automatic, no user interaction beyond waiting. This is *not* what fixes Phantom
-Tilt — it just establishes a reference point.
+**1. Tare (`CalibratingState`, always runs):** Measures the resting pose as 
+a reference to report the movement of the knob.
 
-**2. Bundle calibration (`BundleState` / `BundleCalibrationController`, new,
-in progress):** a guided multi-step capture routine intended to solve the
+**2. Bundle calibration (`BundleState` / `BundleCalibrationController`, new):** 
+a guided multi-step capture routine intended to solve the
 Phantom Tilt problem via bundle adjustment. Step sequence:
 `STATIONARY → FLAT_CIRCLE → PITCH → ROLL → TWIST → HEAVE → RANDOM → COMPLETE`.
 Each step is a little sub-state-machine (`CalibPhase`:
@@ -242,10 +217,7 @@ Each step is a little sub-state-machine (`CalibPhase`:
 `CAL_FRAME`/`CAL_STATE` lines over Serial to a host script,
 [`bundle_callibration.py`](magnet_field_model/bundle_callibration.py), which
 ACKs frame counts back over the same link. A successful ACK moves straight on
-to the next step's `WAIT_FOR_START_BTN` (or `AWAITING_UPLOAD` after the last
-one) with no confirmation step in between -- there is no way to go back and
-redo a step, so there is nothing for a pause to do there except cost the user
-an extra button press.
+to the next step.
 
 **Status: capture, fit, and delivery all work.** The Python side fits a set of
 shared parameters (per-magnet position, tilt and strength; per-sensor gain
@@ -253,10 +225,7 @@ matrix and DC offset) jointly with one free 6-DOF pose per captured frame,
 taking the field residual down by most of an order of magnitude against
 nominal geometry, in about a second. The parameter groups and their sizes are
 declared by `BLOCKS`/`GROUP_SLICES` in
-`magnet_field_model/calibration/parameterization.py` — read the count there;
-an earlier revision of this section restated it and was wrong by nine. The
-fit's own report prints the residual it achieved on the run in front of you,
-which is the number to trust over any written down here. See
+`magnet_field_model/calibration/parameterization.py`.  See
 [`magnet_field_model/README.md`](magnet_field_model/README.md) for the
 architecture and the load-bearing frame conventions.
 
@@ -265,18 +234,18 @@ Two things are worth knowing before touching it:
 - The magnet position reference is the magnet's **bottom face**, not its
   centre — that is what `positions.h` means and what the notebook baked into
   the bicubic table. magpylib positions cylinders by their centre.
-- The raw capture path streams `readUncorrected()`, so the sensors read the
+- The raw capture path streams `readUncorrected()`, so the sensors might read the
   **opposite sign** to the modelled field — matching `Config::magnet_gains`
-  (`{-0.96, -1.2, -0.98}`). The fit attributes that flip to magnet polarity,
+  . The fit attributes that flip to magnet polarity,
   so fitted gains read near `+I` while the *exported* ones land near `-I`.
-- Sensor gain scale and magnet strength are not separable (only ~1%
+- Sensor gain scale and magnet strength are not separable (only a few percent
   cross-talk distinguishes them), so the fit picks a gauge: `det(G) = 1`, with
   magnet strength carrying the scale. The reported strengths are an
   attribution, not a measurement — the fit's information-gain column says so.
 
 ### Persistence
 
-Fitted calibrations reach the firmware on their own now. The whole fitted
+Fitted calibrations reach the firmware on their own. The whole fitted
 parameter set is one struct,
 [`CalibrationParams`](firmware/include/CalibrationParams.h), and
 [`CalibrationStorage`](firmware/include/CalibrationStorage.h) persists it to
@@ -341,12 +310,6 @@ silent: it still yields a valid blob with a valid CRC, and a *reordered* struct
 is even the same 300 bytes — so `tests/test_export.py` pins the field offsets,
 not just the size.
 
-`--emit-cpp` stays for reading and diffing the numbers, now as a nested-brace
-aggregate initializer — possible since the struct became plain data, and the
-reason the same test can compile that snippet against the extracted
-declaration and diff its bytes against `format_binary()`, checking cffi's ABI
-model against a real compiler.
-
 **The knob holds after capture.** Finishing the last pose moves it to
 `AWAITING_UPLOAD` rather than back to `IdleState`: the host is about to solve
 and hand a calibration straight back, and making the user walk the knob into
@@ -358,9 +321,7 @@ flash by themselves, and `CAL_ABORT` returns to idle without writing — also th
 only escape from a run whose host went away, since `WAIT_FOR_ACK` otherwise
 times out back to `WAIT_FOR_START_BTN` forever. The host sends it when
 `--write-serial` was not passed (nothing is coming back, so the knob should not
-be left parked) or when the user declines the write prompt. A knob-side escape
-still does not exist; see
-[`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md).
+be left parked) or when the user declines the write prompt.
 
 Two caveats on the exported numbers:
 
@@ -373,8 +334,8 @@ Two caveats on the exported numbers:
   `magnet_field_model/bicubic_table.py` generated the table at, currently
   1000 mT and arbitrary — any magnet's real Br divided by it gives the right
   scale regardless of what that reference happens to be.
-- The fitted values are **effective parameters for this model, not measured
-  physics.** `ForwardModel::evaluate()` pairs sensor *i* with magnet *i* only,
+- The fitted values are effective parameters for this model, not measured
+  physics. `ForwardModel::evaluate()` pairs sensor *i* with magnet *i* only,
   ignoring the other two magnets ~28.58mm away — worth 1.7–4.5% of the field.
   The Python fit is deliberately pinned to that same single-magnet model
   (`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING = PAIRED_ONLY`)
@@ -408,63 +369,3 @@ Two caveats on the exported numbers:
 | New guided calibration flow | `firmware/src/controllers/BundleCalibrationController.cpp`, `firmware/src/states/BundleState.cpp`, `magnet_field_model/bundle_callibration.py` |
 | Project intent / hardware spec | `design documentation/context.md` |
 | Tracked follow-up work | `TODO/` |
-
-## Issues / architecture drift spotted while reading
-
-Tracked as of the initial read-through. Status as of the follow-up pass:
-
-1. **`CalibratingState` → `BundleState` transition looks accidental** —
-   **fixed.** The any-button-activity jump is gone; entry now requires the
-   host to send `CAL_START` during the tare window, so a stray tap at boot
-   can no longer drop the knob into a serial protocol with nobody on the
-   other end. See
-   [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md) for the
-   reasoning and for the knob-side *exit* gap that remains.
-
-2. **`BundleState` passes the wrong value as "button bits"** — still open.
-   `BundleState::update()` hands `takeActivity()` (a `bool`) where a
-   `buttonBits()` bitmask belongs. Tracked in
-   [`TODO/calibration-mode-entry.md`](TODO/calibration-mode-entry.md), since
-   the fix depends on the entry/exit gesture design.
-
-   The wider boot-calibration redesign these two were originally folded into
-   is still tracked separately in
-   [`TODO/tare-and-calibration.md`](TODO/tare-and-calibration.md).
-
-3. `solve_knob_pose()` not writing its Jacobian out-param — **fixed.**
-
-4. **Circular coupling between `SensorController` and `MotionController`**
-   and 5. **the forward model's state living outside any controller** — both
-   **resolved.** The forward model is now a `const ForwardModel` member of
-   `MotionController`, built from `CalibrationParams`. The
-   `SensorController` → `MotionController` call in `updateCalibration()`
-   stays, and is fine: it goes through the `motionController()` accessor like
-   everything else, which is the project's ownership rule (see "Controllers"
-   above), not a violation of it. The raw `extern` that *was* the violation
-   is gone. Reasoning archived in
-   [`TODO/resolved/controller-ownership.md`](TODO/resolved/controller-ownership.md).
-
-6. **`Config::magnet_gains` can't express what the math supports** —
-   **resolved.** Sensor gain/skew correction is owned entirely by
-   `SensorController::read_mT()`, outside the motion system; `Sensor` no
-   longer carries a gain at all, and the coefficients come from
-   `CalibrationParams` rather than `Config` scalars. `calibration/export.py`
-   emits real polarization in mT (`firmware_magnet_strength_mT()`), closing
-   the last gap this issue tracked. Reasoning archived in
-   [`TODO/resolved/sensor-gain-calibration.md`](TODO/resolved/sensor-gain-calibration.md).
-
-7. **`rcond` is a hardcoded stub** (deliberately — computing it via SVD every
-   frame is too expensive on this FPU-less MCU, not an oversight) and
-   8. **`TelemetryController::publish()`'s signature keeps growing** — merged
-   into one telemetry rework, tracked in
-   [`TODO/telemetry-rework.md`](TODO/telemetry-rework.md).
-
-9. Unwired linker scripts (`custom_memmap.ld`, `full_custom_memmap.ld`) —
-   **fixed** by removing the vestigial files.
-
-10. **`firmware/README.md` documents the old, replaced motion model** —
-    **fixed** by deleting that README. Its only unique content was the
-    driver-support note, now a comment on the 3Dconnexion USB identity in
-    `platformio.ini`; everything else restated `Config.h` or this file.
-    Reasoning archived in
-    [`TODO/resolved/readme-refresh.md`](TODO/resolved/readme-refresh.md).

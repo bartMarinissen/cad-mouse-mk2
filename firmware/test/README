@@ -66,9 +66,3 @@ plausible.
 - **Rotation perturbations use the exact matrix exponential**, not the
   first-order approximation the derivation linearizes around. Using the
   first-order form on both sides would let a shared error cancel and hide.
-
-## `test_dummy.cpp`
-
-Entirely commented out. It is the PlatformIO scaffold example, kept only as a
-reference for the USB-CDC handshake an on-device test needs — the RP2040 will
-otherwise print results before the host is listening, and they vanish.

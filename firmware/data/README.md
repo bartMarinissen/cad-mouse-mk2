@@ -19,8 +19,7 @@ pio run -t uploadfs
 `--emit-bin` defaults to writing `firmware/data/calibration.bin`. It is
 byte-for-byte the same blob the serial upload path sends, so both routes
 produce a file the firmware reads identically — see
-`firmware/include/CalibrationStorage.h` for the size and layout, which are
-declared there (`kBlobSize`/`kPayloadSize`) rather than restated here.
+`firmware/include/CalibrationStorage.h` for the size and layout.
 
 ## The other route
 
