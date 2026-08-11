@@ -12,6 +12,22 @@ subroutine call. `solve_knob_pose`, `ForwardModel::evaluate`,
 all marked `__not_in_flash_func` (placed in RAM), presumably to dodge flash
 XIP wait-states on this hot path.
 
+## How to measure, before you measure anything
+
+Both of these were learned the hard way in the passes below, and both produce
+confident wrong answers rather than obvious failures.
+
+- **Static `bl`-counting can give the wrong sign.** Tallying call targets in a
+  disassembly counts work inside a loop kernel once regardless of how many
+  iterations it runs, so replacing an Eigen loop kernel with straight-line
+  scalar code looks like a regression when it is a 20% win. It flipped the
+  sign on the third pass's result. Cross-check with
+  `valgrind --tool=callgrind` on a host build before believing a static tally.
+- **Prefer measuring to estimating.** The hand-counted flop estimates this
+  document originally carried were wrong enough to be replaced wholesale. If a
+  number goes in here, say how it was obtained — the sections below are
+  labelled by method for exactly this reason.
+
 ## Ruled out / already fine
 
 - **Bicubic table location**: `BICUBIC_INTERPOLATION_TABLE` is at `0x20003278`

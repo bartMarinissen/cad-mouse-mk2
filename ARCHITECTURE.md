@@ -22,9 +22,9 @@ magnetic field and reports it to the host as a USB HID multi-axis controller
 
 The fork's whole reason to exist (per `design documentation/context.md`): the
 upstream project mapped raw field strength to position with a naive linear
-heuristic (still described in `firmware/README.md`, which is now stale). This
-fork rips that out and replaces it with a real magnetic forward model +
-Gauss-Newton solver, because field strength doesn't map linearly to distance,
+heuristic. This fork rips that out and replaces it with a real magnetic
+forward model + Gauss-Newton solver, because field strength doesn't map
+linearly to distance,
 and because per-magnet manufacturing tolerance causes "Phantom Tilt" (a magnet
 5% stronger than its siblings looks, to naive math, like it moved closer). Fixing
 that tolerance problem is what the in-progress bundle-calibration subsystem is
@@ -247,13 +247,18 @@ one) with no confirmation step in between -- there is no way to go back and
 redo a step, so there is nothing for a pause to do there except cost the user
 an extra button press.
 
-**Status: capture, fit, and delivery all work.** The
-Python side fits 45 shared parameters (per-magnet position, tilt and strength;
-per-sensor gain matrix and DC offset) jointly with one free 6-DOF pose per
-captured frame, and takes the field residual from ~1.8% at nominal geometry
-down to ~0.33%, in about a second. See
+**Status: capture, fit, and delivery all work.** The Python side fits a set of
+shared parameters (per-magnet position, tilt and strength; per-sensor gain
+matrix and DC offset) jointly with one free 6-DOF pose per captured frame,
+taking the field residual down by most of an order of magnitude against
+nominal geometry, in about a second. The parameter groups and their sizes are
+declared by `BLOCKS`/`GROUP_SLICES` in
+`magnet_field_model/calibration/parameterization.py` — read the count there;
+an earlier revision of this section restated it and was wrong by nine. The
+fit's own report prints the residual it achieved on the run in front of you,
+which is the number to trust over any written down here. See
 [`magnet_field_model/README.md`](magnet_field_model/README.md) for the
-architecture, the load-bearing frame conventions, and the measured numbers.
+architecture and the load-bearing frame conventions.
 
 Two things are worth knowing before touching it:
 
@@ -457,5 +462,9 @@ Tracked as of the initial read-through. Status as of the follow-up pass:
 9. Unwired linker scripts (`custom_memmap.ld`, `full_custom_memmap.ld`) —
    **fixed** by removing the vestigial files.
 
-10. **`firmware/README.md` documents the old, replaced motion model** — left
-    open, tracked in [`TODO/readme-refresh.md`](TODO/readme-refresh.md).
+10. **`firmware/README.md` documents the old, replaced motion model** —
+    **fixed** by deleting that README. Its only unique content was the
+    driver-support note, now a comment on the 3Dconnexion USB identity in
+    `platformio.ini`; everything else restated `Config.h` or this file.
+    Reasoning archived in
+    [`TODO/resolved/readme-refresh.md`](TODO/resolved/readme-refresh.md).

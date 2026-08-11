@@ -1,3 +1,19 @@
+> **RESOLVED — closed by deleting `firmware/README.md` outright.**
+>
+> Not by the rewrite this file asks for. The stale motion pseudocode was the
+> bulk of the file, and everything else in it was a second copy of something
+> another file already owns: the tuning constants are declared in
+> `firmware/include/Config.h`, the axis conventions in that header and in
+> `magnet_model/positions.h`, and the driver-support note belonged next to the
+> 3Dconnexion USB identity in `platformio.ini`, where it now lives along with
+> the demo video link. Nothing was left for the README to be the owner of.
+>
+> Kept for the reasoning below on *why* a rewrite was the wrong fix — it would
+> have put a second paraphrase of the pipeline somewhere nobody re-reads, and
+> rotted the same way. See `CLAUDE.md`, "One owner per fact".
+
+---
+
 # Strip the stale motion model out of `firmware/README.md`
 
 Originated from ARCHITECTURE.md issue #10. Still open, but **the intended fix

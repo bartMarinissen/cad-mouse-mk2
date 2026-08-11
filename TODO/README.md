@@ -101,10 +101,6 @@ too, not just the file.
   boundary as double buffers gated by a spinlocked counter held across the
   copy. Telemetry is a third channel that doesn't fit that shape and is
   undesigned; nothing is implemented.
-- **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
-  documents the old per-axis-averaging motion heuristic this fork replaced.
-  The fix is to delete that section and point at `ARCHITECTURE.md`, which owns
-  the pipeline, rather than paraphrasing the solver there a second time.
 - **[`tare-and-calibration.md`](tare-and-calibration.md)** — `CalibratingState`'s
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.
@@ -124,6 +120,11 @@ archived file's own header has the detail.
   owner (`1883bc2`/`20f5f4d`); the remaining "circular coupling" was settled
   by deciding the accessor pattern *is* the rule — see `ARCHITECTURE.md` →
   "Controllers".
+- **[`resolved/readme-refresh.md`](resolved/readme-refresh.md)** —
+  `firmware/README.md` documented the motion heuristic this fork replaced.
+  Closed by deleting that README: everything in it besides the stale
+  pseudocode was already owned by `Config.h`, `positions.h` or
+  `platformio.ini`.
 - **[`resolved/sensor-gain-calibration.md`](resolved/sensor-gain-calibration.md)** —
   Moving sensor gain/skew out of the solver. Now applied in
   `SensorController::read_mT()` from `CalibrationParams`; the last gap

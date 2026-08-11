@@ -1,12 +1,9 @@
 # Working in this repo
 
-**This file is routing and conventions only. It must not restate
+**Routing and conventions only — this file must not restate
 `ARCHITECTURE.md`.** No parameter counts, no Hz figures, no file inventories,
-no pipeline diagrams — those live in `ARCHITECTURE.md` and duplicating them
-here just creates a second copy that drifts. This repo's dominant failure mode
-is documentation disagreeing with code; a file that is auto-loaded drifts
-invisibly, so keep it to things that change slowly and can't be learned by
-reading the source.
+no pipeline diagrams. Keep it to things that change slowly and can't be
+learned by reading the source; an auto-loaded file drifts invisibly.
 
 ## Read order
 
@@ -40,21 +37,12 @@ sentence of orientation that will outlive the next refactor is fine ("motion
 is a Gauss-Newton pose solve — see `ARCHITECTURE.md`"); a paragraph
 paraphrasing the current implementation is not.
 
-Two READMEs worth knowing about, neither an exception to the above:
-
-- **`TODO/README.md` does own implementation status.** Being an index of open
-  work is its whole job, so it states plainly what's done and what isn't.
-- **`magnet_field_model/README.md` carries parameter counts, fitted residuals
-  and cross-run spreads that nothing else owns.** That makes it misplaced
-  `ARCHITECTURE.md` content rather than a duplicate, which is why it's been
-  left alone — deciding where it should live is a real call, not a cleanup.
-  Don't add more of it, and don't cite it as current.
+One README is not an exception to the above but worth naming:
+**`TODO/README.md` does own implementation status.** Being an index of open
+work is its whole job, so it states plainly what's done and what isn't.
 
 ## Docs that will actively mislead you
 
-- **`firmware/README.md` is knowingly stale.** It documents the old
-  per-axis-averaging motion heuristic this fork *replaced*. It is not a
-  description of the code. Tracked in `TODO/readme-refresh.md`.
 - **`TODO/resolved/` is history.** Those files are written in the present
   tense and describe code as it was. Each has a header saying so. Never cite
   them as a statement about the tree.
@@ -62,17 +50,18 @@ Two READMEs worth knowing about, neither an exception to the above:
   Its "Current state" numbers are expected to lag. Do not "fix" it to match
   the other docs — that is the maintainer's call, not a doc-sync task.
 
-## Verify against code, not against docs
+## Docs can lag the code
 
-When checking whether something is true, read the source. Do not confirm a
-doc's claim by re-reading the doc. Two TODOs in this repo spent weeks
-describing work that had already shipped, and one described a bug that a
-parallel branch had fixed a minute earlier — all of which read as perfectly
-consistent until someone opened the `.cpp`.
+Docs here are usually right, but they lag, and they lag most on whatever was
+worked on recently. So when a claim actually matters to what you're about to
+do — and especially when it's about whether something is already implemented —
+check it against the source rather than against another doc. Two TODOs once
+spent weeks describing work that had already shipped, and both read as
+perfectly consistent until someone opened the `.cpp`.
 
-Corollary: **when you implement part of a TODO, update that TODO in the same
-commit.** Both drifts above came from skipping this. Neither produced a merge
-conflict, so nothing flagged them.
+The cheapest way to keep this from getting worse: **when you implement part of
+a TODO, update that TODO in the same commit.** Neither drift above produced a
+merge conflict, so nothing flagged them.
 
 ## Tests, and when they are not optional
 
@@ -82,38 +71,28 @@ conflict, so nothing flagged them.
   chain against central finite differences. It is the safety net for the whole
   solver, and the chain is hand-derived — nothing else will catch a wrong
   derivative.
-- **Firmware build:** `pio run -e seeed_xiao_rp2040`.
+- **Firmware build:** `pio run -e seeed_xiao_rp2040`. This works from a
+  sandbox — `pip install platformio` then `pio run` fetches the ARM toolchain
+  and builds end to end. A previous session concluded otherwise from a 403 on
+  `api.github.com`, but the toolchain ships from
+  `github.com/.../releases/download/`, a different host. Check with
+  `pio pkg install` before believing you can't build.
 - **After touching `magnet_field_model/`:**
   ```bash
   cd magnet_field_model
-  uv run --group dev python -m pytest tests/ -q    # 57 tests, ~2m15s
+  uv run --group dev python -m pytest tests/ -q
   uv run --group dev ruff check .
   uv run --group dev mypy .
   ```
   All three are expected to be clean — if ruff or mypy reports anything, it is
-  new. The suite is slow because several tests run real calibration fits;
-  budget for it rather than killing it at 2 minutes.
+  new. **Budget several minutes for the suite**, and don't kill it at two:
+  several tests run real calibration fits, so it is slow by design rather than
+  hung.
   `tests/test_jacobian.py` mirrors the firmware's Jacobian test on the Python
   side.
 - **`firmware/src/magnet_model/magnet_model_table.cpp` is generated** — don't
   hand-edit. Regenerate with
   `uv run python generate_bicubic_table.py`.
-
-## Measurement traps (each one already cost a session)
-
-- **The ARM toolchain *is* reachable from a sandbox.** `pip install platformio`
-  then `pio run` works end to end. A previous session concluded otherwise from
-  a 403 on `api.github.com` — but the toolchain ships from
-  `github.com/.../releases/download/`, a different host. Check with
-  `pio pkg install` before believing you can't build.
-- **Static `bl`-counting can give the wrong sign.** Tallying call targets in a
-  disassembly counts work inside a loop kernel once regardless of iterations,
-  so replacing a library loop with straight-line code looks like a
-  regression when it is a 20% win. Cross-check with
-  `valgrind --tool=callgrind` on a host build. See `TODO/Performance.md`.
-- **Prefer measuring to estimating.** Hand-counted flop estimates in
-  `TODO/Performance.md` were wrong enough to need replacing wholesale. If a
-  number goes in a doc, say how it was obtained.
 
 ## Writing TODOs
 
