@@ -146,6 +146,11 @@ Two dependencies worth knowing:
   deliberately; Master-Controlled Mode doesn't need Fast Mode, and raising it
   risks signal integrity across three sensors on fixed 1.2kOhm pull-ups.
 
+The derivation behind this — datasheet rates, why the shared `SCL/INT` net
+rules out interrupt-driven sync, why trigger-bits `100B` specifically — is
+archived in
+[`TODO/resolved/sensor-read-speed.md`](TODO/resolved/sensor-read-speed.md).
+
 ## The pose pipeline (the core of the project)
 
 Entry point: `MotionController::compute()` in
@@ -431,7 +436,8 @@ Tracked as of the initial read-through. Status as of the follow-up pass:
    stays, and is fine: it goes through the `motionController()` accessor like
    everything else, which is the project's ownership rule (see "Controllers"
    above), not a violation of it. The raw `extern` that *was* the violation
-   is gone.
+   is gone. Reasoning archived in
+   [`TODO/resolved/controller-ownership.md`](TODO/resolved/controller-ownership.md).
 
 6. **`Config::magnet_gains` can't express what the math supports** —
    **resolved.** Sensor gain/skew correction is owned entirely by
@@ -439,7 +445,8 @@ Tracked as of the initial read-through. Status as of the follow-up pass:
    longer carries a gain at all, and the coefficients come from
    `CalibrationParams` rather than `Config` scalars. `calibration/export.py`
    emits real polarization in mT (`firmware_magnet_strength_mT()`), closing
-   the last gap this issue tracked.
+   the last gap this issue tracked. Reasoning archived in
+   [`TODO/resolved/sensor-gain-calibration.md`](TODO/resolved/sensor-gain-calibration.md).
 
 7. **`rcond` is a hardcoded stub** (deliberately — computing it via SVD every
    frame is too expensive on this FPU-less MCU, not an oversight) and

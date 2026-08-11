@@ -15,6 +15,12 @@ it in sync: it's a second copy of information the file itself owns, so it
 only stays trustworthy if every commit that changes what a TODO is actually
 about also updates its summary line here in the same commit.
 
+`resolved/` holds finished TODOs rather than deleting them, so the reasoning
+behind a decision outlives the decision. **Everything in there is history:
+it is written in the present tense but describes code as it was.** Each
+archived file carries a header saying what closed it and where the current
+description lives. Don't cite `resolved/` as a statement about the tree.
+
 ## Writing a TODO file
 
 - State the problem concretely: what's wrong, where in the code, and why it
@@ -39,14 +45,28 @@ about also updates its summary line here in the same commit.
 
 ## Resolving a TODO file
 
-- Delete the file once the work lands, and delete its entry below.
+- **Move the file to `resolved/`, don't delete it.** The investigation that
+  produced a decision is worth more than the decision alone — why an approach
+  was rejected, what was measured, which datasheet paragraph it turned on.
+  That context is what stops the same ground being re-covered later, and it
+  is not reconstructible from the diff that implemented it.
+- Add a short header at the top of the moved file saying what resolved it
+  (commit hashes where they're known), and where the *live* description now
+  lives — usually a section of `../ARCHITECTURE.md`. A reader who lands in
+  `resolved/` must be able to tell immediately that they're reading history,
+  because the body will still be written in the present tense and will
+  describe code that no longer looks like that.
+- Move its index entry down to the "Resolved" list below.
 - If the issue was also tracked in `../ARCHITECTURE.md`'s "Issues /
-  architecture drift" list, update that entry to say it's fixed instead of
-  leaving it pointing at a deleted file.
+  architecture drift" list, update that entry to say it's fixed and point at
+  the archived file.
+- Prefer pointing live code comments at `ARCHITECTURE.md` rather than into
+  `resolved/` — the archive is for someone digging into history, not a
+  reference the code should depend on.
 - Trivial issues resolved without ever getting a TODO file don't need one
   written retroactively just to close it out.
 
-## Index
+## Index — open
 
 Two lines per file, kept current with the file's actual content — if a TODO
 gains a new open question or loses a resolved one, update its summary here
@@ -87,3 +107,24 @@ too, not just the file.
   drop the hardcoded `rcond` stub, flatten `TelemetryController::publish()`'s
   growing parameter list, add solver convergence telemetry, and add a
   lightweight profiling API. None implemented yet.
+
+## Index — resolved (`resolved/`)
+
+History, not current state. One line on what it was and what closed it; the
+archived file's own header has the detail.
+
+- **[`resolved/controller-ownership.md`](resolved/controller-ownership.md)** —
+  Controller coupling around the pose pipeline. The forward model got a real
+  owner (`1883bc2`/`20f5f4d`); the remaining "circular coupling" was settled
+  by deciding the accessor pattern *is* the rule — see `ARCHITECTURE.md` →
+  "Controllers".
+- **[`resolved/sensor-gain-calibration.md`](resolved/sensor-gain-calibration.md)** —
+  Moving sensor gain/skew out of the solver. Now applied in
+  `SensorController::read_mT()` from `CalibrationParams`; the last gap
+  (`export.py` emitting a bare multiplier) closed with
+  `firmware_magnet_strength_mT()`.
+- **[`resolved/sensor-read-speed.md`](resolved/sensor-read-speed.md)** —
+  Master-Controlled Mode + trigger-on-read, cutting staleness from ~6.25ms to
+  about one I2C round-trip. Implemented in `7d1fb42`/`26e604d`; live
+  description is `ARCHITECTURE.md` → "Sensor read timing". One caveat is
+  still unverified on hardware (RP2040 `Wire` clock stretching).
