@@ -6,6 +6,12 @@ specifics (function names, line numbers) before relying on them if it's been a
 while — see `design documentation/context.md` for the *why*, this file is the
 *where/how*.
 
+**The repo root `README.md` is the maintainer's personal file, off-limits to
+edits from this doc's audit/consistency-keeping loop** — its "Current state
+of the project" numbers are expected to lag what's described here. Don't
+"fix" it to match this file; that's the maintainer's call, not a doc-sync
+task.
+
 ## What this project is
 
 A 6-DOF magnetic 3D mouse (fork of `sb-ocr/cad-mouse-mk2`): a knob embedded with

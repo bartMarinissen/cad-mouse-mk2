@@ -63,15 +63,13 @@ We said the forward problem is easy. But its only easy if you know the details o
 Actually finding this is for another section. But we need to know these things so we can correct for them.
 
 ## Current state of the project
-We have things working at about 80Hz using a single core based on bicubic interpolation.
-There's now a guided bundle-calibration routine (fit on a PC, flashed back to the knob)
-that gets the field residual down to well under 1%, instead of the ~4% you get with the
-hardcoded, uncalibrated nominal geometry.
+We have things working at about 50Hz using a single core based on bicubic interpolation.
+There is very little callibration, and its hardcoded for my knob.
+We get a residual of 4% Using the mouse it seems perfectly fine.
 
 The code is a mess, its actively being modified, its not documented yet, most things are up for modification.
-See `ARCHITECTURE.md` for the actual up-to-date architecture, and `TODO/` for open work.
 
-But smooth working at 80Hz with sub-1% residual after calibration is already something I'm proud of!
+But smooth working at 50Hz and a 4% residual without callibration is already something I'm proud of!
 
 ## AI usage
 There is heavy AI assistance. A lot of it for the tedium of getting the Jacobians. A decent amount of it for helping write the code. Most code starts out as AI generated and then gets shaped down to something I understand and agree with. Less critical code gets less attention. Especially if tests or experience just shows that it works.
