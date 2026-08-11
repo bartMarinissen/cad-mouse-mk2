@@ -103,8 +103,8 @@ too, not just the file.
   undesigned; nothing is implemented.
 - **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
   documents the old per-axis-averaging motion heuristic this fork replaced.
-  The fix is to delete that section and point at `ARCHITECTURE.md`, not to
-  rewrite it — per `CLAUDE.md`, READMEs don't describe current code state.
+  The fix is to delete that section and point at `ARCHITECTURE.md`, which owns
+  the pipeline, rather than paraphrasing the solver there a second time.
 - **[`tare-and-calibration.md`](tare-and-calibration.md)** — `CalibratingState`'s
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.

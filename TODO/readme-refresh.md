@@ -17,18 +17,21 @@ thinking the old linear heuristic is still in effect.
 ## What to do
 
 This file used to ask for the "current implementation" section to be
-*rewritten* to match reality. **Don't do that.** Per `CLAUDE.md`, READMEs must
-not describe the current state of the code at all — a rewritten
-current-implementation section would be accurate for exactly as long as the
-solver stays put, and would then rot the same way this one did, in the same
-hard-to-notice place.
+*rewritten* to match reality — i.e. to swap the old pseudocode for a
+description of the solver. Don't do that. `ARCHITECTURE.md` owns how the
+pipeline works (see `CLAUDE.md`, "One owner per fact"), and a second
+paraphrase of it here would be accurate only until the solver next changes,
+then rot exactly the way this one did, in the same place nobody re-reads.
 
 Instead:
 
 - **Delete** the sensor-averaging pseudocode and the "current implementation"
-  framing outright. Don't replace it with a description of the solver.
-- Point at `ARCHITECTURE.md` for how motion processing works, and
-  `design documentation/Math.md` for why.
+  framing outright.
+- Replace it with a pointer, not a paraphrase: a sentence naming what the
+  motion pipeline is ("a Gauss-Newton pose solve against a magnetic forward
+  model") and sending the reader to `ARCHITECTURE.md` for how and
+  `design documentation/Math.md` for why. That much won't rot — it's the
+  fork's entire identity — but don't restate the stage-by-stage chain.
 - **Keep** the tuning content, which is what a README in `firmware/` should be
   for: which knobs exist in `Config.h`, what the axis conventions are, what
   each gain/dead-zone/smoothing constant affects. That part is still accurate

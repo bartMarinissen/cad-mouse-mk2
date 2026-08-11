@@ -20,35 +20,35 @@ reading the source.
 4. **`TODO/`** — open work. `TODO/README.md` has the conventions and a
    per-file index; read it before adding or resolving a TODO.
 
-## READMEs must not describe the current state of the code
+## One owner per fact
 
-A README says what a thing is *for*, how to run it, and what you need to know
-before touching it. It does **not** say what the code currently does, how fast
-it currently is, how many parameters it currently fits, or what currently
-passes. Those claims rot, and a README is the worst possible place to put
-them: it's the most-read and least-reviewed file in any directory, so nobody
-notices when it stops being true, and everyone believes it.
+Every fact has one authoritative home, and everywhere else points at it
+instead of restating it. `magnet_model_table.h` owns the interpolation grid's
+bounds; `CalibrationStorage.h` owns the stored-blob layout; `ARCHITECTURE.md`
+owns how the pipeline fits together; `TODO/` owns what is and isn't done. A
+second copy isn't redundancy, it's a future contradiction — and that is this
+repo's dominant failure mode, not a hypothetical one.
 
-Current state belongs in `ARCHITECTURE.md`, which exists to be re-derived from
-the code, and in `TODO/`, which is explicitly about work in flight.
-`TODO/README.md` is an index of open work, so saying what is and isn't
-implemented is its entire job — this rule does not apply to it.
+Prefer "the grid bounds live in `magnet_model_table.h`" over quoting them.
 
-So: no benchmark numbers, no residuals, no "N tests pass", no "this is
-implemented / not implemented yet", no restating a struct's layout or a
-constant's value. Point at the header or the source instead. Prefer "the grid
-bounds live in `magnet_model_table.h`" over quoting the bounds.
+**READMEs are where this goes wrong most, so hold them to it hardest.** A
+README is read casually and reviewed rarely, and it is almost never the owner
+of a code fact — so benchmark numbers, fitted residuals, "N tests pass", and
+restated constants or struct layouts don't belong in one. What does: what the
+thing is for, how to run it, and what you need to know before touching it. A
+sentence of orientation that will outlive the next refactor is fine ("motion
+is a Gauss-Newton pose solve — see `ARCHITECTURE.md`"); a paragraph
+paraphrasing the current implementation is not.
 
-Two known exceptions:
+Two READMEs worth knowing about, neither an exception to the above:
 
-- **The root `README.md` is the maintainer's personal file** — it has a
-  "Current state of the project" section by design. Not yours to edit or to
-  bring into line with this rule. See below.
-- **`magnet_field_model/README.md` currently violates this heavily** — it
-  carries parameter counts, fitted residuals, and measured cross-run spreads,
-  i.e. it is doing `ARCHITECTURE.md`'s job for the Python side. Left alone
-  rather than gutted, because deciding where that content should live is a
-  real call, not a cleanup. Don't add more of it; don't cite it as current.
+- **`TODO/README.md` does own implementation status.** Being an index of open
+  work is its whole job, so it states plainly what's done and what isn't.
+- **`magnet_field_model/README.md` carries parameter counts, fitted residuals
+  and cross-run spreads that nothing else owns.** That makes it misplaced
+  `ARCHITECTURE.md` content rather than a duplicate, which is why it's been
+  left alone — deciding where it should live is a real call, not a cleanup.
+  Don't add more of it, and don't cite it as current.
 
 ## Docs that will actively mislead you
 
