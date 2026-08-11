@@ -68,9 +68,11 @@ too, not just the file.
   quantified but not modelled in firmware; a Python-side fitting workaround
   avoids the pose-residual cost at the price of physically meaningful fitted
   parameters. A cheap dipole-correction fix is proposed, not implemented.
-- **[`multicore.md`](multicore.md)** — The RP2040's second core is entirely
-  unused; sensor reads, the solve, HID, and telemetry all serialize on core0.
-  No design work has started beyond identifying the gap.
+- **[`multicore.md`](multicore.md)** — Decided: core1 runs the pose solve
+  continuously; sensor readings and pose results cross the core boundary via
+  two double-buffered, counter-gated channels. Torn-read safety, telemetry
+  sizing, and the interaction with tare/calibration are still open;
+  nothing is implemented yet.
 - **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
   documents the old per-axis-averaging motion heuristic this fork replaced
   with the Gauss-Newton solver. Needs its "current implementation" section
