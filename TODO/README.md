@@ -29,6 +29,12 @@ description lives. Don't cite `resolved/` as a statement about the tree.
 - Include a "likely fix shape" if you have one, but it doesn't need to be a
   committed plan — just enough direction that whoever picks it up isn't
   starting from zero.
+- **Head that section "Design", not "Decision".** A design is what you intend
+  to build; a decision is a question that is closed, and calling a sketch a
+  decision hides the fact that it can still change. Reserve "Decided" for
+  parts that are actually settled — usually meaning implemented, as with
+  `calibration-mode-entry.md`'s entry gesture. A file with load-bearing open
+  questions has a design, not a decision.
 - Update a file in place as understanding deepens, rather than leaving it
   stale. `Performance.md` is the model here: each optimization pass appended
   its own section and amended the earlier ones it invalidated, so the file
@@ -90,11 +96,11 @@ too, not just the file.
   quantified but not modelled in firmware; a Python-side fitting workaround
   avoids the pose-residual cost at the price of physically meaningful fitted
   parameters. A cheap dipole-correction fix is proposed, not implemented.
-- **[`multicore.md`](multicore.md)** — Decided: core1 runs the pose solve
-  continuously; sensor readings and pose results cross the core boundary via
-  two double-buffered channels, each gated by a spinlocked counter held
-  across the copy. Telemetry's channel shape and the interaction with
-  tare/calibration are still open; nothing is implemented yet.
+- **[`multicore.md`](multicore.md)** — Proposed design: core1 runs the pose
+  solve continuously, with sensor readings and poses crossing the core
+  boundary as double buffers gated by a spinlocked counter held across the
+  copy. Telemetry is a third channel that doesn't fit that shape and is
+  undesigned; nothing is implemented.
 - **[`readme-refresh.md`](readme-refresh.md)** — `firmware/README.md` still
   documents the old per-axis-averaging motion heuristic this fork replaced
   with the Gauss-Newton solver. Needs its "current implementation" section

@@ -20,7 +20,10 @@ the one core. Moving the solve off core0 decouples the two: the sensor loop
 can cycle as fast as I2C allows, and the solver can run flat out instead of
 once per tick.
 
-## Decision
+## Design
+
+Nothing here is implemented or settled — this is the intended shape, and the
+open questions below are load-bearing rather than cosmetic.
 
 Core1 runs `solve_knob_pose()` continuously, back-to-back, independent of
 core0's tick rate — not once per `IdleState::update()` call the way it runs
@@ -28,8 +31,10 @@ today. Core0's superloop keeps its current shape (state machine, HID,
 serial, LED) but owns sensor I/O as a tight read-and-publish loop; the solve
 itself moves entirely to core1.
 
-Two channels cross the core boundary, both the same shape: a double buffer
-plus one lock-guarded monotonic counter.
+**Three kinds of data cross the core boundary.** Two of them have the shape
+below — a double buffer plus one lock-guarded monotonic counter. The third,
+telemetry, does not fit that shape and is the main undesigned piece; see the
+open questions.
 
 - **Sensor channel (core0 → core1).** Core0 writes each completed sensor
   reading into whichever of two buffers isn't the currently-published one,
@@ -37,6 +42,9 @@ plus one lock-guarded monotonic counter.
   parity says which buffer holds the latest complete reading.
 - **Pose channel (core1 → core0).** Same shape, reversed: core1 writes the
   solved pose into the off-buffer, then locks/increments/unlocks `L_pose`.
+- **Telemetry (core1 → core0).** Needed, but neither the same size nor the
+  same rate as a pose, so it can't just be a third instance of the above.
+  Undesigned.
 
 **The reader holds the lock across its copy**, not just across reading the
 counter: lock, read the counter, copy the buffer its parity selects, unlock.
@@ -53,14 +61,15 @@ about relative speeds is needed: correctness comes from the lock interval,
 not from the writer being too slow to lap the reader.
 
 A single RP2040 hardware spinlock per channel (`hardware/sync.h`:
-`spin_lock_claim`/`spin_lock_blocking`/`spin_unlock`) is the right primitive —
-no allocation, and the critical section is a counter read plus a handful of
-floats. Note `spin_lock_blocking()` disables interrupts on the holding core
-for the duration, so the copy staying small is load-bearing; a pose or a
-9-float sensor frame is comfortably inside that budget, a `Statistics` struct
-would not be (see telemetry below).
+`spin_lock_claim`/`spin_lock_blocking`/`spin_unlock`) looks like the right
+primitive — no allocation, and the critical section is a counter read plus a
+handful of floats. Note `spin_lock_blocking()` disables interrupts on the
+holding core for the duration, so the copy staying small is load-bearing; a
+pose or a 9-float sensor frame is comfortably inside that budget, a
+`Statistics` struct would not be — which is most of why telemetry needs its
+own answer.
 
-**No separate "solve done" notification is needed.** `L_pose` already carries
+**No separate "solve done" notification is planned.** `L_pose` already carries
 it: core0 remembers the value it last consumed and compares after each locked
 read. That is freshness detection for free, and it matters beyond saving
 work — `Config::SMOOTH_TAU_S`'s low-pass is dt-based and assumes each tick's
@@ -75,14 +84,15 @@ something threaded across the core boundary every tick.
 
 ## Open questions
 
-- **Telemetry is a separate, harder version of the same problem.** It cannot
-  ride the pose channel as-is: `Statistics` (`MotionController.h`) is far
-  bigger than a pose, and the spinlock-held copy above only stays cheap while
-  it's small. `TelemetryController` also only wants it every 20 ticks, not
-  every solve, so the two have different natural rates as well as different
-  sizes. Worth deciding whether it gets its own lower-frequency channel
-  (possibly with a different discipline, since a torn/stale telemetry frame is
-  cosmetic where a torn pose is not) and which fields actually need to cross.
+- **What shape the telemetry channel takes.** The third channel above, and
+  the one with no answer yet. It can't be another instance of the
+  double-buffer pattern as-is: `Statistics` (`MotionController.h`) is far
+  bigger than a pose, and the spinlock-held copy only stays cheap while it's
+  small. `TelemetryController` also only wants it every 20 ticks, not every
+  solve, so it differs in rate as well as size. In its favour, a torn or
+  stale telemetry frame is cosmetic where a torn pose is not, so it can
+  probably take a cheaper discipline than the other two rather than a bigger
+  one. Also open: which fields actually need to cross at all.
 - **`Statistics::last_jacobian` should probably not exist by then.** It is a
   9x6 float matrix (216 bytes) that `MotionController::compute()` still hands
   to `solve_knob_pose()` as an out-param on every solve
@@ -116,7 +126,7 @@ something threaded across the core boundary every tick.
 
 ## Not started
 
-No implementation exists yet. This is a design sketch — buffer struct layout,
-`hardware/sync.h` availability under arduino-pico, and where
-`setup1()`/`loop1()` and the two channels get declared in
-`main.cpp`/`Controllers.h` are all still open.
+No implementation exists yet. Beyond the open questions above: buffer struct
+layout, `hardware/sync.h` availability under arduino-pico, and where
+`setup1()`/`loop1()` and the channels get declared in
+`main.cpp`/`Controllers.h` are all still undecided.
