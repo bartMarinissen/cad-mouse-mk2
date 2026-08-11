@@ -112,14 +112,9 @@ output.
 - **Do the answer-independent work first.** Everything that doesn't depend on
   the decision should already be finished and committed before you ask, so
   the wait blocks as little as possible.
-- **Reserve blocking on an answer for cases where proceeding would be unsafe
-  or would waste the work if the guess is wrong.** Otherwise pick the sensible
-  default, state the assumption plainly, and continue — the maintainer can
-  redirect. Flagging something as "needs attention" and moving on beats
-  stopping.
-- If the maintainer replies about something else entirely, treat the unanswered
-  question as deprioritized, not as still owed an answer. Don't reopen it
-  unprompted.
+- **A long wait is fine. Guessing to avoid one is not.** If the answer
+  genuinely determines what to build, wait for it however long that takes —
+  do not substitute an assumption to keep moving.
 
 ## Commits
 
