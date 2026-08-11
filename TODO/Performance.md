@@ -26,16 +26,17 @@ XIP wait-states on this hot path.
   instead of recomputing the full rotated Jacobian every time): plausible
   lever, parked for later, not investigated yet.
 
-## Blocking prerequisite: the Statistics TODO
+## Blocking prerequisite: the Statistics TODO — RESOLVED
 
 Before adding any new solver telemetry (iteration count, per-phase timing),
-we need to resolve the existing TODO at `solve_pose.cpp:21`: `solve_knob_pose`
-always allocates local `residual`/`jacobian` and copies them into
+this doc called out an existing TODO at `solve_pose.cpp:21`: `solve_knob_pose`
+always allocated local `residual`/`jacobian` and copied them into
 `*residual_out`/`*Jacobian_out` at the end, rather than writing into those
-output pointers directly when they're non-null. `MotionController::read_pose`
-always passes them (`Config::statistics` is `true`), so this copy is live on
-every call today. Fix this first so new instrumentation doesn't get bolted
-onto a code path that's about to be restructured.
+output pointers directly when non-null. `MotionController::read_pose` always
+passes them (`Config::statistics` is `true`), so that copy was live on every
+call. Fixed as a side effect of the "third optimization pass" below
+(`solve_knob_pose` now writes into the caller's buffers directly), so new
+solver telemetry is no longer blocked on it — see "Open next steps".
 
 ## Method: disassemble the real binary, don't guess
 
@@ -172,8 +173,8 @@ The `BicubicField::evaluate` row in the tally above (260 total, 20 `memcpy`,
 exactly an instance of the "Eigen isn't inlining here" problem this doc
 already identified, plus per-fetch bounds-checking branches on top. Rewrote
 it in three commits (`79601e0`, `6a0495e`, `2d4ab99` on
-`claude/bicubic-field-rp2040-optimize-tmcqof`, based on `experimental`, not
-yet merged):
+`claude/bicubic-field-rp2040-optimize-tmcqof`, based on `experimental`; since
+merged into `experimental` — see "Open next steps" below):
 
 1. **Restrict the stencil** to `i0 ∈ [1, NR-3]`, `j0 ∈ [1, NZ-3]` so the
    4-point stencil always lands inside the real grid — deletes
@@ -424,9 +425,9 @@ performance one. Probably belongs with `TODO/tare-and-calibration.md`.
 
 ## Open next steps (not yet acted on)
 
-- Fix the Statistics TODO, then add iteration-count + per-phase (`micros()`)
-  instrumentation to get real convergence and timing data instead of static
-  worst-case counts.
+- Add iteration-count + per-phase (`micros()`) instrumentation to get real
+  convergence and timing data instead of static worst-case counts — no longer
+  blocked on the Statistics TODO, which is resolved (see above).
 - ~~Investigate whether Eigen's small fixed-size helpers can be coaxed into
   inlining even further~~ — done for `BicubicField::evaluate`, see above:
   no, inlining directives alone don't reach it, manual algebraic
@@ -436,10 +437,14 @@ performance one. Probably belongs with `TODO/tare-and-calibration.md`.
   of their work already ends up in flash-resident Eigen internals anyway.
 - Quasi-Newton Jacobian reuse (parked above) as a way to cut the iteration
   count's multiplier on the expensive Jacobian-assembly path specifically.
-- Re-run the operation tally above against the current binary once the
-  Statistics TODO + iteration telemetry land, to get real (not worst-case)
-  numbers now that the gain multiplies are gone, `BicubicField::evaluate` has
-  been rewritten, and inlining looks healthier.
-- Merge `claude/bicubic-field-rp2040-optimize-tmcqof` into `experimental`,
-  rebuild the full binary, and get a real wall-clock number for the
-  `BicubicField::evaluate` rewrite the way the first optimization pass did.
+- Re-run the operation tally above against the current binary once iteration
+  telemetry lands, to get real (not worst-case) numbers now that the gain
+  multiplies are gone, `BicubicField::evaluate` has been rewritten, and
+  inlining looks healthier.
+- `claude/bicubic-field-rp2040-optimize-tmcqof` is merged into `experimental`
+  and its code is what the third pass's own baseline was measured against
+  (instruction-count/flash/RAM, not wall-clock). What's still missing is a
+  real on-device wall-clock/Hz number for the combined
+  `BicubicField::evaluate` rewrite + third-pass changes together, the way the
+  first optimization pass measured 134Hz/80Hz — the `micros()` instrumentation
+  from the third pass is what that measurement would read.

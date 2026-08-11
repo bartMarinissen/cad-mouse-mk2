@@ -25,7 +25,7 @@ The physical hardware relies on three **6x6mm cylindrical neodymium magnets** (e
 **Axis Orientation and Coordinate Frames**
 The geometry of the mouse relies on a strict global and local coordinate system mapping:
 
-* **The Origin:** The fixed global origin `(0,0,0)` is located directly on the PCB, exactly at the center of the equilateral triangle formed by the three Hall-effect sensors. The global Z-axis points straight up toward the physical knob. The Y axis is side to side (through the knobs)
+* **The Origin:** The fixed global origin `(0,0,0)` is located directly on the PCB, exactly at the center of the equilateral triangle formed by the three Hall-effect sensors. The global Z-axis points straight up toward the physical knob. The X axis is side to side (through the buttons); the Y axis is front to back (through the USB-C port) — see `firmware/include/Config.h`.
 
 **The PlatformIO Usage**
 The firmware is written in C++ and uses **PlatformIO** (via the Earle Philhower Arduino core) as its build system rather than the standard Arduino IDE. PlatformIO is strictly necessary in this context because of the heavy mathematical load of the pose solver.
@@ -38,10 +38,4 @@ The primary motivation for our design intervention was a fundamental flaw in the
 
 **What We Are Changing**
 We are keeping the base project's structural skeleton—the hardware initialization, the sequential superloop flow, the LED state machine, and the asynchronous USB HID reporting stack. What we are completely gutting and replacing is the core motion control logic. We are stripping out the flawed location-mapping math to make way for a mathematically rigorous forward model and solver that can accurately infer the true physical pose of the knob based on the complex magnetic fields intersecting the sensors.
-
-**Axis Orientation and Coordinate Frames**
-The geometry of the mouse relies on a strict global and local coordinate system mapping:
-
-* The Origin: The fixed global origin (0,0,0) is located directly on the PCB, exactly at the center of the equilateral triangle formed by the three Hall-effect sensors. The global Z-axis points straight up toward the physical knob.
- 
 

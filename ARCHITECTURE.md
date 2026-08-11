@@ -95,7 +95,7 @@ through these accessors directly.
 | Controller | File | Responsibility |
 |---|---|---|
 | `InputController` | `controllers/InputController.*` | Debounces 2 buttons via AceButton; exposes `buttonBits()`, `takeActivity()` (edge-triggered, consumed on read), `takeCalibrationRequest()` (both buttons held 3s) |
-| `LEDController` | `controllers/LEDController.*` | NeoPixel ring: solid color / spinner animation / off |
+| `LEDController` | `controllers/LEDController.*` | NeoPixel ring: owns one `std::variant`-held `AnimationBase` slot (`animations/`) plus power management; callers `set()` a `SolidAnimation`/`SpinnerAnimation`/`OffAnimation`/`PoseColorAnimation` and drive it with `update()` each tick |
 | `SensorController` | `controllers/SensorController.*` | Owns the 3 TLx493D sensor objects, power-sequences them onto distinct I2C addresses at boot, `readRaw()` → 9 floats, runs the boot baseline calibration |
 | `MotionController` | `controllers/MotionController.*` | The pose pipeline: raw field → solved pose → filtered/mapped HID axes (detail below) |
 | `HIDController` | `controllers/HIDController.*` | Owns the USB HID descriptor + report state, dedupes unchanged reports before sending |
@@ -200,7 +200,7 @@ redo a step, so there is nothing for a pause to do there except cost the user
 an extra button press.
 
 **Status: capture, fit, and delivery all work.** The
-Python side fits 54 shared parameters (per-magnet position, tilt and strength;
+Python side fits 45 shared parameters (per-magnet position, tilt and strength;
 per-sensor gain matrix and DC offset) jointly with one free 6-DOF pose per
 captured frame, and takes the field residual from ~1.8% at nominal geometry
 down to ~0.33%, in about a second. See
