@@ -85,7 +85,7 @@ static void check_shared_jacobian_at(
     Vec3 B0;
     Eigen::Matrix<float, 3, 6> J_pose;
     SharedJacobianBlock J_analytic;
-    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, state0, t, R, B0, J_pose, J_analytic);
+    evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, state0), t, R, B0, J_pose, J_analytic);
 
     char msg[256];
 
@@ -96,8 +96,8 @@ static void check_shared_jacobian_at(
         MagnetState sp{magnet_pos + dm, magnet_rot, strength};
         MagnetState sm{magnet_pos - dm, magnet_rot, strength};
         Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
-        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
-        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sp), t, R, Bp, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sm), t, R, Bm, Jd, Jsd);
         J_pos_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_LINEAR);
     }
     float e_pos = max_rel_error_mat<3, 3>(J_analytic.d_magnet_pos, J_pos_numeric);
@@ -111,8 +111,8 @@ static void check_shared_jacobian_at(
         MagnetState sp{magnet_pos, exp_so3(dw) * magnet_rot, strength};
         MagnetState sm{magnet_pos, exp_so3(-dw) * magnet_rot, strength};
         Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
-        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
-        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sp), t, R, Bp, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sm), t, R, Bm, Jd, Jsd);
         J_tilt_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_ANGULAR);
     }
     // Full 3x3, not just columns 0-1: the raw Jacobian is a real 3x3
@@ -150,7 +150,7 @@ static void check_shared_jacobian_at(
         Mat3 spin = exp_so3(theta * own_axis);
         MagnetState spun_state{magnet_pos, spin * magnet_rot, strength};
         Vec3 B_spun; Eigen::Matrix<float, 3, 6> spin_Jd; SharedJacobianBlock spin_Jsd;
-        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, spun_state, t, R, B_spun, spin_Jd, spin_Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, spun_state), t, R, B_spun, spin_Jd, spin_Jsd);
         float e = (B_spun - B0).norm() / field_scale;
         snprintf(msg, sizeof(msg),
                  "[%s] spinning the magnet %.2f rad about its OWN axis changed the field by rel %.2e (should be ~machine eps)",
@@ -163,8 +163,8 @@ static void check_shared_jacobian_at(
     MagnetState sp{magnet_pos, magnet_rot, strength + ds};
     MagnetState sm{magnet_pos, magnet_rot, strength - ds};
     Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
-    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
-    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
+    evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sp), t, R, Bp, Jd, Jsd);
+    evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sm), t, R, Bm, Jd, Jsd);
     Vec3 d_strength_numeric = (Bp - Bm) / (2.0f * ds);
     float e_strength = max_rel_error_mat<3, 1>(J_analytic.d_strength, d_strength_numeric);
     snprintf(msg, sizeof(msg), "[%s] d_strength mismatch, rel err %.5f", label, e_strength);
@@ -200,6 +200,51 @@ void test_shared_jacobian_grid(void) {
 }
 
 // ======================================================================
+// Build once, reuse across frames: the actual point of splitting
+// build_magnet_model() (once per magnet per iteration) from
+// evaluate_bundle_jacobian() (once per sensor per frame). Not in doubt
+// mathematically -- both paths run the identical MagnetModel through the
+// identical Sensor::evaluate() -- but worth having as a live check rather
+// than an assertion in a comment, and as documentation of the intended
+// usage pattern a solver's per-iteration loop should follow.
+// ======================================================================
+void test_magnet_model_reuse_across_frames(void) {
+    MagnetState state{MAGNET_LOCAL[0], exp_so3(Vec3(0.03f, -0.02f, 0.0f)),
+                       0.94f * BICUBIC_FIELD_REFERENCE_MT};
+    Sensor sensor(SENSOR_POS[0]);
+
+    // Built ONCE, as the outer per-iteration loop would.
+    MagnetModel magnet_reused = build_magnet_model(CALCULATED_BICUBIC_FIELD, state);
+
+    struct FramePose { Vec3 t; Vec3 rot; const char* name; };
+    FramePose frames[] = {
+        { BASE_T, Vec3(0, 0, 0), "frame 0 (rest)" },
+        { Vec3(3.5f, -2.0f, 4.3f), Vec3(0.08f, -0.05f, 0.02f), "frame 1" },
+        { Vec3(-1.0f, 1.2f, 8.0f), Vec3(-0.04f, 0.07f, -0.06f), "frame 2" },
+    };
+
+    char msg[192];
+    for (const auto& f : frames) {
+        Mat3 R = exp_so3(f.rot);
+
+        Vec3 B_reused; Eigen::Matrix<float, 3, 6> Jp_reused; SharedJacobianBlock Js_reused;
+        evaluate_bundle_jacobian(sensor, magnet_reused, f.t, R, B_reused, Jp_reused, Js_reused);
+
+        // As the inner per-frame loop should NOT do: rebuild from the same
+        // state for this one frame, as a from-scratch reference.
+        MagnetModel magnet_fresh = build_magnet_model(CALCULATED_BICUBIC_FIELD, state);
+        Vec3 B_fresh; Eigen::Matrix<float, 3, 6> Jp_fresh; SharedJacobianBlock Js_fresh;
+        evaluate_bundle_jacobian(sensor, magnet_fresh, f.t, R, B_fresh, Jp_fresh, Js_fresh);
+
+        float e_B = (B_reused - B_fresh).norm();
+        float e_pos = (Js_reused.d_magnet_pos - Js_fresh.d_magnet_pos).norm();
+        snprintf(msg, sizeof(msg), "[%s] reused vs freshly-built magnet diverged: |dB|=%.2e |d(d_magnet_pos)|=%.2e",
+                 f.name, e_B, e_pos);
+        TEST_ASSERT_TRUE_MESSAGE(e_B == 0.0f && e_pos == 0.0f, msg);
+    }
+}
+
+// ======================================================================
 // Tier 2: end-to-end check of the gauge-projected free-parameter column,
 // against perturbing the real physical shape parameter (all 3 magnets move
 // together via MAGNET_POS_BASIS's column, exactly as the fit would).
@@ -222,7 +267,7 @@ void test_magnet_pos_gauge_projection(void) {
         Eigen::Matrix<float, 9, 1> J_analytic_col;
         for (int i = 0; i < 3; ++i) {
             Vec3 B0; Eigen::Matrix<float, 3, 6> Jp; SharedJacobianBlock Js;
-            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, states0[i], t, R, B0, Jp, Js);
+            evaluate_bundle_jacobian(sensors[i], build_magnet_model(CALCULATED_BICUBIC_FIELD, states0[i]), t, R, B0, Jp, Js);
             Mat3 proj = project_magnet_pos(Js.d_magnet_pos, i);
             J_analytic_col.block<3, 1>(3 * i, 0) = proj.col(k);
         }
@@ -238,8 +283,8 @@ void test_magnet_pos_gauge_projection(void) {
             MagnetState sp{states0[i].pos + FD_STEP_LINEAR * dm, states0[i].rotation, states0[i].strength_mT};
             MagnetState sm{states0[i].pos - FD_STEP_LINEAR * dm, states0[i].rotation, states0[i].strength_mT};
             Vec3 bp, bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
-            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, sp, t, R, bp, Jd, Jsd);
-            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, sm, t, R, bm, Jd, Jsd);
+            evaluate_bundle_jacobian(sensors[i], build_magnet_model(CALCULATED_BICUBIC_FIELD, sp), t, R, bp, Jd, Jsd);
+            evaluate_bundle_jacobian(sensors[i], build_magnet_model(CALCULATED_BICUBIC_FIELD, sm), t, R, bm, Jd, Jsd);
             B_plus.block<3, 1>(3 * i, 0) = bp;
             B_minus.block<3, 1>(3 * i, 0) = bm;
         }
@@ -262,6 +307,7 @@ void setup() {
     delay(2000);
     UNITY_BEGIN();
     RUN_TEST(test_shared_jacobian_grid);
+    RUN_TEST(test_magnet_model_reuse_across_frames);
     RUN_TEST(test_magnet_pos_gauge_projection);
     UNITY_END();
 }

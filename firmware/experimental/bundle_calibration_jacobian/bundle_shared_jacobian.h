@@ -92,15 +92,28 @@ void evaluate_shared_jacobian(
 // is constant for the lifetime of the controllers" a compiler-enforced fact
 // rather than a convention, for the RUNTIME/shipped calibration. A solver
 // actively fitting these parameters needs a separate, genuinely mutable
-// representation of "the trial value right now" -- that's MagnetState below
-// -- and builds a fresh (still-immutable) MagnetModel from it on every
-// evaluation. That is not fighting the const design, it's what the design
-// is asking for: during a fit there is no single "the" MagnetModel yet, only
-// a sequence of trial ones, and each one should still be immutable once
-// built. The reconstruction itself is not the expensive part: MagnetModel's
-// constructor is one 3x3-matrix/vector product (magnet_offset_local),
-// dwarfed by the ~260-op BicubicField lookup Sensor::evaluate performs on
-// every call regardless, trial or not.
+// representation of "the trial value right now" -- that's MagnetState below.
+//
+// IMPORTANT: MagnetState is per-MAGNET, per-SOLVER-ITERATION -- there are 3
+// of them, shared across every frame. A frame's pose (t, R) is the thing
+// that's per-FRAME (there are ~60 of those). Build each trial MagnetModel
+// ONCE per iteration from build_magnet_model() below, then reuse those same
+// 3 objects across all ~60 frames' worth of Sensor::evaluate calls -- do NOT
+// rebuild one per (frame, sensor) pair. This isn't a micro-optimization:
+// measured (host x86 -O2, static instruction count, same method as
+// TODO/Performance.md's tallies), MagnetModel's constructor is 155
+// instructions against 523 for one full Sensor::evaluate chain
+// (MagnetModel::evaluate 111 + BicubicField::evaluate 412) -- about 30% of
+// one evaluation's cost, not the "dwarfed, doesn't matter" this comment used
+// to claim without having measured it. Reconstructing per-frame instead of
+// per-iteration means paying that 30% up to 60x more often than necessary --
+// roughly 22% of an entire iteration's compute wasted on rebuilding the same
+// 3 magnets over and over. std::move does not help here: there is no heap
+// allocation anywhere in this chain (EIGEN_NO_MALLOC, fixed-size types only)
+// for a move to avoid copying -- the 155 instructions are Eigen's generic-
+// assignment-kernel overhead computing R^T @ m, a computation, not a
+// transfer, and moving a Vec3/Mat3 compiles to the same copy either way.
+// The only real lever is not doing the computation 60x more than needed.
 //
 // sensor_offset and gain have no equivalent struct here because they never
 // reach this deep: neither MagnetModel nor Sensor holds them at all -- gain
@@ -117,15 +130,25 @@ struct MagnetState {
     float strength_mT;    // magnet_strength_mT
 };
 
-// The actual entry point a solver calls: builds the trial MagnetModel from
-// MagnetState and calls Sensor::evaluate() itself -- not left as something
-// the caller must remember to do separately and thread the results in by
-// hand, which is what the (still available, now internal-use) function
-// above required. One call in (a sensor, a field table, a trial magnet
-// state, a trial pose), everything a solver needs for one (sensor, magnet)
-// pair at that trial point, out.
+// Builds the trial (immutable) MagnetModel for one magnet from its current
+// mutable state. Call once per magnet per solver iteration (3 times), in
+// the OUTER loop -- not once per frame. See the comment above MagnetState
+// for the measured cost of getting this wrong.
+inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetState& state) {
+    return MagnetModel(field, state.pos, state.rotation, state.strength_mT);
+}
+
+// The per-(sensor, frame) entry point: takes an ALREADY-BUILT MagnetModel
+// (from build_magnet_model, called once per magnet per iteration, not here)
+// and calls Sensor::evaluate() itself -- not left as something the caller
+// must remember to do separately and thread the results in by hand, which
+// is what evaluate_shared_jacobian above requires. Call this once per
+// (sensor, frame) pair -- 3 sensors x ~60 frames per iteration -- passing
+// the SAME 3 MagnetModel objects (built once, outside the frame loop) to
+// every frame, since the magnets don't change within one iteration, only
+// the poses do.
 void evaluate_bundle_jacobian(
-    const Sensor& sensor, const BicubicField& field, const MagnetState& magnet_state,
+    const Sensor& sensor, const MagnetModel& magnet,
     const Vec3& t, const Mat3& R,
     Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
 );

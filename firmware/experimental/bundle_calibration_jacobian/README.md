@@ -22,19 +22,26 @@ step, not a side effect of this commit.
   (full 3x3, all raw columns), `d_strength`. Computed from
   `Sensor::evaluate()`'s own output (`B_field_global`, `J_pose`) rather than
   a second pass through `MagnetModel`/`BicubicField`.
-  The actual entry point is `evaluate_bundle_jacobian(sensor, field,
-  MagnetState, t, R, ...)` — it calls `Sensor::evaluate()` itself (an
-  earlier version of this prototype left that call to the caller, which
-  meant it never appeared anywhere except the test). `MagnetState` is the
-  answer to "how do calibration parameters, which are `const` members of
-  `MagnetModel`, actually get updated across solver iterations": a small
-  mutable struct the solver perturbs each step, from which a fresh
-  (still-immutable) `MagnetModel` is built on every evaluation. See the
-  header comment above `MagnetState` for why that reconstruction is cheap
-  and doesn't fight `MagnetModel`'s const design rather than working around
-  it. `evaluate_shared_jacobian()` (the lower-level function that takes
-  already-computed `B_field_global`/`J_pose`) still exists underneath it,
-  now clearly as an implementation detail rather than the intended call site.
+  The entry point is split in two, matching what actually varies at what
+  rate: `MagnetState` is the answer to "how do calibration parameters,
+  which are `const` members of `MagnetModel`, actually get updated across
+  solver iterations" — a small mutable struct the solver perturbs once per
+  magnet per iteration. `build_magnet_model(field, state)` builds the trial
+  (still-immutable) `MagnetModel` from it — call this 3 times per iteration,
+  in the OUTER loop. `evaluate_bundle_jacobian(sensor, magnet, t, R, ...)`
+  calls `Sensor::evaluate()` itself and takes an *already-built* `MagnetModel`
+  — call this once per (sensor, frame), reusing the same 3 built objects
+  across all ~60 frames, not rebuilding one per frame. Measured (host x86,
+  static instruction count): the constructor is ~30% of one full field
+  evaluation's cost, not negligible — rebuilding per-frame instead of
+  per-iteration would waste roughly 22% of an iteration's compute
+  reconstructing the same 3 magnets up to 60 times over. `std::move` doesn't
+  help here: there's no heap allocation anywhere in this chain
+  (`EIGEN_NO_MALLOC`) for a move to avoid copying — see the header comment
+  above `MagnetState` for the full reasoning. `evaluate_shared_jacobian()`
+  (the lower-level function that takes already-computed `B_field_global`/
+  `J_pose`) still exists underneath both, now clearly an implementation
+  detail rather than an intended call site.
 - `bundle_linear_jacobian.h` — the other five parameter groups
   (`sensor_offset`, `gain_aniso`/`sym`/`rot`, magnet-strength mean/diff
   split): linear post-multiplies of the prediction, no chain-rule content,
@@ -67,6 +74,7 @@ step, not a side effect of this commit.
 | `d_strength` vs FD | 0.004% | 1% |
 | magnet's own-axis spin invariance (exact, not FD) | ~2e-6 | 1e-4 |
 | gauge-projected column vs perturbing the real shape parameter | passes | 1% |
+| reused vs freshly-rebuilt `MagnetModel`, across 3 frames | bit-exact | exact |
 
 The "own-axis spin does nothing" property was originally checked by finite
 difference and failed at a 1e-3 bar — not because the code was wrong (the
@@ -99,4 +107,9 @@ float32 machine precision instead.
   vector-from-nominal. Not decided yet — the solver doesn't exist.
 - **ARM build verification.** Everything here has only been host-compiled
   (`g++`, real Eigen 3.4 via apt, `-DEIGEN_NO_MALLOC`). Not yet run through
-  `pio run` against the actual `earlephilhower`/RP2040 toolchain.
+  `pio run` against the actual `earlephilhower`/RP2040 toolchain. This
+  includes the ~30%/~22% construction-cost numbers above: measured as static
+  host x86 instruction counts (same method `TODO/Performance.md` uses
+  elsewhere), not dynamic ARM soft-float counts — directionally real, not a
+  substitute for measuring on the actual target once there's a full solver
+  to measure.
