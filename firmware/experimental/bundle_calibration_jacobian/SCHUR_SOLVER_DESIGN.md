@@ -1,0 +1,154 @@
+# Schur-complement solver: the shape, not the solver
+
+Scope note up front: this is about the *data structure* the bundle-calibration
+solver would work on — what has to exist in memory, when, and how big it is —
+not the LM/trust-region outer loop (damping, step acceptance, convergence),
+which is separate, later work.
+
+## The problem's shape
+
+Per `magnet_field_model/calibration/bundle_params.py`, the PC-side solve's
+unknown vector is `[x_shared (P), pose_0 (6), pose_1 (6), ..., pose_{N-1} (6)]`
+— P ≈ 45 shared calibration parameters, N ≈ 60 frames. The normal equations
+`H dx = rhs` this implies are **arrowhead-shaped**:
+
+```
+H = [ H_ss      H_sp0^T  H_sp1^T  ...  H_sp,N-1^T ]
+    [ H_sp0     H_pp0    0        ...  0          ]
+    [ H_sp1     0        H_pp1    ...  0          ]
+    [ ...                                          ]
+    [ H_sp,N-1  0        0        ...  H_pp,N-1   ]
+```
+
+`H_ss` (P×P) is dense — every frame contributes to it. Each `H_ppf` (6×6) is
+**that frame's own pose block only** — no cross-frame coupling, because
+perturbing frame f's pose cannot affect frame g's residual. Each `H_spf`
+(P×6) couples frame f's pose to the shared parameters. This block-diagonal
+pose structure is exactly what makes a direct (P+6N)×(P+6N) dense solve
+wasteful: at P=45, N=60, that's a 405×405 system, most of whose off-diagonal
+structure is exact zero by construction.
+
+## Schur elimination: exact, not approximate
+
+Eliminating each frame's pose block first (classic bundle-adjustment trick)
+gives an algebraically **exact** reduced P×P system — not an approximation:
+
+```
+H_reduced  = H_ss  - sum_f  H_spf @ H_ppf^-1 @ H_spf^T
+rhs_reduced = rhs_s - sum_f  H_spf @ H_ppf^-1 @ rhs_pf
+```
+
+Solve `H_reduced @ dx_shared = rhs_reduced` (one P×P solve), then recover
+each frame's own pose update by back-substitution:
+
+```
+dx_posef = H_ppf^-1 @ (rhs_pf - H_spf^T @ dx_shared)
+```
+
+Both steps only ever need one frame's `H_ppf`/`H_spf`/`rhs_pf` at a time — the
+whole point of the reduction. `firmware/experimental/bundle_calibration_jacobian/schur_normal_equations.h`
+implements exactly this, generically in P, and `test_schur_normal_equations.cpp`
+verifies it against a dense reference (assemble the *full* arrowhead system,
+solve it directly, check both paths agree) — this is checkable **exactly**,
+unlike the Jacobian derivation: Schur complement is a linear-algebra identity,
+so there's a ground-truth answer to compare against, not just "plausible".
+Measured (host build, real Eigen 3.4, `mt19937`-seeded random synthetic
+frames): both `dx_shared` and every frame's `dx_pose` match the dense
+reference to ~7-9e-7 relative error — float32 machine precision, not an
+approximation. (The first version of this test used a hand-rolled
+deterministic generator, `sin()` of a linear index combination, instead of a
+real PRNG — every matrix it produced was silently rank-deficient, since
+`sin(x + shift)` is always a linear combination of `sin(x)`/`cos(x)` and so
+spans only a 2-D subspace regardless of matrix size. That made the test fail
+at ~100% relative error on a correct implementation; fixed by switching to
+`std::mt19937`, and the test now explicitly checks each synthetic frame's
+`H_pp` is actually full rank before trusting the comparison, so this
+failure mode can't silently reappear.)
+
+Note what's *not* new here: `H_ppf` is a 6×6, and `H_ppf.ldlt().solve(...)` is
+the same fixed-size LDLT call `solve_pose.cpp` already does, at the same
+size, once per frame. The only new primitive is a P×P dense LDLT (bigger,
+but still fixed-size, no-malloc, one call per solver iteration, not per
+frame).
+
+## The actual question: store per-frame data across passes, or recompute it?
+
+The reduction above needs each frame's local system exactly once to fold
+into `H_reduced`/`rhs_reduced` (call this **pass 1**), and then needs it
+*again* to back-substitute that frame's pose update once `dx_shared` is known
+(**pass 2**, which can only happen after pass 1 has finished for every frame
+and the P×P system has been solved). Between those two passes, something has
+to give: either keep every frame's `H_spf`/`H_ppf`/`rhs_pf` in memory, or
+throw them away and rebuild them.
+
+**Storing per frame:** `H_spf` alone is P×6 = 45×6 = 270 floats = 1080 bytes;
+× 60 frames = **~65 KB**. That's a large fraction of this device's ~200 KB
+free RAM (the bicubic table and everything else already resident), for data
+that's only needed for a few microseconds during pass 2's back-substitution.
+
+**Recomputing in pass 2:** rebuild each frame's local system from scratch —
+call `evaluate_bundle_jacobian` for that frame's 3 sensors again, using the
+frame's current pose estimate (which persists across LM iterations regardless
+— that's ~60×6 = 360 floats = 1.4 KB, trivial, and not new: *some* per-frame
+pose state has to persist across iterations no matter which design is
+chosen). Cost: the forward-model evaluation — the actual expensive part —
+runs twice per iteration instead of once.
+
+**Recommendation: recompute.** This device is RAM-constrained (a fixed,
+unforgiving 256 KB) and comparatively compute-rich for this specific
+workload: calibration is a rare, one-time-per-unit, patient operation, not
+the 20 Hz motion-tracking loop `TODO/Performance.md` is fighting for
+milliseconds on. Doubling the Jacobian-evaluation cost of a calibration that
+already isn't latency-sensitive is a good trade for keeping peak memory at
+O(P²) + O(N) instead of O(P·N). This also sidesteps ever allocating (or
+statically declaring) an array of N per-frame structs at all — "run frame by
+frame" in the literal sense: one frame's data exists on the stack, gets
+folded into the P×P accumulator or back-substituted, and is gone.
+
+## The data structures (implemented, verified)
+
+- **`FrameNormalEquations<P>`** — one frame's *local* system, before pose
+  elimination: `H_pp` (6×6), `H_sp` (P×6), `H_ss` (P×P), `rhs_p` (6),
+  `rhs_s` (P). Built via 3 calls to `add_sensor()` (one per sensor, taking
+  that sensor's own already-weighted 3-row residual/Jacobian contribution —
+  matching `evaluate_bundle_jacobian`'s per-sensor output shape). Lives on
+  the stack for the duration of processing one frame in either pass; never
+  stored in an array across frames.
+- **`SharedNormalEquations<P>`** — the ONLY state that persists across the
+  whole frame set during one solver iteration: `H` (P×P), `rhs` (P). Built
+  via `absorb_frame()` (folds one `FrameNormalEquations<P>` in via Schur
+  elimination, per pass-1 frame) and `add_prior()` (ridge regularization,
+  mirroring `RegularizationSigmas`). `solve()` gives `dx_shared`.
+- **`solve_frame_pose_update<P>()`** — free function, takes a freshly-rebuilt
+  `FrameNormalEquations<P>` (pass 2) plus the solved `dx_shared`, returns
+  that frame's own 6-DOF pose update.
+
+Peak memory for one solver iteration: one `SharedNormalEquations<P>`
+(P² + P floats, e.g. ~8.3 KB at P=45) + one `FrameNormalEquations<P>` at a
+time (P² + 7P + 6 floats, ~8.4 KB at P=45, transient) — independent of N.
+
+## What's deliberately not here
+
+- **The LM/trust-region outer loop.** Damping, step acceptance, convergence
+  criteria, how many iterations, when to stop — none of that is touched.
+  `SharedNormalEquations`/`FrameNormalEquations` are the per-iteration inner
+  machinery a loop like that would call into.
+- **Sparsity within `H_ss`/`H_spf`.** Per `bundle_shared_jacobian.h`'s design,
+  most shared-parameter groups (tilt, offset, gain) only touch one sensor's 3
+  rows per frame — only `magnet_pos` and `magnet_strength_mean` are genuinely
+  dense across all 3 sensors. A frame's `H_ss` contribution is therefore far
+  sparser than the dense P×P this implementation forms. Exploiting that would
+  cut real per-frame compute, but requires the concrete P=45 column layout
+  (which groups own which columns) to be nailed down first — deliberately
+  deferred rather than guessed at now. This implementation is the correct,
+  exact, general-purpose version; a sparse-aware `add_sensor` is a follow-up
+  optimization on top of it, not a different algorithm.
+- **Wiring `evaluate_bundle_jacobian`'s raw `SharedJacobianBlock` (and
+  `bundle_linear_jacobian.h`'s gain/offset derivatives) into the P-wide
+  `J_shared_scaled` columns `add_sensor` expects.** That's the gauge-basis
+  projection step (`MAGNET_POS_BASIS`, `TILT_UNIT_BASIS`, etc.) plus per-
+  observation sigma weighting — real work, but a separate, well-scoped next
+  step now that the accumulator shape it feeds into is settled and verified.
+- **The on-device magnet-tilt SO(3) parameterization decision**, already
+  flagged in `README.md` — still open, still blocks the tilt columns
+  specifically.

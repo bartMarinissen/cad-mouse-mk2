@@ -65,6 +65,22 @@ step, not a side effect of this commit.
 - `compat/`, `verify.sh` — host build harness (real Eigen 3.4 via
   `libeigen3-dev`, real firmware forward-model source, no ARM toolchain
   needed) so the verification is a reproducible `./verify.sh`, not a claim.
+- `SCHUR_SOLVER_DESIGN.md`, `schur_normal_equations.h`,
+  `test_schur_normal_equations.cpp`, `verify_schur.sh` — the *shape* the
+  bundle solver would actually run on: `FrameNormalEquations<P>` (one
+  frame's local normal equations, built transiently, never stored across
+  frames) and `SharedNormalEquations<P>` (the only state that persists
+  across a whole solver iteration, O(P²) not O(P·N)), connected by an exact
+  Schur-complement elimination of each frame's 6-DOF pose block — the same
+  fixed-size LDLT `solve_pose.cpp` already does, reused, not a new
+  primitive. Not the LM/trust-region outer loop itself (damping, step
+  acceptance, convergence) — see `SCHUR_SOLVER_DESIGN.md` for the full
+  derivation and the store-vs-recompute memory tradeoff (~65 KB to store
+  every frame's coupling block vs. recomputing it — recompute wins on this
+  device). Verified exactly (not by finite difference — Schur complement is
+  a linear-algebra identity, so there's a ground-truth answer): assemble
+  the full dense arrowhead system directly, solve it in one shot, check the
+  frame-by-frame path agrees. It does, to ~1e-6 relative error.
 
 ## What's verified, and to what precision
 
@@ -76,6 +92,7 @@ step, not a side effect of this commit.
 | magnet's own-axis spin invariance (exact, not FD) | ~2e-6 | 1e-4 |
 | gauge-projected column vs perturbing the real shape parameter | passes | 1% |
 | reused vs freshly-rebuilt `MagnetModel`, across 3 frames | bit-exact | exact |
+| Schur-complement path vs dense reference solve (exact, not FD) | ~8e-7 | 1e-4 |
 
 The "own-axis spin does nothing" property was originally checked by finite
 difference and failed at a 1e-3 bar — not because the code was wrong (the
@@ -90,9 +107,12 @@ float32 machine precision instead.
 
 ## What's NOT here
 
-- **The solver.** This is the Jacobian only. The block-structured (Schur
-  complement) accumulation that turns per-frame Jacobians into a solvable
-  system is separate, not-yet-designed work.
+- **The LM/trust-region outer loop.** `schur_normal_equations.h` is the
+  per-iteration inner machinery (accumulate, solve, back-substitute) — not
+  damping, step acceptance, or convergence criteria, and not yet connected
+  to real per-frame Jacobians (see `SCHUR_SOLVER_DESIGN.md`'s "what's
+  deliberately not here" for the rest, including why `H_ss`'s real sparsity
+  isn't exploited yet).
 - **Gain/offset finite-difference tests.** `bundle_linear_jacobian.h`'s
   derivatives are linear one-liners with no chain-rule content, so they
   weren't given FD coverage here — worth a quick direct check before this
