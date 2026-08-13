@@ -67,7 +67,7 @@ static float max_rel_error_mat(const Eigen::Matrix<float, ROWS, COLS>& A,
 }
 
 // ======================================================================
-// Tier 1: per-quantity checks against evaluate_shared_jacobian()
+// Tier 1: per-quantity checks against evaluate_bundle_jacobian()
 // ======================================================================
 
 static void check_shared_jacobian_at(

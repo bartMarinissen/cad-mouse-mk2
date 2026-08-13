@@ -38,10 +38,11 @@ step, not a side effect of this commit.
   reconstructing the same 3 magnets up to 60 times over. `std::move` doesn't
   help here: there's no heap allocation anywhere in this chain
   (`EIGEN_NO_MALLOC`) for a move to avoid copying — see the header comment
-  above `MagnetState` for the full reasoning. `evaluate_shared_jacobian()`
-  (the lower-level function that takes already-computed `B_field_global`/
-  `J_pose`) still exists underneath both, now clearly an implementation
-  detail rather than an intended call site.
+  above `MagnetState` for the full reasoning. There used to be a separate
+  `evaluate_shared_jacobian()` underneath, taking already-computed
+  `B_field_global`/`J_pose` as inputs — folded directly into
+  `evaluate_bundle_jacobian()` once it had exactly one caller and no reason
+  to stay a separate function.
 - `bundle_linear_jacobian.h` — the other five parameter groups
   (`sensor_offset`, `gain_aniso`/`sym`/`rot`, magnet-strength mean/diff
   split): linear post-multiplies of the prediction, no chain-rule content,

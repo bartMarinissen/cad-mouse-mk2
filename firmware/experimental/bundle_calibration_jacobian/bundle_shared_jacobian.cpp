@@ -1,13 +1,14 @@
 #include "bundle_shared_jacobian.h"
 
-void evaluate_shared_jacobian(
+void evaluate_bundle_jacobian(
     const Sensor& sensor, const MagnetModel& magnet,
     const Vec3& t, const Mat3& R,
-    const Vec3& B_field_global, const Eigen::Matrix<float, 3, 6>& J_pose,
-    SharedJacobianBlock& J_shared
+    Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
 ) {
-    // Recovered, not recomputed: Sensor::evaluate already built this to fill
-    // J_pose's translation block.
+    sensor.evaluate(magnet, t, R, B_field_global, J_pose);   // the actual call
+
+    // Recovered, not recomputed: Sensor::evaluate (above) already built this
+    // to fill J_pose's translation block.
     const Mat3 neg_M = J_pose.block<3, 3>(0, 0);
 
     const Vec3 v = sensor.sensor_pos_global - t;
@@ -26,15 +27,6 @@ void evaluate_shared_jacobian(
     // only as a multiplier inside MagnetModel::evaluate), so the derivative
     // is just the prediction itself, rescaled.
     J_shared.d_strength = B_field_global / magnet.magnet_strength_mT;
-}
-
-void evaluate_bundle_jacobian(
-    const Sensor& sensor, const MagnetModel& magnet,
-    const Vec3& t, const Mat3& R,
-    Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
-) {
-    sensor.evaluate(magnet, t, R, B_field_global, J_pose);   // the actual call
-    evaluate_shared_jacobian(sensor, magnet, t, R, B_field_global, J_pose, J_shared);
 }
 
 // --- How this composes across a whole solver iteration ---------------------

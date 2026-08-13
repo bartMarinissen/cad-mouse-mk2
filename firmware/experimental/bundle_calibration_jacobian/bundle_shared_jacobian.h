@@ -31,59 +31,6 @@ struct SharedJacobianBlock {
     Vec3 d_strength;      // dB/d(magnet_strength_mT)
 };
 
-// Computes the three calibration-parameter derivatives above for one
-// sensor/magnet pair, from Sensor::evaluate()'s OWN output -- called after
-// it, not instead of it. It never touches MagnetModel::evaluate or
-// BicubicField again: every expensive part of the forward pass (the bicubic
-// table lookup) already happened inside the evaluate() call that produced
-// B_field_global/J_pose, and everything this function needs is recoverable
-// from that output plus data the caller already had (t, R, and the Sensor/
-// MagnetModel objects' own public fields).
-//
-// --- The math -------------------------------------------------------------
-//
-// Sensor::evaluate already builds M := R_total * J_local * R_total^T (the
-// world-frame field gradient) to fill J_pose's translation block as -M. That
-// same M is exactly what every shared derivative below is built from too --
-// recovered as `neg_M = J_pose.block<3,3>(0,0)`, not recomputed.
-//
-//   d(B)/d(m_j)   = -M @ R                              (magnet position)
-//   d(B)/d(eps)   =  M @ R @ [d]_x  -  R @ [b_knob]_x    (magnet tilt)
-//   d(B)/d(s_mT)  =  B_field_global / s_mT               (magnet strength)
-//
-// where, in the knob frame:
-//   d       = R^T (sensor.sensor_pos_global - t) - magnet.magnet_pos_knob
-//             (magnet -> sensor vector)
-//   b_knob  = R^T @ B_field_global
-//             (the predicted field, expressed in the knob frame)
-//
-// Both are one 3x3-matrix/vector product away from data Sensor::evaluate's
-// *caller* already has -- no need to reach into Sensor's private internals
-// (v, sensor_magnet_rel, B_local) at all, even though the derivation below
-// used them as scratch quantities to get here. (Full derivation: B_world =
-// R R_mag B_local(R_mag^T(R^T v - m_j)); differentiate w.r.t. m_j and w.r.t.
-// a left rotation perturbation of R_mag, matching bundle_geometry.py's
-// predict_and_jacobians() term for term. b_knob's simplification -- R_mag
-// cancelling out entirely -- falls out of B_local = R_mag^T R^T B_world.)
-//
-// --- Why no SO(3) left-Jacobian correction ---------------------------------
-//
-// bundle_geometry.py needs one (so3_left_jacobian) because scipy parameterizes
-// each frame's pose as a rotation *vector* relative to a fixed reference, and
-// its analytic derivatives are naturally against a left perturbation instead
-// -- the correction reconciles the two. A device-side solver built the way
-// solve_pose.cpp already is (Gauss-Newton stepping directly in the se(3)
-// tangent space, re-exponentiating R every iteration, never holding a global
-// rotation-vector parameterization at all) doesn't introduce that mismatch in
-// the first place, so there is nothing to correct for -- not "the correction
-// is small here", it structurally does not apply.
-void evaluate_shared_jacobian(
-    const Sensor& sensor, const MagnetModel& magnet,
-    const Vec3& t, const Mat3& R,
-    const Vec3& B_field_global, const Eigen::Matrix<float, 3, 6>& J_pose,
-    SharedJacobianBlock& J_shared
-);
-
 // --- Feeding calibration parameters through the (immutable) forward model -
 //
 // MagnetModel's magnet_pos_knob/magnet_rotation/magnet_strength_mT are const
@@ -139,14 +86,53 @@ inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetSta
 }
 
 // The per-(sensor, frame) entry point: takes an ALREADY-BUILT MagnetModel
-// (from build_magnet_model, called once per magnet per iteration, not here)
-// and calls Sensor::evaluate() itself -- not left as something the caller
-// must remember to do separately and thread the results in by hand, which
-// is what evaluate_shared_jacobian above requires. Call this once per
-// (sensor, frame) pair -- 3 sensors x ~60 frames per iteration -- passing
-// the SAME 3 MagnetModel objects (built once, outside the frame loop) to
-// every frame, since the magnets don't change within one iteration, only
-// the poses do.
+// (from build_magnet_model, called once per magnet per iteration, not here),
+// calls Sensor::evaluate() itself, and computes SharedJacobianBlock from
+// that same call's output -- it never touches MagnetModel::evaluate or
+// BicubicField a second time, since every expensive part of the forward
+// pass (the bicubic table lookup) already happened inside the evaluate()
+// call above. Call this once per (sensor, frame) pair -- 3 sensors x ~60
+// frames per iteration -- passing the SAME 3 MagnetModel objects (built
+// once, outside the frame loop) to every frame, since the magnets don't
+// change within one iteration, only the poses do.
+//
+// --- The math -------------------------------------------------------------
+//
+// Sensor::evaluate already builds M := R_total * J_local * R_total^T (the
+// world-frame field gradient) to fill J_pose's translation block as -M. That
+// same M is exactly what every shared derivative below is built from too --
+// recovered as `neg_M = J_pose.block<3,3>(0,0)`, not recomputed.
+//
+//   d(B)/d(m_j)   = -M @ R                              (magnet position)
+//   d(B)/d(eps)   =  M @ R @ [d]_x  -  R @ [b_knob]_x    (magnet tilt)
+//   d(B)/d(s_mT)  =  B_field_global / s_mT               (magnet strength)
+//
+// where, in the knob frame:
+//   d       = R^T (sensor.sensor_pos_global - t) - magnet.magnet_pos_knob
+//             (magnet -> sensor vector)
+//   b_knob  = R^T @ B_field_global
+//             (the predicted field, expressed in the knob frame)
+//
+// Both are one 3x3-matrix/vector product away from data already in hand at
+// this point -- no need to reach into Sensor's private internals (v,
+// sensor_magnet_rel, B_local) at all, even though the derivation used them
+// as scratch quantities to get here. (Full derivation: B_world =
+// R R_mag B_local(R_mag^T(R^T v - m_j)); differentiate w.r.t. m_j and w.r.t.
+// a left rotation perturbation of R_mag, matching bundle_geometry.py's
+// predict_and_jacobians() term for term. b_knob's simplification -- R_mag
+// cancelling out entirely -- falls out of B_local = R_mag^T R^T B_world.)
+//
+// --- Why no SO(3) left-Jacobian correction ---------------------------------
+//
+// bundle_geometry.py needs one (so3_left_jacobian) because scipy parameterizes
+// each frame's pose as a rotation *vector* relative to a fixed reference, and
+// its analytic derivatives are naturally against a left perturbation instead
+// -- the correction reconciles the two. A device-side solver built the way
+// solve_pose.cpp already is (Gauss-Newton stepping directly in the se(3)
+// tangent space, re-exponentiating R every iteration, never holding a global
+// rotation-vector parameterization at all) doesn't introduce that mismatch in
+// the first place, so there is nothing to correct for -- not "the correction
+// is small here", it structurally does not apply.
 void evaluate_bundle_jacobian(
     const Sensor& sensor, const MagnetModel& magnet,
     const Vec3& t, const Mat3& R,
