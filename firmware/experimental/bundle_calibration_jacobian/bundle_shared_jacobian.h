@@ -84,6 +84,52 @@ void evaluate_shared_jacobian(
     SharedJacobianBlock& J_shared
 );
 
+// --- Feeding calibration parameters through the (immutable) forward model -
+//
+// MagnetModel's magnet_pos_knob/magnet_rotation/magnet_strength_mT are const
+// members, fixed at construction (magnet_local_model.h) -- deliberately:
+// ForwardModel's own comment calls this out as what makes "the calibration
+// is constant for the lifetime of the controllers" a compiler-enforced fact
+// rather than a convention, for the RUNTIME/shipped calibration. A solver
+// actively fitting these parameters needs a separate, genuinely mutable
+// representation of "the trial value right now" -- that's MagnetState below
+// -- and builds a fresh (still-immutable) MagnetModel from it on every
+// evaluation. That is not fighting the const design, it's what the design
+// is asking for: during a fit there is no single "the" MagnetModel yet, only
+// a sequence of trial ones, and each one should still be immutable once
+// built. The reconstruction itself is not the expensive part: MagnetModel's
+// constructor is one 3x3-matrix/vector product (magnet_offset_local),
+// dwarfed by the ~260-op BicubicField lookup Sensor::evaluate performs on
+// every call regardless, trial or not.
+//
+// sensor_offset and gain have no equivalent struct here because they never
+// reach this deep: neither MagnetModel nor Sensor holds them at all -- gain
+// lives in SensorController, applied to the raw reading before the model
+// ever sees it; sensor_offset is likewise applied outside ForwardModel/
+// Sensor entirely (see CalibrationParams.h and TODO/sensor-gain-calibration.md).
+// Their derivatives (bundle_linear_jacobian.h) are linear post-multiplies of
+// B_field_global, with no MagnetModel/Sensor construction involved at all --
+// there is nothing to feed through here for those two groups, structurally,
+// not just as a simplification.
+struct MagnetState {
+    Vec3 pos;            // magnet_pos_knob
+    Mat3 rotation;        // magnet_rotation
+    float strength_mT;    // magnet_strength_mT
+};
+
+// The actual entry point a solver calls: builds the trial MagnetModel from
+// MagnetState and calls Sensor::evaluate() itself -- not left as something
+// the caller must remember to do separately and thread the results in by
+// hand, which is what the (still available, now internal-use) function
+// above required. One call in (a sensor, a field table, a trial magnet
+// state, a trial pose), everything a solver needs for one (sensor, magnet)
+// pair at that trial point, out.
+void evaluate_bundle_jacobian(
+    const Sensor& sensor, const BicubicField& field, const MagnetState& magnet_state,
+    const Vec3& t, const Mat3& R,
+    Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
+);
+
 // This file covers magnet_pos, magnet_tilt, and magnet_strength -- the
 // parameter groups that need real chain rule through the forward model.
 // The other five of parameterization.py's eight groups (sensor_offset,

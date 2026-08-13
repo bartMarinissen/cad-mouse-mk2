@@ -75,14 +75,17 @@ static void check_shared_jacobian_at(
         const Vec3& sensor_pos, const Vec3& t, const Mat3& R, const char* label) {
 
     Sensor sensor(sensor_pos);
-    MagnetModel magnet0(CALCULATED_BICUBIC_FIELD, magnet_pos, magnet_rot, strength);
+    // MagnetState, not a directly-built MagnetModel: this is the mutable
+    // trial state a solver would hold and perturb, exercised through the
+    // real entry point (evaluate_bundle_jacobian) exactly as a solver would
+    // call it -- not a hand-rolled construct-and-call-separately sequence
+    // that only resembles what production code would do.
+    MagnetState state0{magnet_pos, magnet_rot, strength};
 
     Vec3 B0;
     Eigen::Matrix<float, 3, 6> J_pose;
-    sensor.evaluate(magnet0, t, R, B0, J_pose);
-
     SharedJacobianBlock J_analytic;
-    evaluate_shared_jacobian(sensor, magnet0, t, R, B0, J_pose, J_analytic);
+    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, state0, t, R, B0, J_pose, J_analytic);
 
     char msg[256];
 
@@ -90,11 +93,11 @@ static void check_shared_jacobian_at(
     Mat3 J_pos_numeric;
     for (int i = 0; i < 3; ++i) {
         Vec3 dm = Vec3::Zero(); dm[i] = FD_STEP_LINEAR;
-        MagnetModel mp(CALCULATED_BICUBIC_FIELD, magnet_pos + dm, magnet_rot, strength);
-        MagnetModel mm(CALCULATED_BICUBIC_FIELD, magnet_pos - dm, magnet_rot, strength);
-        Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd;
-        sensor.evaluate(mp, t, R, Bp, Jd);
-        sensor.evaluate(mm, t, R, Bm, Jd);
+        MagnetState sp{magnet_pos + dm, magnet_rot, strength};
+        MagnetState sm{magnet_pos - dm, magnet_rot, strength};
+        Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
+        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
         J_pos_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_LINEAR);
     }
     float e_pos = max_rel_error_mat<3, 3>(J_analytic.d_magnet_pos, J_pos_numeric);
@@ -105,13 +108,11 @@ static void check_shared_jacobian_at(
     Mat3 J_tilt_numeric;
     for (int i = 0; i < 3; ++i) {
         Vec3 dw = Vec3::Zero(); dw[i] = FD_STEP_ANGULAR;
-        Mat3 Rp = exp_so3(dw) * magnet_rot;
-        Mat3 Rm = exp_so3(-dw) * magnet_rot;
-        MagnetModel mp(CALCULATED_BICUBIC_FIELD, magnet_pos, Rp, strength);
-        MagnetModel mm(CALCULATED_BICUBIC_FIELD, magnet_pos, Rm, strength);
-        Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd;
-        sensor.evaluate(mp, t, R, Bp, Jd);
-        sensor.evaluate(mm, t, R, Bm, Jd);
+        MagnetState sp{magnet_pos, exp_so3(dw) * magnet_rot, strength};
+        MagnetState sm{magnet_pos, exp_so3(-dw) * magnet_rot, strength};
+        Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
+        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
         J_tilt_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_ANGULAR);
     }
     // Full 3x3, not just columns 0-1: the raw Jacobian is a real 3x3
@@ -147,9 +148,9 @@ static void check_shared_jacobian_at(
     float field_scale = B0.norm();
     for (float theta : {0.01f, 1.0f, 3.0f}) {
         Mat3 spin = exp_so3(theta * own_axis);
-        MagnetModel spun(CALCULATED_BICUBIC_FIELD, magnet_pos, spin * magnet_rot, strength);
-        Vec3 B_spun; Eigen::Matrix<float, 3, 6> spin_Jd;
-        sensor.evaluate(spun, t, R, B_spun, spin_Jd);
+        MagnetState spun_state{magnet_pos, spin * magnet_rot, strength};
+        Vec3 B_spun; Eigen::Matrix<float, 3, 6> spin_Jd; SharedJacobianBlock spin_Jsd;
+        evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, spun_state, t, R, B_spun, spin_Jd, spin_Jsd);
         float e = (B_spun - B0).norm() / field_scale;
         snprintf(msg, sizeof(msg),
                  "[%s] spinning the magnet %.2f rad about its OWN axis changed the field by rel %.2e (should be ~machine eps)",
@@ -159,11 +160,11 @@ static void check_shared_jacobian_at(
 
     // --- strength: relative step, since strength is O(hundreds of mT) ---
     float ds = strength * 1.0e-3f;
-    MagnetModel sp(CALCULATED_BICUBIC_FIELD, magnet_pos, magnet_rot, strength + ds);
-    MagnetModel sm(CALCULATED_BICUBIC_FIELD, magnet_pos, magnet_rot, strength - ds);
-    Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd;
-    sensor.evaluate(sp, t, R, Bp, Jd);
-    sensor.evaluate(sm, t, R, Bm, Jd);
+    MagnetState sp{magnet_pos, magnet_rot, strength + ds};
+    MagnetState sm{magnet_pos, magnet_rot, strength - ds};
+    Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
+    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sp, t, R, Bp, Jd, Jsd);
+    evaluate_bundle_jacobian(sensor, CALCULATED_BICUBIC_FIELD, sm, t, R, Bm, Jd, Jsd);
     Vec3 d_strength_numeric = (Bp - Bm) / (2.0f * ds);
     float e_strength = max_rel_error_mat<3, 1>(J_analytic.d_strength, d_strength_numeric);
     snprintf(msg, sizeof(msg), "[%s] d_strength mismatch, rel err %.5f", label, e_strength);
@@ -204,10 +205,13 @@ void test_shared_jacobian_grid(void) {
 // together via MAGNET_POS_BASIS's column, exactly as the fit would).
 // ======================================================================
 void test_magnet_pos_gauge_projection(void) {
-    MagnetModel magnets0[3] = {
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
+    // MagnetState[3], not MagnetModel[3]: same reasoning as
+    // check_shared_jacobian_at -- this is the mutable trial state a solver
+    // holds, fed through the real per-iteration entry point.
+    MagnetState states0[3] = {
+        {MAGNET_LOCAL[0], Mat3::Identity(), BICUBIC_FIELD_REFERENCE_MT},
+        {MAGNET_LOCAL[1], Mat3::Identity(), BICUBIC_FIELD_REFERENCE_MT},
+        {MAGNET_LOCAL[2], Mat3::Identity(), BICUBIC_FIELD_REFERENCE_MT},
     };
     Sensor sensors[3] = { Sensor(SENSOR_POS[0]), Sensor(SENSOR_POS[1]), Sensor(SENSOR_POS[2]) };
     const Vec3 t = BASE_T;
@@ -217,10 +221,8 @@ void test_magnet_pos_gauge_projection(void) {
         // Analytic: each sensor's own project_magnet_pos(), stacked.
         Eigen::Matrix<float, 9, 1> J_analytic_col;
         for (int i = 0; i < 3; ++i) {
-            Vec3 B0; Eigen::Matrix<float, 3, 6> Jp;
-            sensors[i].evaluate(magnets0[i], t, R, B0, Jp);
-            SharedJacobianBlock Js;
-            evaluate_shared_jacobian(sensors[i], magnets0[i], t, R, B0, Jp, Js);
+            Vec3 B0; Eigen::Matrix<float, 3, 6> Jp; SharedJacobianBlock Js;
+            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, states0[i], t, R, B0, Jp, Js);
             Mat3 proj = project_magnet_pos(Js.d_magnet_pos, i);
             J_analytic_col.block<3, 1>(3 * i, 0) = proj.col(k);
         }
@@ -233,11 +235,11 @@ void test_magnet_pos_gauge_projection(void) {
             Vec3 dm(MAGNET_POS_BASIS(3 * i + 0, k),
                     MAGNET_POS_BASIS(3 * i + 1, k),
                     MAGNET_POS_BASIS(3 * i + 2, k));
-            MagnetModel mp(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[i] + FD_STEP_LINEAR * dm);
-            MagnetModel mm(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[i] - FD_STEP_LINEAR * dm);
-            Vec3 bp, bm; Eigen::Matrix<float, 3, 6> Jd;
-            sensors[i].evaluate(mp, t, R, bp, Jd);
-            sensors[i].evaluate(mm, t, R, bm, Jd);
+            MagnetState sp{states0[i].pos + FD_STEP_LINEAR * dm, states0[i].rotation, states0[i].strength_mT};
+            MagnetState sm{states0[i].pos - FD_STEP_LINEAR * dm, states0[i].rotation, states0[i].strength_mT};
+            Vec3 bp, bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
+            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, sp, t, R, bp, Jd, Jsd);
+            evaluate_bundle_jacobian(sensors[i], CALCULATED_BICUBIC_FIELD, sm, t, R, bm, Jd, Jsd);
             B_plus.block<3, 1>(3 * i, 0) = bp;
             B_minus.block<3, 1>(3 * i, 0) = bm;
         }

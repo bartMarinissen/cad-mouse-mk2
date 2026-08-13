@@ -22,6 +22,19 @@ step, not a side effect of this commit.
   (full 3x3, all raw columns), `d_strength`. Computed from
   `Sensor::evaluate()`'s own output (`B_field_global`, `J_pose`) rather than
   a second pass through `MagnetModel`/`BicubicField`.
+  The actual entry point is `evaluate_bundle_jacobian(sensor, field,
+  MagnetState, t, R, ...)` — it calls `Sensor::evaluate()` itself (an
+  earlier version of this prototype left that call to the caller, which
+  meant it never appeared anywhere except the test). `MagnetState` is the
+  answer to "how do calibration parameters, which are `const` members of
+  `MagnetModel`, actually get updated across solver iterations": a small
+  mutable struct the solver perturbs each step, from which a fresh
+  (still-immutable) `MagnetModel` is built on every evaluation. See the
+  header comment above `MagnetState` for why that reconstruction is cheap
+  and doesn't fight `MagnetModel`'s const design rather than working around
+  it. `evaluate_shared_jacobian()` (the lower-level function that takes
+  already-computed `B_field_global`/`J_pose`) still exists underneath it,
+  now clearly as an implementation detail rather than the intended call site.
 - `bundle_linear_jacobian.h` — the other five parameter groups
   (`sensor_offset`, `gain_aniso`/`sym`/`rot`, magnet-strength mean/diff
   split): linear post-multiplies of the prediction, no chain-rule content,
@@ -32,13 +45,15 @@ step, not a side effect of this commit.
   onto the bundle's 3 actual free shape parameters, plus `project_magnet_pos()`.
 - `test_bundle_shared_jacobian.cpp` — finite-difference verification, in the
   same style as `firmware/test/test_jacobian.cpp` (perturb the real physical
-  quantity, rebuild the const-membered model, central-difference). Two
-  tiers: per-quantity checks against `evaluate_shared_jacobian()`, and an
-  end-to-end check that the assembled, gauge-projected free-parameter
-  column matches perturbing the real physical shape parameter (moves all
-  three magnets at once) — the check that actually catches wiring bugs
-  (wrong magnet's basis slice, transposed sign) that the per-quantity checks
-  alone can pass right through.
+  quantity, rebuild the const-membered model, central-difference). Every
+  check goes through `evaluate_bundle_jacobian()` — including the FD
+  perturbations themselves, via a perturbed `MagnetState` — not a private
+  shortcut, so the tests exercise the same call a solver would actually
+  make. Two tiers: per-quantity checks, and an end-to-end check that the
+  assembled, gauge-projected free-parameter column matches perturbing the
+  real physical shape parameter (moves all three magnets at once) — the
+  check that actually catches wiring bugs (wrong magnet's basis slice,
+  transposed sign) that the per-quantity checks alone can pass right through.
 - `compat/`, `verify.sh` — host build harness (real Eigen 3.4 via
   `libeigen3-dev`, real firmware forward-model source, no ARM toolchain
   needed) so the verification is a reproducible `./verify.sh`, not a claim.
