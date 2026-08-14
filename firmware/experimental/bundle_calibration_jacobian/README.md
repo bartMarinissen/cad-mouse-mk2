@@ -67,10 +67,12 @@ step, not a side effect of this commit.
   needed) so the verification is a reproducible `./verify.sh`, not a claim.
 - `SCHUR_SOLVER_DESIGN.md`, `schur_normal_equations.h`,
   `test_schur_normal_equations.cpp`, `verify_schur.sh` — the *shape* the
-  bundle solver would actually run on: `FrameNormalEquations<P>` (one
-  frame's local normal equations, built transiently, never stored across
-  frames) and `SharedNormalEquations<P>` (the only state that persists
-  across a whole solver iteration, O(P²) not O(P·N)), connected by an exact
+  bundle solver would actually run on: `FramePoseBlock<P>` (one frame's row
+  of the arrowhead — all that pose elimination or pose recovery ever needs),
+  `FrameNormalEquations<P>` (that plus the frame's contribution to the
+  shared corner), both built transiently and never stored across frames, and
+  `SharedNormalEquations<P>` (the only state that persists across a whole
+  solver iteration, O(P²) not O(P·N)), connected by an exact
   Schur-complement elimination of each frame's 6-DOF pose block — the same
   fixed-size LDLT `solve_pose.cpp` already does, reused, not a new
   primitive. Not the LM/trust-region outer loop itself (damping, step
@@ -80,7 +82,11 @@ step, not a side effect of this commit.
   device). Verified exactly (not by finite difference — Schur complement is
   a linear-algebra identity, so there's a ground-truth answer): assemble
   the full dense arrowhead system directly, solve it in one shot, check the
-  frame-by-frame path agrees. It does, to ~1e-6 relative error.
+  frame-by-frame path agrees. It does, to ~1e-6 relative error. The test runs
+  the two-pass structure the way real usage would — nothing per-frame stored
+  across passes, pass 2 rebuilding the cheap `FramePoseBlock` — so it also
+  verifies the split itself: that the `H_ss`/`rhs_s` pass 2 skips genuinely
+  do not enter back-substitution.
 
 ## What's verified, and to what precision
 

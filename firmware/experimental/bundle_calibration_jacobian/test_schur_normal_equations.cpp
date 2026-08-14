@@ -84,29 +84,34 @@ void test_schur_matches_dense_reference(void) {
         TEST_ASSERT_TRUE_MESSAGE(es.eigenvalues()[0] > 0.05f, msg);
     }
 
-    // --- Path A: the Schur accumulator under test ---
+    // --- Path A: the Schur accumulator under test, run the way real usage
+    // would -- NOTHING per-frame is kept across the two passes. Each frame's
+    // system is a stack local that dies before the next frame is touched;
+    // the only thing crossing from pass 1 to pass 2 is dx_shared.
     SharedNormalEquations<P> shared_eq;
-    FrameNormalEquations<P> frames[N];   // kept only so pass 2 below doesn't
-                                          // need to recompute for THIS test;
-                                          // real usage rebuilds in pass 2 --
-                                          // see SCHUR_SOLVER_DESIGN.md. Using
-                                          // the same instances here still
-                                          // exercises the identical algebra,
-                                          // since absorb_frame() and
-                                          // solve_frame_pose_update() don't
-                                          // know or care whether their input
-                                          // was just-built or rebuilt.
     for (int f = 0; f < N; ++f) {
+        FrameNormalEquations<P> frame;
         for (int s = 0; s < 3; ++s) {
-            frames[f].add_sensor(residual[f][s], J_pose[f][s], J_shared[f][s]);
+            frame.add_sensor(residual[f][s], J_pose[f][s], J_shared[f][s]);
         }
-        shared_eq.absorb_frame(frames[f]);
+        shared_eq.absorb_frame(frame);
     }
     Eigen::Matrix<float, P, 1> dx_shared = shared_eq.solve();
 
+    // Pass 2 rebuilds each frame's row from the same per-sensor data (here a
+    // stand-in for re-running evaluate_bundle_jacobian at the UNCHANGED
+    // linearization point) -- and rebuilds it as a FramePoseBlock, the cheap
+    // form that never accumulates H_ss/rhs_s. That the pose updates below
+    // still match the dense reference is what verifies the split: it shows
+    // the terms pass 2 skips genuinely do not enter back-substitution, which
+    // no amount of reading add_sensor can establish on its own.
     Eigen::Matrix<float, 6, 1> dx_pose[N];
     for (int f = 0; f < N; ++f) {
-        dx_pose[f] = solve_frame_pose_update(frames[f], dx_shared);
+        FramePoseBlock<P> frame;
+        for (int s = 0; s < 3; ++s) {
+            frame.add_sensor(residual[f][s], J_pose[f][s], J_shared[f][s]);
+        }
+        dx_pose[f] = solve_frame_pose_update(frame, dx_shared);
     }
 
     // --- Path B: the dense reference -- full (P+6N) x (P+6N) system,

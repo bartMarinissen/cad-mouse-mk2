@@ -94,6 +94,27 @@ pose state has to persist across iterations no matter which design is
 chosen). Cost: the forward-model evaluation — the actual expensive part —
 runs twice per iteration instead of once.
 
+Pass 2's rebuild is, however, materially cheaper than pass 1's, and the data
+structures are shaped to make that automatic rather than optional.
+Back-substitution reads only `H_pp`, `H_sp`, `rhs_p` — never `H_ss`/`rhs_s`
+— and `H_ss` is the single most expensive term in the accumulation
+(`3P²` MACs per sensor, ≈18k per frame at P=45, against ≈2.4k for `H_sp`).
+So pass 2 rebuilds a `FramePoseBlock<P>`, which has no `H_ss` to accumulate
+and no P×P stack temporary to hold (~1.2 KB against ~8.4 KB). The
+linear-algebra half of a pass-2 frame is roughly an order of magnitude
+cheaper than a pass-1 frame; the forward-model half is identical, so the
+end-to-end ratio depends on which dominates — not yet measured on target.
+
+**One ordering constraint the rebuild imposes:** pass 2 must linearize at the
+*same point* as pass 1 — same `x_shared`, same `pose_f`. So `dx_shared` and
+the `dx_pose` may only be applied to the iterate after pass 2 has finished
+for every frame. Update early and each frame's `H_sp`/`rhs_p` come from a
+different linearization than the reduced system that produced `dx_shared`,
+and the back-substitution silently stops being the exact identity it is
+derived as. This is a property of recompute specifically: the store design
+cannot get it wrong, because stored blocks carry their linearization point
+with them.
+
 **Recommendation: recompute.** This device is RAM-constrained (a fixed,
 unforgiving 256 KB) and comparatively compute-rich for this specific
 workload: calibration is a rare, one-time-per-unit, patient operation, not
@@ -107,25 +128,38 @@ folded into the P×P accumulator or back-substituted, and is gone.
 
 ## The data structures (implemented, verified)
 
-- **`FrameNormalEquations<P>`** — one frame's *local* system, before pose
-  elimination: `H_pp` (6×6), `H_sp` (P×6), `H_ss` (P×P), `rhs_p` (6),
-  `rhs_s` (P). Built via 3 calls to `add_sensor()` (one per sensor, taking
-  that sensor's own already-weighted 3-row residual/Jacobian contribution —
-  matching `evaluate_bundle_jacobian`'s per-sensor output shape). Lives on
-  the stack for the duration of processing one frame in either pass; never
-  stored in an array across frames.
+- **`FramePoseBlock<P>`** — exactly one frame's *row* of the arrowhead:
+  `H_pp` (6×6), `H_sp` (P×6), `rhs_p` (6). Everything that touches a frame's
+  pose — eliminating it in pass 1, recovering it in pass 2 — needs these
+  three and nothing else. Built via 3 calls to `add_sensor()` (one per
+  sensor, taking that sensor's own already-weighted 3-row residual/Jacobian
+  contribution — matching `evaluate_bundle_jacobian`'s per-sensor output
+  shape). This is what pass 2 rebuilds.
+- **`FrameNormalEquations<P>`** — a `FramePoseBlock<P>` plus the frame's
+  additive contribution to the *shared* corner: `H_ss` (P×P), `rhs_s` (P).
+  Its `add_sensor()` forwards to the inner one rather than restating the
+  three pose-row formulas, so no formula is written twice. Worth noting that
+  `H_ss`/`rhs_s` are not "this frame's block" the way `H_pp` is — no frame
+  owns the shared corner, each just adds into it, which is exactly why they
+  can be dropped when only the frame's own row is wanted. This is what pass
+  1 builds. Either type lives on the stack for the duration of processing
+  one frame; neither is ever stored in an array across frames.
 - **`SharedNormalEquations<P>`** — the ONLY state that persists across the
   whole frame set during one solver iteration: `H` (P×P), `rhs` (P). Built
   via `absorb_frame()` (folds one `FrameNormalEquations<P>` in via Schur
   elimination, per pass-1 frame) and `add_prior()` (ridge regularization,
   mirroring `RegularizationSigmas`). `solve()` gives `dx_shared`.
 - **`solve_frame_pose_update<P>()`** — free function, takes a freshly-rebuilt
-  `FrameNormalEquations<P>` (pass 2) plus the solved `dx_shared`, returns
-  that frame's own 6-DOF pose update.
+  `FramePoseBlock<P>` (pass 2) plus the solved `dx_shared`, returns that
+  frame's own 6-DOF pose update. Taking the pose block rather than the full
+  system is what makes the cheap rebuild expressible: a caller *cannot* hand
+  it an `H_ss`, so it has no reason to have spent anything computing one.
 
 Peak memory for one solver iteration: one `SharedNormalEquations<P>`
-(P² + P floats, e.g. ~8.3 KB at P=45) + one `FrameNormalEquations<P>` at a
-time (P² + 7P + 6 floats, ~8.4 KB at P=45, transient) — independent of N.
+(P² + P floats, e.g. ~8.3 KB at P=45) + one frame at a time — ~8.4 KB
+transient during pass 1 (`FrameNormalEquations<P>`, P² + 7P + 6 floats),
+~1.2 KB during pass 2 (`FramePoseBlock<P>`, 7P + 42 floats). Independent
+of N in both passes.
 
 ## What's deliberately not here
 
