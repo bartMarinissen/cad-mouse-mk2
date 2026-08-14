@@ -74,7 +74,7 @@ static void check_shared_jacobian_at(
         const Vec3& magnet_pos, const Mat3& magnet_rot, float strength,
         const Vec3& sensor_pos, const Vec3& t, const Mat3& R, const char* label) {
 
-    Sensor sensor(sensor_pos);
+    VirtualSensor sensor(sensor_pos);
     // MagnetState, not a directly-built MagnetModel: this is the mutable
     // trial state a solver would hold and perturb, exercised through the
     // real entry point (evaluate_bundle_jacobian) exactly as a solver would
@@ -140,7 +140,7 @@ static void check_shared_jacobian_at(
     // the magnet by real, non-infinitesimal angles about its own current
     // axis (R_mag's own z column, not the fixed world-frame e_2, which only
     // coincides with it at zero tilt -- R exp(theta v x) = exp(theta (Rv) x)
-    // R is why) and check Sensor::evaluate's OUTPUT is unchanged directly.
+    // R is why) and check VirtualSensor::evaluate's OUTPUT is unchanged directly.
     // No subtraction of comparable quantities, no near-zero target -- this
     // resolves to float32 machine precision (~2e-6 relative, measured),
     // not the ~1e-3 the differencing approach was capped at.
@@ -204,14 +204,14 @@ void test_shared_jacobian_grid(void) {
 // build_magnet_model() (once per magnet per iteration) from
 // evaluate_bundle_jacobian() (once per sensor per frame). Not in doubt
 // mathematically -- both paths run the identical MagnetModel through the
-// identical Sensor::evaluate() -- but worth having as a live check rather
+// identical VirtualSensor::evaluate() -- but worth having as a live check rather
 // than an assertion in a comment, and as documentation of the intended
 // usage pattern a solver's per-iteration loop should follow.
 // ======================================================================
 void test_magnet_model_reuse_across_frames(void) {
     MagnetState state{MAGNET_LOCAL[0], exp_so3(Vec3(0.03f, -0.02f, 0.0f)),
                        0.94f * BICUBIC_FIELD_REFERENCE_MT};
-    Sensor sensor(SENSOR_POS[0]);
+    VirtualSensor sensor(SENSOR_POS[0]);
 
     // Built ONCE, as the outer per-iteration loop would.
     MagnetModel magnet_reused = build_magnet_model(CALCULATED_BICUBIC_FIELD, state);
@@ -258,7 +258,7 @@ void test_magnet_pos_gauge_projection(void) {
         {MAGNET_LOCAL[1], Mat3::Identity(), BICUBIC_FIELD_REFERENCE_MT},
         {MAGNET_LOCAL[2], Mat3::Identity(), BICUBIC_FIELD_REFERENCE_MT},
     };
-    Sensor sensors[3] = { Sensor(SENSOR_POS[0]), Sensor(SENSOR_POS[1]), Sensor(SENSOR_POS[2]) };
+    VirtualSensor sensors[3] = { VirtualSensor(SENSOR_POS[0]), VirtualSensor(SENSOR_POS[1]), VirtualSensor(SENSOR_POS[2]) };
     const Vec3 t = BASE_T;
     const Mat3 R = Mat3::Identity();
 

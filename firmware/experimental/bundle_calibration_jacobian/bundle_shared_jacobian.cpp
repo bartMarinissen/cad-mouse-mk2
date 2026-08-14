@@ -1,13 +1,13 @@
 #include "bundle_shared_jacobian.h"
 
 void evaluate_bundle_jacobian(
-    const Sensor& sensor, const MagnetModel& magnet,
+    const VirtualSensor& sensor, const MagnetModel& magnet,
     const Vec3& t, const Mat3& R,
     Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
 ) {
     sensor.evaluate(magnet, t, R, B_field_global, J_pose);   // the actual call
 
-    // Recovered, not recomputed: Sensor::evaluate (above) already built this
+    // Recovered, not recomputed: VirtualSensor::evaluate (above) already built this
     // to fill J_pose's translation block.
     const Mat3 neg_M = J_pose.block<3, 3>(0, 0);
 

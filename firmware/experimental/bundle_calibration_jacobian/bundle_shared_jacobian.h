@@ -4,12 +4,12 @@
 // firmware/test specifically; this directory is deliberately none of those,
 // so it stays invisible to the build until it's promoted on purpose). Written to
 // answer one question: can the bundle-calibration Jacobian's magnet-position and
-// magnet-tilt columns be computed as a thin wrapper around Sensor::evaluate(),
+// magnet-tilt columns be computed as a thin wrapper around VirtualSensor::evaluate(),
 // reusing its output instead of re-deriving the forward pass through
 // MagnetModel/BicubicField a second time? Answer below: yes.
 
 #include "math3D.h"
-#include "magnet_model/sensor.h"
+#include "magnet_model/virtual_sensor.h"
 #include "magnet_model/magnet_local_model.h"
 
 // Per-(sensor, magnet) RAW derivative of the predicted field w.r.t. this
@@ -45,11 +45,11 @@ struct SharedJacobianBlock {
 // of them, shared across every frame. A frame's pose (t, R) is the thing
 // that's per-FRAME (there are ~60 of those). Build each trial MagnetModel
 // ONCE per iteration from build_magnet_model() below, then reuse those same
-// 3 objects across all ~60 frames' worth of Sensor::evaluate calls -- do NOT
+// 3 objects across all ~60 frames' worth of VirtualSensor::evaluate calls -- do NOT
 // rebuild one per (frame, sensor) pair. This isn't a micro-optimization:
 // measured (host x86 -O2, static instruction count, same method as
 // TODO/Performance.md's tallies), MagnetModel's constructor is 155
-// instructions against 523 for one full Sensor::evaluate chain
+// instructions against 523 for one full VirtualSensor::evaluate chain
 // (MagnetModel::evaluate 111 + BicubicField::evaluate 412) -- about 30% of
 // one evaluation's cost, not the "dwarfed, doesn't matter" this comment used
 // to claim without having measured it. Reconstructing per-frame instead of
@@ -63,12 +63,13 @@ struct SharedJacobianBlock {
 // The only real lever is not doing the computation 60x more than needed.
 //
 // sensor_offset and gain have no equivalent struct here because they never
-// reach this deep: neither MagnetModel nor Sensor holds them at all -- gain
-// lives in SensorController, applied to the raw reading before the model
-// ever sees it; sensor_offset is likewise applied outside ForwardModel/
-// Sensor entirely (see CalibrationParams.h and TODO/sensor-gain-calibration.md).
+// reach this deep: neither MagnetModel nor VirtualSensor holds them at all --
+// both are applied to the raw reading in SensorController::read_mT(), before
+// the model ever sees it (ARCHITECTURE.md, "Calibration subsystem -- two
+// independent layers", owns that split; CalibrationParams.h owns the stored
+// layout and the det(G)=1 gauge).
 // Their derivatives (bundle_linear_jacobian.h) are linear post-multiplies of
-// B_field_global, with no MagnetModel/Sensor construction involved at all --
+// B_field_global, with no MagnetModel/VirtualSensor construction involved at all --
 // there is nothing to feed through here for those two groups, structurally,
 // not just as a simplification.
 struct MagnetState {
@@ -87,7 +88,7 @@ inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetSta
 
 // The per-(sensor, frame) entry point: takes an ALREADY-BUILT MagnetModel
 // (from build_magnet_model, called once per magnet per iteration, not here),
-// calls Sensor::evaluate() itself, and computes SharedJacobianBlock from
+// calls VirtualSensor::evaluate() itself, and computes SharedJacobianBlock from
 // that same call's output -- it never touches MagnetModel::evaluate or
 // BicubicField a second time, since every expensive part of the forward
 // pass (the bicubic table lookup) already happened inside the evaluate()
@@ -98,7 +99,7 @@ inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetSta
 //
 // --- The math -------------------------------------------------------------
 //
-// Sensor::evaluate already builds M := R_total * J_local * R_total^T (the
+// VirtualSensor::evaluate already builds M := R_total * J_local * R_total^T (the
 // world-frame field gradient) to fill J_pose's translation block as -M. That
 // same M is exactly what every shared derivative below is built from too --
 // recovered as `neg_M = J_pose.block<3,3>(0,0)`, not recomputed.
@@ -114,7 +115,7 @@ inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetSta
 //             (the predicted field, expressed in the knob frame)
 //
 // Both are one 3x3-matrix/vector product away from data already in hand at
-// this point -- no need to reach into Sensor's private internals (v,
+// this point -- no need to reach into VirtualSensor's private internals (v,
 // sensor_magnet_rel, B_local) at all, even though the derivation used them
 // as scratch quantities to get here. (Full derivation: B_world =
 // R R_mag B_local(R_mag^T(R^T v - m_j)); differentiate w.r.t. m_j and w.r.t.
@@ -134,7 +135,7 @@ inline MagnetModel build_magnet_model(const BicubicField& field, const MagnetSta
 // the first place, so there is nothing to correct for -- not "the correction
 // is small here", it structurally does not apply.
 void evaluate_bundle_jacobian(
-    const Sensor& sensor, const MagnetModel& magnet,
+    const VirtualSensor& sensor, const MagnetModel& magnet,
     const Vec3& t, const Mat3& R,
     Vec3& B_field_global, Eigen::Matrix<float, 3, 6>& J_pose, SharedJacobianBlock& J_shared
 );
@@ -144,5 +145,5 @@ void evaluate_bundle_jacobian(
 // The other five of parameterization.py's eight groups (sensor_offset,
 // gain_aniso, gain_sym, gain_rot, and the strength mean/diff split) are
 // linear post-multiplies of B_field_global with no chain-rule content, so
-// they don't belong in a function that's about reusing Sensor::evaluate's
+// they don't belong in a function that's about reusing VirtualSensor::evaluate's
 // forward pass -- see bundle_linear_jacobian.h for those, in full.

@@ -3,7 +3,7 @@
 # (test_schur_normal_equations.cpp) -- a separate binary from verify.sh's
 # Jacobian check since each Unity test file defines its own setup()/loop().
 # No firmware forward-model sources needed here: this is pure linear algebra,
-# independent of BicubicField/MagnetModel/Sensor.
+# independent of BicubicField/MagnetModel/VirtualSensor.
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT="$(mktemp -d)/test_schur_normal_equations"

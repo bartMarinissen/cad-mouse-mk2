@@ -4,7 +4,7 @@
 // forward model (magnet_pos, magnet_tilt) plus magnet_strength. This file is
 // the other five groups from parameterization.py's BLOCKS: sensor_offset,
 // gain_aniso, gain_sym, gain_rot, and the magnet_strength mean/diff split.
-// None of them touch Sensor/MagnetModel/BicubicField at all -- they are
+// None of them touch VirtualSensor/MagnetModel/BicubicField at all -- they are
 // fixed linear maps of quantities the forward pass already produced.
 
 #include "math3D.h"
@@ -31,7 +31,7 @@ inline const Mat3 GAIN_BASIS[8] = {
 // d(B_i)/d(gain param at basis index k) = GAIN_BASIS[k] @ B_field_global_i.
 // Per-sensor, not per-magnet: gain corrects a sensor's own reading, so this
 // only ever needs sensor i's own prediction -- the same B_field_global
-// Sensor::evaluate already returned for the pose solve.
+// VirtualSensor::evaluate already returned for the pose solve.
 inline Vec3 d_gain(int basis_index, const Vec3& B_field_global_i) {
     return GAIN_BASIS[basis_index] * B_field_global_i;
 }

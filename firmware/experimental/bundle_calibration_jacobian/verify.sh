@@ -23,7 +23,7 @@ g++ -std=c++17 -O2 -DNDEBUG -DEIGEN_NO_MALLOC -D'__not_in_flash_func(x)=x' \
   "$FW/src/magnet_model/magnet_local_model.cpp" \
   "$FW/src/magnet_model/magnet_model_table.cpp" \
   "$FW/src/magnet_model/forward_model.cpp" \
-  "$FW/src/magnet_model/sensor.cpp" \
+  "$FW/src/magnet_model/virtual_sensor.cpp" \
   -o "$OUT"
 
 "$OUT"
