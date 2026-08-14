@@ -15,11 +15,14 @@ Run the checks:
 ```bash
 ./verify.sh        # Jacobian, against central finite differences
 ./verify_schur.sh  # solver shape, against a dense reference solve
+./verify_arm.sh    # cross-compiles for cortex-m0plus, reports flash/RAM cost
 ```
 
-Both build on the host with `g++` and real Eigen 3.4 (`libeigen3-dev`), no ARM
-toolchain, and print the measured error for every check — read the numbers
-there rather than from any summary, including this one.
+The first two build on the host with `g++` and real Eigen 3.4
+(`libeigen3-dev`), no ARM toolchain, and print the measured error for every
+check — read the numbers there rather than from any summary, including this
+one. The third needs the earlephilhower toolchain and skips itself if it isn't
+installed; it is a compile check, not a run.
 
 ## Why it is outside the build
 
@@ -80,7 +83,10 @@ strictly weaker check of something exactly checkable.
   stop being exact. `SCHUR_SOLVER_DESIGN.md` has the detail.
 - **The instruction-count figures in the headers are static host x86 counts**,
   the same method `TODO/Performance.md` uses. They are directionally real and
-  are not RP2040 soft-float measurements.
+  are not RP2040 soft-float measurements. `verify_arm.sh` establishes this
+  code *builds* for the target and what it costs in flash, which is a
+  different and much weaker claim than knowing how fast it runs there. Nothing
+  here has executed on hardware.
 - **`design documentation/Math.md` owns the forward model and its Jacobian.**
   The derivations in these headers extend it to the calibration parameters;
   where the two describe the same quantity, `Math.md` is authoritative.

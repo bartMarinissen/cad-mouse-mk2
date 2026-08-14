@@ -82,9 +82,11 @@ to give: either keep every frame's `H_spf`/`H_ppf`/`rhs_pf` in memory, or
 throw them away and rebuild them.
 
 **Storing per frame:** `H_spf` alone is P×6 = 45×6 = 270 floats = 1080 bytes;
-× 60 frames = **~65 KB**. That's a large fraction of this device's ~200 KB
-free RAM (the bicubic table and everything else already resident), for data
-that's only needed for a few microseconds during pass 2's back-substitution.
+× 60 frames = **~65 KB**. Measured against what's actually left: a current
+`pio run -e seeed_xiao_rp2040` reports 64,516 bytes of static RAM used of
+262,144, so ~193 KB remains for stack and heap combined. Storing every frame's
+coupling block would claim a third of that, for data needed only for a few
+microseconds during pass 2's back-substitution.
 
 **Recomputing in pass 2:** rebuild each frame's local system from scratch —
 call `evaluate_bundle_jacobian` for that frame's 3 sensors again, using the

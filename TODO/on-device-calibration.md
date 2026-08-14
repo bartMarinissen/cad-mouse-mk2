@@ -97,5 +97,9 @@ These block writing a real solver, and are not settled:
 - Finite-difference coverage for the gain and offset derivatives. They are
   linear post-multiplies with no chain-rule content, so there is little for a
   bug to hide in, but they are unverified.
-- Any on-target measurement. All numbers so far are host builds and static
-  instruction counts, not RP2040 soft-float.
+- Any on-hardware run. The prototype cross-compiles for cortex-m0plus
+  (`verify_arm.sh`) and costs ~22 KB of flash and 16 bytes of static RAM at
+  P=45, against 15% flash used today — so it fits comfortably. But that is a
+  build, not an execution: no timing figure here comes from the device, and
+  the speed question on a soft-float M0+ is exactly the one that decides
+  whether a calibration takes seconds or minutes.
