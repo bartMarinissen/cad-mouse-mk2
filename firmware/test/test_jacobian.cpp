@@ -294,7 +294,7 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
 // ======================================================================
 
 // Updated to accept hardware calibration states.
-// Sensor gain is no longer part of ForwardModel/Sensor - it's applied by
+// Sensor gain is no longer part of ForwardModel/VirtualSensor - it's applied by
 // SensorController on raw readings before they ever reach the solver - so
 // this exercises the two per-magnet states that *are* still in the model:
 // axis tilt and polarization strength.
@@ -311,10 +311,10 @@ static void compute_forward_model_jacobians(
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2], magnet_strengths[2]),
     };
 
-    Sensor sensors[3] = {
-        Sensor(SENSOR_POS[0]),
-        Sensor(SENSOR_POS[1]),
-        Sensor(SENSOR_POS[2]),
+    VirtualSensor sensors[3] = {
+        VirtualSensor(SENSOR_POS[0]),
+        VirtualSensor(SENSOR_POS[1]),
+        VirtualSensor(SENSOR_POS[2]),
     };
     ForwardModel fm(sensors, magnets);
 

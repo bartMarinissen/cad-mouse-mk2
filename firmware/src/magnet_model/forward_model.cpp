@@ -2,7 +2,7 @@
 
 #include "magnet_model/positions.h"
 
-ForwardModel::ForwardModel(const Sensor (&sensors)[3],
+ForwardModel::ForwardModel(const VirtualSensor (&sensors)[3],
                            const MagnetModel (&magnets)[3])
         : sensors_{sensors[0], sensors[1], sensors[2]},
           magnets_{magnets[0], magnets[1], magnets[2]}
@@ -15,9 +15,9 @@ ForwardModel::ForwardModel(const Sensor (&sensors)[3],
 // a compiler-enforced statement rather than a convention.
 ForwardModel::ForwardModel(const CalibrationParams& cal)
         : sensors_{
-              Sensor(Positions::sensor_1_world),
-              Sensor(Positions::sensor_2_world),
-              Sensor(Positions::sensor_3_world),
+              VirtualSensor(Positions::sensor_1_world),
+              VirtualSensor(Positions::sensor_2_world),
+              VirtualSensor(Positions::sensor_3_world),
           },
           magnets_{
               MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[0]), toMat3(cal.magnet_rotation[0]), cal.magnet_strength_mT[0]),

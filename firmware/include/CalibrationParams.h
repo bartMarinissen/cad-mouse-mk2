@@ -62,7 +62,7 @@ struct CalibrationParams {
   // Positions::Magnet_i_knob values as the model's actual geometry.
   // Indexed [magnet][xyz].
   float magnet_pos_knob[3][3];
-  // Per-magnet axis tilt in the knob frame. Sensor::evaluate already rotates
+  // Per-magnet axis tilt in the knob frame. VirtualSensor::evaluate already rotates
   // into and out of the magnet frame with this; every construction site simply
   // passed identity until now. Indexed [magnet][row][col].
   float magnet_rotation[3][3][3];

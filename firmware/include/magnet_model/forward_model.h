@@ -3,12 +3,12 @@
 #include "CalibrationParams.h"
 #include "math3D.h"
 #include "magnet_local_model.h"
-#include "sensor.h"
+#include "virtual_sensor.h"
 
 class ForwardModel {
 public:
     // Initializes the model with the physical layout of the PCB and knob
-    ForwardModel(const Sensor (&sensors)[3], const MagnetModel (&magnets)[3]);
+    ForwardModel(const VirtualSensor (&sensors)[3], const MagnetModel (&magnets)[3]);
 
     // The layout as actually calibrated: sensors at their (fixed, world-frame
     // defining) nominal positions, magnets at their fitted knob-frame positions
@@ -25,6 +25,6 @@ public:
                   Eigen::Matrix<float, 9, 6> &J) const;
 
 private:
-    const Sensor sensors_[3];
+    const VirtualSensor sensors_[3];
     const MagnetModel magnets_[3];
 };

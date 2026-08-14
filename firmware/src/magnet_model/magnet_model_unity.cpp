@@ -1,7 +1,7 @@
 // Unity (jumbo) translation unit for the pose-solver hot path.
 //
 // Including the .cpp files rather than merging them on disk lets GCC see the
-// whole solve_knob_pose -> ForwardModel::evaluate -> Sensor::evaluate ->
+// whole solve_knob_pose -> ForwardModel::evaluate -> VirtualSensor::evaluate ->
 // MagnetModel::evaluate -> BicubicField::evaluate chain as one translation
 // unit, so it can inline across those boundaries and CSE work that is
 // currently repeated on either side of a call.
@@ -18,6 +18,6 @@
 
 #include "BicubicField.cpp"        // NOLINT(bugprone-suspicious-include)
 #include "magnet_local_model.cpp"  // NOLINT(bugprone-suspicious-include)
-#include "sensor.cpp"              // NOLINT(bugprone-suspicious-include)
+#include "virtual_sensor.cpp"       // NOLINT(bugprone-suspicious-include)
 #include "forward_model.cpp"       // NOLINT(bugprone-suspicious-include)
 #include "solve_pose.cpp"          // NOLINT(bugprone-suspicious-include)

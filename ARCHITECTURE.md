@@ -149,8 +149,8 @@ ForwardModel::evaluate(t, R)         loops the 3 sensor/magnet pairs
    (forward_model.cpp)
         │  per pair:
         ▼
-Sensor::evaluate(magnet, t, R)       transforms sensor into magnet-local frame,
-   (sensor.cpp)                      composes the 3x6 Jacobian analytically
+VirtualSensor::evaluate(magnet, t, R) transforms sensor into magnet-local frame,
+   (virtual_sensor.cpp)              composes the 3x6 Jacobian analytically
         │
         ▼
 MagnetModel::evaluate(v_local)       cylindrical (r,z) decomposition of the
@@ -345,7 +345,7 @@ Two caveats on the exported numbers:
   old hand-tuned `Config::magnet_gains` absorbed it. See
   `TODO/cross-magnet-interference.md` for the measurements and the one-constant
   path back.
-- `Sensor` no longer carries a gain; correction happens entirely in
+- `VirtualSensor` no longer carries a gain; correction happens entirely in
   `SensorController::read_mT()` (issue #6 below).
 
 ## Quick file index
@@ -356,7 +356,7 @@ Two caveats on the exported numbers:
 | Board/build flags, lib deps | `platformio.ini` |
 | Sensor geometry / knob geometry constants | `firmware/include/magnet_model/positions.h` |
 | The Gauss-Newton solver loop | `firmware/src/magnet_model/solve_pose.cpp` |
-| Per-sensor analytic Jacobian | `firmware/src/magnet_model/sensor.cpp` |
+| Per-sensor analytic Jacobian | `firmware/src/magnet_model/virtual_sensor.cpp` |
 | Cylindrical magnet field model + r→0 handling | `firmware/src/magnet_model/magnet_local_model.cpp` |
 | Bicubic grid interpolation | `firmware/src/magnet_model/BicubicField.cpp` |
 | Generated field table (don't hand-edit) | `firmware/src/magnet_model/magnet_model_table.cpp` |

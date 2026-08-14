@@ -71,7 +71,7 @@ class MotionController {
 
   // The model the pose solve runs against. Previously three translation-unit
   // globals in MotionController.cpp, which was the reason a calibration
-  // write-back had no path to the running Sensor/MagnetModel instances. Now
+  // write-back had no path to the running VirtualSensor/MagnetModel instances. Now
   // owned, and const because it is built from this controller's calibration
   // and never changes after that.
   const ForwardModel forward_model_;

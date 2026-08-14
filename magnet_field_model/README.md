@@ -76,7 +76,7 @@ protocol.py / serial_link.py / session.py / collector.py / tui.py   capture side
 
 **Analytic Jacobian.** Every derivative in `bundle_geometry.py` is the same
 closed-form chain rule the firmware uses in
-`firmware/src/magnet_model/sensor.cpp`, layered on the local field gradient
+`firmware/src/magnet_model/virtual_sensor.cpp`, layered on the local field gradient
 from `local_field.py`. The previous version finite-differenced the entire
 shared vector per frame — tens of thousands of magpylib calls per solver
 iteration. `tests/test_jacobian.py` checks every derivative against central
@@ -264,7 +264,7 @@ parameter the data barely constrained.
   *host* — the firmware's own `static_assert`s are what pin the target, and
   nothing here has run on hardware yet.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
-  already here, and the firmware has the same chain rule in `sensor.cpp`. An
+  already here, and the firmware has the same chain rule in `virtual_sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination
   driving the actual solve (not just the reporting-only covariance
   `covariance_shared` computes today via a plain dense inverse, which is

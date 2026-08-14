@@ -8,7 +8,7 @@ verified hypotheses on where that time actually goes, not yet a fix plan.
 Platform context that matters for everything below: Seeed Xiao RP2040, dual
 Cortex-M0+ @ 133MHz, **no hardware FPU**. Every `float` operation is a software
 subroutine call. `solve_knob_pose`, `ForwardModel::evaluate`,
-`Sensor::evaluate`, `MagnetModel::evaluate`, and `BicubicField::evaluate` are
+`VirtualSensor::evaluate`, `MagnetModel::evaluate`, and `BicubicField::evaluate` are
 all marked `__not_in_flash_func` (placed in RAM), presumably to dodge flash
 XIP wait-states on this hot path.
 
@@ -111,8 +111,8 @@ they're real runtime loops, not unrolled — see caveats below.
 | `point_or_ghost()` (1 call, worst case) | – | 4 | 4 | – | – | – | – | – | 8 |
 | **`BicubicField::evaluate`** (own + 4×`point_or_ghost` + 3×`cubic` + 2×`cubic_deriv`) | 98 | 64 | 70 | – | – | 2 | 6 | 20 | **260** |
 | **`MagnetModel::evaluate`** (+ 1× Bicubic) | 119 | 67 | 71 | 1 | 1 sqrt | 3 | 6 | 20 | **288** |
-| **`Sensor::evaluate`** (+ 1× MagnetModel) | 353 | 223 | 89 | 1 | 1 sqrt | 3 | 6 | 29 | **705** |
-| **`ForwardModel::evaluate`** (+ 1× Sensor; sensor-loop body counted once, real loop runs 3×) | 353 | 223 | 89 | 1 | 1 sqrt | 3 | 6 | 29 | **705** |
+| **`VirtualSensor::evaluate`** (+ 1× MagnetModel) | 353 | 223 | 89 | 1 | 1 sqrt | 3 | 6 | 29 | **705** |
+| **`ForwardModel::evaluate`** (+ 1× VirtualSensor; sensor-loop body counted once, real loop runs 3×) | 353 | 223 | 89 | 1 | 1 sqrt | 3 | 6 | 29 | **705** |
 | **`solve_knob_pose`** (+ 1× ForwardModel; LM-loop body counted once) | **504** | **344** | **140** | **6** | 3 sqrt, 1 sin, 1 cos | 25 | 6 | 34 | **≈1064** |
 
 So **one LM iteration ≈ 1,064 soft-float/library calls**. `MAX_ITER = 10`
@@ -127,9 +127,9 @@ having real numbers on.
   `j_out` true, i.e. a grid-corner ghost point); an interior stencil point
   costs 0 there. Real cost is state-dependent on how close the current pose
   is to the bicubic grid's boundary.
-- `ForwardModel::evaluate` shows identical totals to `Sensor::evaluate`
+- `ForwardModel::evaluate` shows identical totals to `VirtualSensor::evaluate`
   because `ForwardModel::evaluate` itself does no arithmetic (pure block
-  assembly) — all its cost is the nested `Sensor::evaluate`, counted once
+  assembly) — all its cost is the nested `VirtualSensor::evaluate`, counted once
   per the static loop body even though it runs 3× per call.
 - These are static-reachability counts through the compiled binary, not a
   cycle-accurate profile. They tell us *what* is being called and how often
@@ -155,8 +155,8 @@ What changed:
   size, not speed, the entire time — `-Os` also disables/discourages several
   of the inlining paths `-O2` enables. This plausibly explains a lot of the
   "Eigen isn't inlining" finding above on its own.
-- Sensor gain moved out of the solver's hot path: `Sensor` no longer carries
-  a `sensor_gain` member, and `Sensor::evaluate` (`sensor.cpp`) dropped the
+- Sensor gain moved out of the solver's hot path: `VirtualSensor` no longer carries
+  a `sensor_gain` member, and `VirtualSensor::evaluate` (`virtual_sensor.cpp`) dropped the
   three gain multiplies (`B_field_global = sensor_gain * ...`, two
   `J.block<3,3>(...) = sensor_gain * ...`) it used to do on every call — i.e.
   every sensor, every LM iteration. Gain correction now happens once per raw
@@ -168,16 +168,16 @@ Rebuilt and re-disassembled to sanity-check the inlining hypothesis
 specifically. The hot functions did change shape in a way consistent with
 more code getting pulled inline rather than shelled out to separate Eigen
 helper functions — e.g. `ForwardModel::evaluate`'s own call count collapsed
-from 14 `bl`s to 1 (down to just the `Sensor::evaluate` call itself), and
+from 14 `bl`s to 1 (down to just the `VirtualSensor::evaluate` call itself), and
 `MagnetModel::evaluate` shrank (206→175 instructions) with fewer calls,
-consistent with the `assert_func` removal. `Sensor::evaluate` and
+consistent with the `assert_func` removal. `VirtualSensor::evaluate` and
 `solve_knob_pose` actually grew in instruction count and in-body call count —
 not a contradiction: that's what it looks like when a helper that used to be
 a separate out-of-line function (with its own prologue/epilogue and, per the
 finding above, its own RAM→flash veneer hop) gets inlined directly into the
 caller instead — the caller's body gets bigger and shows more direct
 `__wrap_fmul`/`fadd` calls, but there's one fewer function-call hop (and one
-fewer veneer) in the chain per operation. Because `sensor.cpp` and
+fewer veneer) in the chain per operation. Because `virtual_sensor.cpp` and
 `solve_pose.cpp` also changed in this same span, this is a supporting
 signal, not a clean isolated proof — the timing measurement above is the
 number to trust.
@@ -288,7 +288,7 @@ Not yet done: an end-to-end `solve_knob_pose` retiming with this change —
 only `BicubicField.cpp` was isolated-compiled/verified, not the full linked
 binary (blocked by the same registry access issue noted above). Worth
 re-running the wall-clock measurement from the "first optimization pass"
-above once this lands, and updating the `MagnetModel`/`Sensor`/`ForwardModel`/
+above once this lands, and updating the `MagnetModel`/`VirtualSensor`/`ForwardModel`/
 `solve_knob_pose` rows in the operation tally, which all currently still
 reflect the old `BicubicField::evaluate` cost.
 
@@ -312,7 +312,7 @@ also passes on the host, 384/384 grid points.
   rotation now lives in `MotionController::last_R`. Payoff is data-dependent:
   near-free at rest, largest while the knob is moving; not captured by the
   fixed-iteration benchmark below, which hot-starts every run identically.
-- **`R_mag` folded into `R_total`** (`sensor.cpp`). `R·(R_mag·J·R_magᵀ)·Rᵀ`
+- **`R_mag` folded into `R_total`** (`virtual_sensor.cpp`). `R·(R_mag·J·R_magᵀ)·Rᵀ`
   is `R_total·J·R_totalᵀ`; four 3×3 products become two, and the field rotation
   collapses the same way.
 - **`R_magᵀ·m` precomputed** into `MagnetModel::magnet_offset_local`, per
@@ -368,7 +368,7 @@ Attribution (same 4000-solve run, instructions by function):
 | | pre-change | post-change | delta |
 |---|---:|---:|---:|
 | Eigen `gebp_kernel` + `gemm_pack` (general blocked matmul) | 16,758,522 | **0** | −16.8M |
-| `Sensor::evaluate` | 17,525,448 | 12,260,127 | −5.3M |
+| `VirtualSensor::evaluate` | 17,525,448 | 12,260,127 | −5.3M |
 | `solve_knob_pose` | 4,877,296 | 9,251,607 | +4.4M |
 
 The symmetric-`JᵀJ` change was the single biggest win, bigger than estimated:
@@ -378,7 +378,7 @@ not a 9×6), and replacing it with 21 explicit dot products deletes that whole
 code path — hence 16.8M instructions to zero, not a partial reduction. The rise
 in `solve_knob_pose`'s own count is that deleted work moving *into* the function
 as inlined scalar code rather than a remote call, which is why it shows up
-there instead of vanishing outright. `sensor.cpp`'s own algebra changes landed
+there instead of vanishing outright. `virtual_sensor.cpp`'s own algebra changes landed
 smaller than estimated (~5.7% of the pre-change total vs an early ~9.3% guess).
 
 **Real ARM build** (`toolchain-rp2040-earlephilhower`, `pio run -e
@@ -456,7 +456,7 @@ value) are the pre-fix ones and no longer describe the code.
   inlining even further~~ — done for `BicubicField::evaluate`, see above:
   no, inlining directives alone don't reach it, manual algebraic
   reassociation was required. Worth checking whether the same applies to
-  `MagnetModel`/`Sensor`/`ForwardModel`'s Eigen usage, or whether it's worth
+  `MagnetModel`/`VirtualSensor`/`ForwardModel`'s Eigen usage, or whether it's worth
   dropping `__not_in_flash_func` from some of these functions given how much
   of their work already ends up in flash-resident Eigen internals anyway.
 - Quasi-Newton Jacobian reuse (parked above) as a way to cut the iteration
