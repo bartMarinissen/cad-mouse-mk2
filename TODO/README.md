@@ -99,6 +99,11 @@ too, not just the file.
   boundary as double buffers gated by a spinlocked counter held across the
   copy. Telemetry is a third channel that doesn't fit that shape and is
   undesigned; nothing is implemented.
+- **[`on-device-calibration.md`](on-device-calibration.md)** — Feasibility of
+  running the whole bundle calibration on the knob instead of the PC. Both
+  feasibility questions now have answers (the Jacobian wraps the existing
+  forward model; Schur elimination makes the normal equations fit in RAM),
+  verified by a prototype outside the build. Whether to build it is open.
 - **[`tare-and-calibration.md`](tare-and-calibration.md)** — `CalibratingState`'s
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.

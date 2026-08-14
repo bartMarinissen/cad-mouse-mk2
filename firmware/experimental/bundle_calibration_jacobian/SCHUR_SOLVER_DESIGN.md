@@ -161,28 +161,20 @@ transient during pass 1 (`FrameNormalEquations<P>`, P² + 7P + 6 floats),
 ~1.2 KB during pass 2 (`FramePoseBlock<P>`, 7P + 42 floats). Independent
 of N in both passes.
 
-## What's deliberately not here
+## Scope of this document
 
-- **The LM/trust-region outer loop.** Damping, step acceptance, convergence
-  criteria, how many iterations, when to stop — none of that is touched.
-  `SharedNormalEquations`/`FrameNormalEquations` are the per-iteration inner
-  machinery a loop like that would call into.
-- **Sparsity within `H_ss`/`H_spf`.** Per `bundle_shared_jacobian.h`'s design,
-  most shared-parameter groups (tilt, offset, gain) only touch one sensor's 3
-  rows per frame — only `magnet_pos` and `magnet_strength_mean` are genuinely
-  dense across all 3 sensors. A frame's `H_ss` contribution is therefore far
-  sparser than the dense P×P this implementation forms. Exploiting that would
-  cut real per-frame compute, but requires the concrete P=45 column layout
-  (which groups own which columns) to be nailed down first — deliberately
-  deferred rather than guessed at now. This implementation is the correct,
-  exact, general-purpose version; a sparse-aware `add_sensor` is a follow-up
-  optimization on top of it, not a different algorithm.
-- **Wiring `evaluate_bundle_jacobian`'s raw `SharedJacobianBlock` (and
-  `bundle_linear_jacobian.h`'s gain/offset derivatives) into the P-wide
-  `J_shared_scaled` columns `add_sensor` expects.** That's the gauge-basis
-  projection step (`MAGNET_POS_BASIS`, `TILT_UNIT_BASIS`, etc.) plus per-
-  observation sigma weighting — real work, but a separate, well-scoped next
-  step now that the accumulator shape it feeds into is settled and verified.
-- **The on-device magnet-tilt SO(3) parameterization decision**, already
-  flagged in `README.md` — still open, still blocks the tilt columns
-  specifically.
+This is the accumulator shape and the algebra it implements. The outer
+solver — damping, step acceptance, convergence, and the wiring that turns raw
+per-sensor derivatives into the P-wide columns `add_sensor` expects — is not
+here. `TODO/on-device-calibration.md` owns the full list of what is and isn't
+built, and the open questions.
+
+One design point belongs here rather than there, because it is about this
+shape specifically: **the dense P×P is deliberate, not an oversight.** Most
+shared-parameter groups touch only one sensor's 3 rows per frame — only
+magnet position and the strength mean are genuinely dense across all three —
+so a frame's real contribution is far sparser than the P×P this forms.
+Exploiting that needs the concrete column layout settled first, and it is a
+strict optimization on top of this: same algorithm, same answer, less
+arithmetic. Getting the exact general version right first is what makes a
+sparse version checkable against something.
