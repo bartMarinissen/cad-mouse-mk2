@@ -25,7 +25,7 @@ uv run python bundle_callibration.py --replay <run> --emit-cpp   # + firmware co
 uv run --group dev python -m pytest tests/ -q
 ```
 
-A fit over a captured run takes a few seconds.
+A fit over a captured run is interactive -- seconds, not minutes.
 
 ## What bundle calibration is for
 
@@ -37,21 +37,24 @@ Tilt" problem this fork exists to fix (see `../ARCHITECTURE.md`).
 
 Calibration recovers, per unit:
 
-| Group | Count | Meaning |
-|---|---|---|
-| `magnet_pos` | 3 | in-plane shape of the magnet triangle (mm) |
-| `magnet_tilt` | 3x2 | magnet axis tilt (rad) |
-| `magnet_strength_mean` | 1 | common-mode polarization multiplier |
-| `magnet_strength_diff` | 2 | how much individual magnets differ from it |
-| `sensor_offset` | 3x3 | DC offset on the raw reading (mT) |
-| `gain_aniso` | 3x2 | per-axis sensitivity spread |
-| `gain_sym` | 3x3 | cross-axis skew |
-| `gain_rot` | 3x3 | sensor frame misalignment |
+| Group | Meaning |
+|---|---|
+| `magnet_pos` | in-plane shape of the magnet triangle (mm) |
+| `magnet_tilt` | magnet axis tilt (rad) |
+| `magnet_strength_mean` | common-mode polarization multiplier |
+| `magnet_strength_diff` | how much individual magnets differ from it |
+| `sensor_offset` | DC offset on the raw reading (mT) |
+| `gain_aniso` | per-axis sensitivity spread |
+| `gain_sym` | cross-axis skew |
+| `gain_rot` | sensor frame misalignment |
 
-45 shared parameters, plus one free 6-DOF pose per captured frame — a
-bundle adjustment, in the photogrammetry sense. There is deliberately no
-isotropic/scale gain parameter; see the gauge note below for why sensor gain
-and magnet strength don't compete for the same degree of freedom.
+Each group's size, and the flat vector's layout, is declared by `BLOCKS` /
+`GROUP_SLICES` in `parameterization.py` — read the count there rather than
+from a total written down here. Together with one free 6-DOF pose per captured
+frame this is a bundle adjustment, in the photogrammetry sense. There is
+deliberately no isotropic/scale gain parameter; see the gauge note below for
+why sensor gain and magnet strength don't compete for the same degree of
+freedom.
 
 ## Package layout
 
@@ -73,26 +76,27 @@ protocol.py / serial_link.py / session.py / collector.py / tui.py   capture side
 
 **Analytic Jacobian.** Every derivative in `bundle_geometry.py` is the same
 closed-form chain rule the firmware uses in
-`firmware/src/magnet_model/sensor.cpp`, layered on the local field gradient
+`firmware/src/magnet_model/virtual_sensor.cpp`, layered on the local field gradient
 from `local_field.py`. The previous version finite-differenced the entire
 shared vector per frame — tens of thousands of magpylib calls per solver
 iteration. `tests/test_jacobian.py` checks every derivative against central
 differences, mirroring `firmware/test/test_jacobian.cpp`.
 
-**Weighting.** Sensors span ~9-70 mT over a run, and the error budget is part
-absolute (~0.1 mT read noise, measured on a stationary knob) and part
-relative (~2% unmodelled field-shape error). A flat sigma therefore lets the
-close-to-the-magnet frames dominate. `ResidualWeights` uses
-`hypot(absolute, relative * |B|)` per sensor per frame, keyed off the
-**measured** magnitude — a weight that depended on the prediction would bias
-the fit toward shrinking |B|.
+**Weighting.** A sensor's reading varies over nearly an order of magnitude
+across a run, and the error budget is part absolute (read noise, measured on a
+stationary knob) and part relative (unmodelled field-shape error) — the two
+constants are declared on `ResidualWeights` in `bundle_params.py`. A flat
+sigma therefore lets the close-to-the-magnet frames dominate.
+`ResidualWeights` uses `hypot(absolute, relative * |B|)` per sensor per frame,
+keyed off the **measured** magnitude — a weight that depended on the prediction
+would bias the fit toward shrinking |B|.
 
-**Single joint solve, not staging.** Every one of the 45 shared parameters is
-freed at once, in one `least_squares` call. An earlier version froze
-parameters in a warm-started ladder (gain scale and DC offset → magnet
-geometry → the weak cross-axis gain terms) on the theory that a cold start
-needed the help. Ablated against real and synthetic data — checking recovered
-parameters, not just residual level, since a bad local optimum can still
+**Single joint solve, not staging.** Every shared parameter is freed at once,
+in one `least_squares` call. An earlier version froze parameters in a
+warm-started ladder (gain scale and DC offset → magnet geometry → the weak
+cross-axis gain terms) on the theory that a cold start needed the help.
+Ablated against real and synthetic data — checking recovered parameters, not
+just residual level, since a bad local optimum can still
 converge to a low residual — a single unstaged solve reaches the same optimum
 every time. `SolveStage`/`BundleCalibrationProblem.build_problem` still exist,
 purely as a way to isolate a parameter subset for testing (e.g. "fit only
@@ -100,17 +104,19 @@ magnet strength, holding everything else at nominal").
 
 **No isotropic gain term, ever.** Sensor gain scale and magnet strength
 describe the same thing from opposite ends: a sensor reading 5% high and its
-magnet being 5% strong differ only through cross-talk, which is ~1% of the
-signal here and so comparable to the model error. An earlier version fixed
-this with a runtime pass — freeing an isotropic `gain_iso` parameter and then
-transferring it into strength via a final `det(G)=1` renormalization stage.
-That machinery is gone: `GAIN_BASIS` (`parameterization.py`) is now built from
-only the 8 basis matrices that are exactly traceless (asserted at import
-time), so `det(I + A) = 1 - tr(A²)/2 + det(A) ≈ 1` for *any* parameter value,
-automatically, to second order — good to the same precision the old runtime
-transfer already tolerated. There is no competing scale parameter for
-`magnet_strength` to wait behind, so it is free from the start of the (single)
-solve, not a final phase.
+magnet being 5% strong differ only through cross-talk, which is a small
+fraction of the signal and comparable to the model error
+(`../TODO/cross-magnet-interference.md` owns that measurement). An earlier
+version fixed this with a runtime pass — freeing an isotropic `gain_iso`
+parameter and then transferring it into strength via a final `det(G)=1`
+renormalization stage. That machinery is gone: `GAIN_BASIS`
+(`parameterization.py`) is now built only from basis matrices that are exactly
+traceless — asserted at import time, so the property is enforced rather than
+documented — giving `det(I + A) = 1 - tr(A²)/2 + det(A) ≈ 1` for *any*
+parameter value, automatically, to second order — good to the same precision
+the old runtime transfer already tolerated. There is no competing scale
+parameter for `magnet_strength` to wait behind, so it is free from the start of
+the (single) solve, not a final phase.
 
 **Pose solving.** Every frame's pose is solved in one batched
 Levenberg-Marquardt rather than a Python loop, since the frames are
@@ -122,7 +128,10 @@ residual, not the damping factor: `calibration_algorithm.py` only fits frames
 that passed this gate (evenly decimated down to a runtime cap — see
 `DEFAULT_N_FRAMES` — not selected for diversity; a farthest-point frame
 selector used to run here, but frame choice barely affects the result, so it
-was deleted rather than kept for a benefit that wasn't there).
+was deleted rather than kept for a benefit that wasn't there). The cap exists
+because fitting every captured frame costs orders of magnitude more solver
+time, at a much larger problem dimension, for no accuracy that ablation could
+detect: the limit is systematic model error, not sample noise.
 
 **Reported uncertainty.** Each frame's 6 pose parameters touch only that
 frame's 9 residuals, so the pose block of the normal equations is
@@ -145,11 +154,12 @@ Recorded explicitly, because several are load-bearing:
    bottom face lands on `z=0`, so that is what `positions.h`'s magnet
    positions mean. magpylib positions a cylinder by its centre, so
    `local_field.py` adds the half-height. Getting this wrong shifts the model
-   3mm and inflates the predicted field roughly 3x at rest.
+   by that half-height and inflates the predicted field severalfold at rest —
+   it is not a subtle error, but it is a silent one.
 2. **The raw sensors' sign flip is attributed to magnet polarity, not gain.**
    The capture path streams `readUncorrected()`, and the raw sensors read the
    opposite sign to the field `local_field.py` models. The firmware carries
-   that in `Config::magnet_gains` (`{-0.96, -1.2, -0.98}`); here
+   that in `Config::magnet_gains` (see `Config.h` for the values); here
    `MAGNET_POLARITY = -1` carries it instead, so `local_field.py` stays a
    direct counterpart of the firmware's table and both fitted quantities read
    naturally (gain near `+I`, strength near `1`). The exported firmware gain
@@ -161,28 +171,29 @@ Recorded explicitly, because several are load-bearing:
    offsets, which are related to it by a per-frame pose anyway.
 4. **Magnet strength is split into common mode and differential, and the
    common mode carries no prior at all.** A prior would have to be centred on
-   `local_field.py`'s 600mT polarization, which is a round guess rather than a
-   measurement of these magnets — asserting a belief nobody holds, and
+   `local_field.py`'s nominal polarization (`MAGNET_POLARIZATION_MT`), which
+   is a round guess rather than a measurement of these magnets — asserting a
+   belief nobody holds, and
    dragging the fitted field scale toward an arbitrary number. So it is left
    free and reported with its own posterior sd.
 
-   The result is worth knowing: **the data does not determine the absolute
-   field scale.** Unregularized, the fit settles around 1.29–1.39 across the
-   three runs — but with a posterior sd of ±0.43, i.e. under 1σ from nominal,
-   and the residual only improves from 0.315% to 0.310% across that entire
-   39% swing. The direction is very nearly flat, because a uniform scale
+   The consequence is the important part: **the data does not determine the
+   absolute field scale.** Its posterior sd is wide enough that the fitted
+   value sits inside 1σ of nominal, and the residual barely moves across that
+   whole range. The direction is very nearly flat, because a uniform scale
    change is largely absorbable by every frame's pose moving further away, and
-   only the shape of |B| versus distance breaks it — over ~3mm of heave, only
-   barely. Read the fitted strength as "unconstrained", not as "the magnets
-   are 39% stronger than nominal". Dropping the prior did not reveal a better
-   value; it revealed that there was never one to reveal.
+   only the shape of |B| versus distance breaks it — over the few mm of heave
+   the mechanism allows, only barely. **Read the fitted strength as
+   "unconstrained", not as a measurement of how strong the magnets are.**
+   Dropping the prior did not reveal a better value; it revealed that there
+   was never one to reveal.
 
-   The *differential* part keeps its prior (1%), because that justification is
-   independent of the 600mT figure: it says magnets cut from one batch are
-   graded to about that of each other, which is a real belief about the parts.
-   Empirically the constraint is free — sweeping it from 0.2 down to 0.0002
-   moves the residual by 0.001 percentage points, so per-magnet differences
-   were never explaining anything. The apparent per-sensor spread is accounted
+   The *differential* part keeps its prior, because that justification is
+   independent of the nominal figure: it says magnets cut from one batch are
+   graded to roughly that of each other, which is a real belief about the
+   parts. Empirically the constraint is nearly free — sweeping it over three
+   orders of magnitude barely moves the residual, so per-magnet differences
+   were never explaining much. The apparent per-sensor spread is accounted
    for by magnet position and DC offset instead.
 
 5. **DC offset is applied on the raw side, after gain.** It is a property of
@@ -197,10 +208,9 @@ Recorded explicitly, because several are load-bearing:
    translation or rotation of the magnet trio is exactly cancelled by a
    compensating per-frame pose change — `mⱼ → Q mⱼ` with `R_n → R_n Qᵀ`
    leaves `R_n Qᵀ Q mⱼ = R_n mⱼ` untouched — so 6 of the 9 raw magnet
-   coordinates carry no information whatsoever. Measured: 6 eigenvalues at
-   machine zero in the reduced Hessian, identically at 60, 120 and 387
-   frames. No dataset fixes this; each new frame brings 9 equations but also
-   6 new pose unknowns.
+   coordinates carry no information at all — they show up as eigenvalues at
+   machine zero in the reduced Hessian, at every frame count tried. No dataset
+   fixes this; each new frame brings 9 equations but also 6 new pose unknowns.
 
    `MAGNET_POS_BASIS` removes them by construction, via three constraints:
    zero mean offset (kills translation), all z offsets equal (makes the
@@ -217,49 +227,30 @@ Recorded explicitly, because several are load-bearing:
    give 5 position + 4 tilt. Total observable is 9 either way; only the
    presentation differs.)
 
-   Two things this bought. Conditioning: the reduced Hessian's condition
-   number drops from 2e305 (numerically singular) to 2e6. And frame count
-   starts to matter — with all priors off, cross-run spread now improves
-   2.1x going from 60 to 387 frames, against the √6.45 = 2.5 that pure
-   averaging predicts, where before the gauge fix it was flat. Null
-   directions cannot be out-voted by data; merely weak ones can.
+   Two things this bought. Conditioning: the reduced Hessian goes from
+   numerically singular to comfortably invertible. And frame count starts to
+   matter at all — with priors off, cross-run spread now improves with more
+   frames at close to the rate pure averaging predicts, where before the gauge
+   fix it was flat. Null directions cannot be out-voted by data; merely weak
+   ones can.
 
 8. **Gain is fitted on the model side, exported inverted.** See
    `export.py` — the firmware applies gain to the raw measurement, this fit
    applies it to the model, so the exported matrix is the inverse (with
    `MAGNET_POLARITY` folded back in, landing near `-I`).
 
-## Measured behaviour
+## Reading the fitted numbers
 
-Against the three captured runs in `calibration_runs/` (same hardware):
+The fit's own report is the authority on what a given run achieved — residual,
+posterior sds, and per-group information gain are printed for the run in front
+of you rather than written down here, where they would rot.
 
-- Field residual: **1.6-1.9% at nominal geometry → 0.26-0.34% fitted**, in a
-  single unstaged solve.
-- Runtime: well under a second at the default 60 frames. Solving all ~387
-  captured frames unstaged instead costs 40+ seconds (more `least_squares`
-  outer iterations at ~6x the problem dimension) for no measurable accuracy
-  gain — see the next point — which is the actual reason `DEFAULT_N_FRAMES`
-  still exists.
-- Cross-run agreement: magnet positions reproduce to ~0.007mm, and every
-  parameter group's run-to-run spread is a fraction of its posterior sd.
-- Sensor DC offsets are real and worth fitting: adding them took the
-  nominal-geometry residual from 1.53% to 0.97% before any other parameter is
-  freed, and the final fitted result from 0.37% to 0.33%. They are also the
-  best-determined group in the whole fit (~65% information gain), which is
-  what you would expect of a constant that does not move with pose. The fitted
-  values reach ~1 mT, mostly on z.
-- Frame count barely matters: 30, 60, 120, 200 and all 387 frames land within
-  0.03 percentage points of each other. The limit is systematic model error,
-  not sample noise, and *which* frames are used barely matters either — an
-  earlier version picked a diverse subset by farthest-point sampling over pose
-  space; that machinery was deleted once ablation showed it wasn't earning its
-  complexity. Frames are now just evenly decimated down to the runtime cap.
-
-Note that reproducibility is not the same as identifiability: the weakly
+Reading them: reproducibility is not the same as identifiability. The weakly
 determined directions (magnet z-offset against gain scale, in particular)
 reproduce consistently because the *prior* resolves them the same way every
-time, not because the data measured them. The information-gain column is
-what distinguishes the two.
+time, not because the data measured them. The information-gain column is what
+distinguishes the two, and a low value there is not a bug — it marks a
+parameter the data barely constrained.
 
 ## Still open
 
@@ -273,7 +264,7 @@ what distinguishes the two.
   *host* — the firmware's own `static_assert`s are what pin the target, and
   nothing here has run on hardware yet.
 - Running the fit on the knob itself. The analytic Jacobian this needs is
-  already here, and the firmware has the same chain rule in `sensor.cpp`. An
+  already here, and the firmware has the same chain rule in `virtual_sensor.cpp`. An
   on-device solve would need an O(n_frames) per-frame Schur elimination
   driving the actual solve (not just the reporting-only covariance
   `covariance_shared` computes today via a plain dense inverse, which is
@@ -281,21 +272,23 @@ what distinguishes the two.
   see git history for a prior implementation of that reduction. The storage
   half of that is done: a result fitted on the knob would have somewhere to
   land, via `CalibrationStorage`.
-- Magnet strength stays weakly determined (~7% information gain). Scaling a
-  magnet and moving it closer both scale |B|; only the shape of |B| versus
-  distance separates them, and HEAVE supplies ~3mm of travel to do it with.
-  More Z range would help, but the mechanism limits how much is available
-  before the magnet leaves the modelled region.
+- Magnet strength stays weakly determined — its information gain is among the
+  lowest in the fit. Scaling a magnet and moving it closer both scale |B|;
+  only the shape of |B| versus distance separates them, and the HEAVE step
+  supplies just a few mm of travel to do it with. More Z range would help, but
+  the mechanism limits how much is available before the magnet leaves the
+  modelled region.
 - The `magnet_pos` prior is now optional rather than load-bearing. With the
-  gauge fixed explicitly, dropping it entirely costs almost nothing: cross-run
-  spread goes from 0.0041mm to 0.0053mm and the residual is unchanged. It is
-  kept at 0.3mm because the knob is 3D printed and a few tenths of a
-  millimetre is a well-founded statement about that process - unlike the 600mT
-  figure. It is now a belief the fit could do without, which is the point of
-  fixing the gauge properly, but it earns its place.
-- The absolute field scale is not measurable from this capture (±0.43 on a
-  multiplier of 1). If it is worth knowing — and it would tighten the z
-  sensitivity of the whole pose solve — it needs either much more heave travel
+  gauge fixed explicitly, dropping it entirely barely moves the cross-run
+  spread and leaves the residual unchanged. It is kept (at the width declared
+  in `priors.py`) because the knob is 3D printed and a few tenths of a
+  millimetre is a well-founded statement about that process — unlike the
+  nominal polarization figure. It is now a belief the fit could do without,
+  which is the point of fixing the gauge properly, but it earns its place.
+- The absolute field scale is not measurable from this capture — its posterior
+  sd is a large fraction of the value itself. If it is worth knowing — and it
+  would tighten the z sensitivity of the whole pose solve — it needs either
+  much more heave travel
   or an independent measurement of one magnet's remanence. Note the boot tare
   cancels a systematic z bias, so the practical cost of getting it wrong is
   mostly a slightly mis-scaled z axis, not an offset.

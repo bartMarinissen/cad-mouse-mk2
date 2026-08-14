@@ -35,10 +35,12 @@ static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm (or your length unit)
 static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
-// Valid domain per BICUBIC_ORIGIN=(0.0,-12.0), BICUBIC_FAR=(6.0,-0.5):
-//   r in [0, 6], z in [-12, -0.5]  (z is always negative - sensor plane
-//   sits below the magnet). Points below are comfortably interior with
-//   margin >> FD_STEP_LINEAR.
+// read BICUBIC_ORIGIN / BICUBIC_FAR in magnet_model_table.h, for the actual
+// domain. This file is generated. 
+// z is always negative -- the sensor plane sits below
+// the magnet. The points below are chosen to sit well inside the current domain, 
+// with margin >> FD_STEP_LINEAR, and deliberately cluster in the region real knob
+// poses actually reach rather than spanning the whole table.
 struct RZSample { float r; float z; };
 static constexpr RZSample BICUBIC_TEST_POINTS[] = {
     { 1.0f, -1.0f },
@@ -92,7 +94,6 @@ static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 // ======================================================================
 // Helpers
 // ======================================================================
-
 
 
 
@@ -293,7 +294,7 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
 // ======================================================================
 
 // Updated to accept hardware calibration states.
-// Sensor gain is no longer part of ForwardModel/Sensor - it's applied by
+// Sensor gain is no longer part of ForwardModel/VirtualSensor - it's applied by
 // SensorController on raw readings before they ever reach the solver - so
 // this exercises the two per-magnet states that *are* still in the model:
 // axis tilt and polarization strength.
@@ -310,10 +311,10 @@ static void compute_forward_model_jacobians(
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2], magnet_strengths[2]),
     };
 
-    Sensor sensors[3] = {
-        Sensor(SENSOR_POS[0]),
-        Sensor(SENSOR_POS[1]),
-        Sensor(SENSOR_POS[2]),
+    VirtualSensor sensors[3] = {
+        VirtualSensor(SENSOR_POS[0]),
+        VirtualSensor(SENSOR_POS[1]),
+        VirtualSensor(SENSOR_POS[2]),
     };
     ForwardModel fm(sensors, magnets);
 

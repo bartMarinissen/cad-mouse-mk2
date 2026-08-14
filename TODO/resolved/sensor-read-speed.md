@@ -1,3 +1,23 @@
+> **RESOLVED — implemented, archived for the reasoning.**
+>
+> The whole decision below (Master-Controlled Mode, trigger-on-read via
+> `TLx493D_ADC_ON_READ_AFTER_REG_05_e`, bus left at 400kHz) shipped in
+> `7d1fb42`, with the read-gap re-trigger added in `26e604d` and the
+> first-conversion note in `f2ac71c`. See
+> `SensorController::setup_sensor()`/`readUncorrected()`.
+>
+> The live description is **`ARCHITECTURE.md` → "Sensor read timing"**; this
+> file is kept only for the derivation and the datasheet reasoning behind it.
+>
+> Of the open questions at the bottom, two are answered (the Infineon library
+> does expose the trigger bits via `setTrigger()`; the clock stays at 400kHz).
+> **One is still genuinely unverified: whether the RP2040 Arduino `Wire`
+> implementation honours slave clock stretching.** The design depends on it
+> and it has not been checked on hardware — that caveat is carried forward in
+> `ARCHITECTURE.md`.
+
+---
+
 # Switch sensors to Master-Controlled Mode for faster, fresher reads
 
 `SensorController` never calls `setPowerMode()`, so all three TLI493D-A2B6

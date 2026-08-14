@@ -1,3 +1,29 @@
+> **RESOLVED — archived for the reasoning.**
+>
+> All three problems below are closed:
+>
+> - **Problem 2** (forward model living at translation-unit scope) was fixed
+>   by the `CalibrationParams` work — `1883bc2` gave the calibration an owner
+>   and `20f5f4d` replaced the controller globals with per-controller
+>   accessors. `MotionController` now holds a `const ForwardModel` member.
+> - **Problem 3** is closed by code: `BundleCalibrationController::update()` no
+>   longer takes a `SensorController&`: it reaches for `sensorController()` like
+>   it already did for `ledController()`, so the class uses one access pattern
+>   throughout. The "only read the sensors if we need them" rationale that the
+>   parameter used to carry now sits at the read itself in
+>   `BundleCalibrationController.cpp`.
+> - **Problem 1** is closed by decision rather than by code change: no
+>   controller owns another, and reaching a sibling through its
+>   `Controllers.h` accessor is the project's sanctioned pattern. The thing
+>   that was actually wrong — `SensorController.cpp`'s inline
+>   `extern MotionController motionController;`, bypassing the accessors — is
+>   gone. The `motionController().read_pose()` call in `updateCalibration()`
+>   stays and is fine.
+>
+> The live statement of the rule is **`ARCHITECTURE.md` → "Controllers"**.
+
+---
+
 # Fix controller ownership / coupling around the pose pipeline
 
 Originated from ARCHITECTURE.md issues #4 and #5. Confirmed as real
@@ -59,24 +85,26 @@ time, invisible to any header, with no accessor and no way to reconstruct or
 mutate it at runtime.
 
 This matters beyond style: it's the reason there's currently no path for a
-future calibration write-back (see `TODO/sensor-gain-calibration.md`) to ever
+future calibration write-back (see `TODO/resolved/sensor-gain-calibration.md`) to ever
 reach the running `Sensor`/`MagnetModel` instances — they're not reachable
 from anywhere calibration code could plug into.
 
 Likely fix shape: `MotionController` (or a new owner, depending on how
-`TODO/sensor-gain-calibration.md` resolves) should own `sensors`, `magnets`,
+`TODO/resolved/sensor-gain-calibration.md` resolves) should own `sensors`, `magnets`,
 and `forward_model` as members, constructed from whatever config/calibration
 source is decided, with `J`/`B_field` either wired to an actual use or
 deleted.
 
 ## Problem 3: `BundleCalibrationController` mixes both access patterns — RESOLVED
 
-Not actually an inconsistency: `BundleState.cpp` already documents why
-`SensorController` comes in as an explicit parameter to `update()` instead of
-through `sensorController()` — "so the callibrator can be selective in when
-it wants to read the sensor." That's a deliberate reason for the split, not
-two competing access patterns with none. The original description follows,
-for context.
+Closed by dropping the parameter: `update()` now takes only `button_bits` and
+calls `sensorController()` itself, matching the `ledController()` call it
+already made. This was reconsidered once — the explicit parameter was briefly
+read as deliberate, on the strength of a `BundleState.cpp` comment saying it
+let the calibrator "be selective in when it wants to read the sensor." But
+selectivity never depended on how the controller got its reference, only on
+where it chose to call `readUncorrected()`, so the parameter bought nothing the
+accessor didn't. The original description follows, for context.
 
 Every controller is reached through its own accessor function (`ledController()`,
 `sensorController()`, ...) declared in `Controllers.h` — that's the project's

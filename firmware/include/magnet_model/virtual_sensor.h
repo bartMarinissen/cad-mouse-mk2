@@ -3,10 +3,10 @@
 #include "magnet_local_model.h"
 
 
-struct Sensor {
+struct VirtualSensor {
     Vec3 sensor_pos_global;
 
-    Sensor(Vec3 sensor_pos_global);
+    VirtualSensor(Vec3 sensor_pos_global);
 
     void evaluate(const MagnetModel &magnet, const Vec3& t,  
         const Mat3& R, 

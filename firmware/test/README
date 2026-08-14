@@ -1,11 +1,68 @@
+# firmware/test/ — PlatformIO Unit Tests
 
-This directory is intended for PlatformIO Test Runner and project tests.
+Run with:
 
-Unit Testing is a software testing method by which individual units of
-source code, sets of one or more MCU program modules together with associated
-control data, usage procedures, and operating procedures, are tested to
-determine whether they are fit for use. Unit testing finds problems early
-in the development cycle.
+```bash
+pio test -e seeed_xiao_rp2040_test
+```
 
-More information about PlatformIO Unit Testing:
-- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+That environment extends the normal build but unsets `-DNDEBUG`, so Eigen's
+assertions are live while testing. `test_build_src = yes`, so the tests link
+against the real firmware sources rather than a stub.
+
+## Why `test_jacobian.cpp` matters more than a typical unit test
+
+The pose solver needs a 9x6 Jacobian of the forward model on every
+Levenberg-Marquardt iteration, on a microcontroller with no hardware FPU.
+Finite-differencing it in the hot path is far too expensive, so **every
+derivative in the chain is hand-derived closed-form algebra** — see
+`design documentation/Math.md` for the derivation and `ARCHITECTURE.md` for
+where each layer lives.
+
+Hand-derived derivatives fail silently. A sign error or a dropped term in a
+Jacobian does not crash and does not obviously break the output: the solver
+still converges, just more slowly, to a slightly wrong pose, or it becomes
+unstable only in poses you didn't happen to try. Nothing else in the project
+will catch it.
+
+`test_jacobian.cpp` is that check. It compares each analytic Jacobian against
+central finite differences of the same function, layer by layer:
+
+1. `BicubicField::evaluate()` — the `d_dr`/`d_dz` partials it returns
+2. `MagnetModel::evaluate()` — `J_local = dB_l/dv_l`, including the r=0
+   axis branch where the general formula's `1/r` terms are singular
+3. `ForwardModel::evaluate()` — the full 9x6, translation and rotation blocks,
+   swept over a grid of poses and under both nominal and
+   deliberately-tolerance-perturbed magnet tilt/strength
+
+Plus one test that is not a finite-difference check: magnet strength must
+scale the field *and* the Jacobian by exactly the same ratio, with no residual
+change in shape. That is the assumption behind applying strength to the six
+cylindrical quantities inside `evaluate()` instead of to the assembled
+outputs, and it is what catches someone later scaling only the field, or
+scaling on the wrong side of the r=0 L'Hopital branch.
+
+**Run it after touching any `evaluate()` under `firmware/src/magnet_model/`,
+or anything either `Math.md` or the analytic Jacobians depend on.** That
+includes changes intended to be pure refactors or optimizations — the solver
+algebra has been rewritten for speed more than once, and this test is what
+established those rewrites were numerically equivalent rather than merely
+plausible.
+
+## Things to know before trusting a result
+
+- **Step sizes carry unit assumptions.** `FD_STEP_LINEAR` and
+  `FD_STEP_ANGULAR` at the top of the file assume millimetres and radians. If
+  the state vector's units ever change, these have to change with them, or the
+  comparison silently loses precision instead of failing loudly.
+- **The probe points must stay inside the interpolation table's domain.** The
+  `(r, z)` points the derivative checks use are chosen to sit interior to the
+  bicubic grid, away from the edge-extrapolation region. The grid bounds live
+  in `magnet_model_table.h`, which is generated — read them there rather than
+  trusting any comment. If they change, re-check the probes: a point that
+  falls outside is testing extrapolation, not the thing you meant to test.
+  The probes deliberately cover the region real knob poses reach, not the
+  whole table, so passing is not a statement about the table's outer edges.
+- **Rotation perturbations use the exact matrix exponential**, not the
+  first-order approximation the derivation linearizes around. Using the
+  first-order form on both sides would let a shared error cancel and hide.

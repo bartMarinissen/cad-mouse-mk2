@@ -123,7 +123,7 @@ bool SensorController::begin() {
 // stretching (the driver's default CA=0/INT=1 config) makes a read block
 // for as long as its conversion is still running, so cycling through the 3
 // sensors back-to-back keeps each one's data fresh with no manual delay --
-// see TODO/sensor-read-speed.md for the full design.
+// see ARCHITECTURE.md's "Sensor read timing" for the full design.
 //
 // That self-triggering only works if reads keep happening often enough. If
 // nobody has called this in a while, the sensor's last-armed conversion
@@ -187,6 +187,10 @@ void SensorController::beginCalibration() {
   calibration_rot = Vec3::Zero();
 }
 
+// Note, this should be folded into MotionController.
+// This used to zero-out the magnetic field at the rest pose.
+// Now it just measures the rest pose directly.
+// See 'TODO/tare-and-calibration.md'
 void SensorController::updateCalibration() {
   if (!calibrationActive_) {
     return;
@@ -194,7 +198,7 @@ void SensorController::updateCalibration() {
 
   const unsigned long now = millis();
   if (lastCalibrationSampleMs_ != 0 &&
-      (now - lastCalibrationSampleMs_) < 10) {
+      (now - lastCalibrationSampleMs_) < 2) {
     return;
   }
   lastCalibrationSampleMs_ = now;
@@ -207,22 +211,10 @@ void SensorController::updateCalibration() {
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.
   Mat3 R = Mat3::Identity();
-  // Track pose aswell
-  // NOTE: reaching into the sibling controller from here is the coupling
-  // TODO/controller-ownership.md problem #1 is about. Unchanged by this work,
-  // just re-spelled -- it is entangled with the tare redesign.
   float res = motionController().read_pose(raw, pos, R);
   Vec3 rot = extract_angles_robust(R);
   calibration_pos += pos;
   calibration_rot += rot;
-  // Per-sample, so this is the chattiest thing in the firmware.
-  if (Config::ENABLE_TELEMETRY) {
-    Serial.printf("\ncalibrating intermediate pose : t= %f %f %f r= %f %f %f res=%f",
-      pos[0], pos[1], pos[2],
-      rot[0], rot[1], rot[2],
-      res
-    );
-  }
 
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] += raw[i];

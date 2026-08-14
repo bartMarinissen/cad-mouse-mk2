@@ -28,7 +28,7 @@ struct MagnetModel {
     // Math.md 3.2 writes the sensor position in the magnet-local frame as
     //   v_l = R_total^T (s - t) - R_mag^T m
     // where the second term depends only on frozen calibration constants. Doing
-    // it that way lets Sensor::evaluate subtract a constant vector instead of
+    // it that way lets VirtualSensor::evaluate subtract a constant vector instead of
     // performing a second 3x3 rotation on every call.
     const Vec3 magnet_offset_local;
 

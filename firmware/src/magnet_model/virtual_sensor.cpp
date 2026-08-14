@@ -1,11 +1,11 @@
-#include "magnet_model/sensor.h"
+#include "magnet_model/virtual_sensor.h"
 
-Sensor::Sensor(Vec3 sensor_pos_global)
+VirtualSensor::VirtualSensor(Vec3 sensor_pos_global)
     : sensor_pos_global(sensor_pos_global)
     {}
 
 // Evaluate the field a sensor sees from a given magnet, and a given translation from the global frame to the knob frame
-void __not_in_flash_func(Sensor::evaluate)(const MagnetModel &magnet, const Vec3& t,  
+void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &magnet, const Vec3& t,
         const Mat3& R, 
         Eigen::Matrix<float, 3, 1> &B_field_global, 
         Eigen::Matrix<float, 3, 6> &J) const {

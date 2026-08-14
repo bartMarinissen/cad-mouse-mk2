@@ -1,3 +1,22 @@
+> **RESOLVED — archived for the reasoning.**
+>
+> The decision below is implemented: sensor gain and DC offset are applied by
+> `SensorController::read_mT()`, entirely outside the motion/solver system.
+> `Sensor` no longer carries a gain member at all, and the coefficients come
+> from `CalibrationParams` rather than `Config` scalars.
+>
+> Per-magnet strength landed as a real mT polarization on `MagnetModel`
+> (`eb74948`, `9e772aa`). The last open gap in this file — `export.py` still
+> emitting a dimensionless multiplier instead of absolute mT — closed with
+> `firmware_magnet_strength_mT()` (`5abbe41`, `0453da1`).
+>
+> Note the "Current state" section below is written in the present tense but
+> describes the *pre-fix* code (`Config::magnet_gains` as 3 scalars, `Sensor`
+> owning a `Mat3 sensor_gain`). It is history, not a description of the tree.
+> The live description is **`ARCHITECTURE.md`**.
+
+---
+
 # Move sensor gain/skew handling into SensorController, out of the motion system
 
 Originated from ARCHITECTURE.md issue #6. Scope widened per discussion — this
@@ -25,7 +44,7 @@ This is a real architecture shift, not just moving a constant:
 `SensorController::readRaw()` currently returns raw field values straight
 from the sensor driver. Applying a per-sensor `Mat3` gain there means
 `SensorController` needs to own calibration coefficients (currently there's
-nowhere for those to live — see `TODO/controller-ownership.md` for the
+nowhere for those to live — see `TODO/resolved/controller-ownership.md` for the
 related problem of the forward model's `Sensor`/`MagnetModel` instances not
 being owned/reachable anywhere either).
 

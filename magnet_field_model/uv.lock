@@ -915,6 +915,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
     { name = "scipy-stubs" },
+    { name = "types-cffi" },
     { name = "types-pyserial" },
 ]
 
@@ -938,6 +939,7 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "scipy-stubs", specifier = ">=1.18.0.1" },
+    { name = "types-cffi", specifier = ">=1.17" },
     { name = "types-pyserial", specifier = ">=3.5.0.20260712" },
 ]
 
@@ -1897,12 +1899,33 @@ wheels = [
 ]
 
 [[package]]
+name = "types-cffi"
+version = "2.0.0.20260518"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "types-setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/0b/b352742758a6054d1053783887bf8cfb739deda1102fda8722294bdc01f7/types_cffi-2.0.0.20260518.tar.gz", hash = "sha256:f9707e66c13454789a58f8843d1ded4a66f1e9c8b10bd24d5eb5e0f25c0c5472", size = 17790, upload-time = "2026-05-18T06:06:50.672Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/44/d3b4aafa20a3f76384ba19a513d39272add13746dcfe0409d8d4974fd464/types_cffi-2.0.0.20260518-py3-none-any.whl", hash = "sha256:5b68a215a95d0eac4203b58e766ff7fe40c2e091b1fa1a9e54111f04cc560084", size = 20198, upload-time = "2026-05-18T06:06:49.83Z" },
+]
+
+[[package]]
 name = "types-pyserial"
 version = "3.5.0.20260712"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ec/e7/6ce4a4ea526397fd0a1ac122085673f3f81fd3e43f4c77bd2dbe7743d644/types_pyserial-3.5.0.20260712.tar.gz", hash = "sha256:19c0a184e9f39e1282783ed7d35d89d73503bd482b39e072299983704e805d00", size = 20875, upload-time = "2026-07-12T05:13:50.657Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ab/66/00bb637724c659494a41687bf06ac613a860720f7183109fca62986d4f69/types_pyserial-3.5.0.20260712-py3-none-any.whl", hash = "sha256:ee4f34b7432a0608bb016c88cb5b1ad3b960df4784289de56dda471503ceb53d", size = 25323, upload-time = "2026-07-12T05:13:49.523Z" },
+]
+
+[[package]]
+name = "types-setuptools"
+version = "83.0.0.20260807"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/45/49789d4b7424504c99c33bcc0cbd50d84de4a905cd540f1f3eab32a04380/types_setuptools-83.0.0.20260807.tar.gz", hash = "sha256:1ed1a446914afe91658868a8fe8806d1e34ba89f8c3bf8926c7165a428b117a6", size = 45884, upload-time = "2026-08-07T04:16:58.048Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/4b/810b27aa79700bf7e44c0e4415c221906138b50754d80d65a96f253442bd/types_setuptools-83.0.0.20260807-py3-none-any.whl", hash = "sha256:a3b07bc820b397a64f660bbbef5b3738296cac619a0b1ccab261b9ce9325f9b2", size = 68819, upload-time = "2026-08-07T04:16:56.954Z" },
 ]
 
 [[package]]
