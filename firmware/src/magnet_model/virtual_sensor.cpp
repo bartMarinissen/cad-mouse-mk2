@@ -37,7 +37,7 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     const Vec3 B_local = paired.evaluate(sensor_magnet_rel, J_local);
 
     // Straight from magnet-local to global. M is the field's gradient in world
-    // coordinates (Math.md 4.E).
+    // coordinates (Math.md 4.F).
     Vec3 B_total = paired_placement.R_total * B_local;
     Mat3 M_total = paired_placement.R_total * J_local * R_total_T;
 
@@ -79,7 +79,7 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     }
 
     // ... then -[B]_x, which touches six entries rather than nine. Note this
-    // uses the pre-gain physical field, as Math.md 4.E requires, and the
+    // uses the pre-gain physical field, as Math.md 4.F requires, and the
     // summed field rather than the paired magnet's alone.
     const float Bx = B_total.x(), By = B_total.y(), Bz = B_total.z();
     J(0, 4) += Bz;   J(0, 5) -= By;

@@ -38,7 +38,7 @@ static constexpr float ONE_OVER_FOUR_PI = 0.07957747f;
  * m[in] dipole moment, r[in] displacement to the field point, J[out] dB_a/dr_b.
  * Returns the field. See the header for the frame convention.
  *
- * Straight from Math.md 4.G:
+ * Straight from Math.md 4.E:
  *   B   = k[ 3(m.r) r rho^-5  -  m rho^-3 ]
  *   J_ab = k[ 3 rho^-5 (m_a r_b + r_a m_b + (m.r) d_ab)  -  15 (m.r) rho^-7 r_a r_b ]
  */

@@ -17,7 +17,7 @@ constexpr BicubicField CALCULATED_BICUBIC_FIELD(BICUBIC_INTERPOLATION_TABLE, BIC
 // orientation reaches this formula entirely through m -- one rotated vector --
 // so a caller holding a world-frame moment gets a world-frame gradient
 // straight out, skipping the transform-in, rotate-out and R J R^T congruence
-// that the interpolated path needs (Math.md 4.E). The table cannot do that:
+// that the interpolated path needs (Math.md 4.F). The table cannot do that:
 // it is tabulated in (r, z), so it must be handed magnet-local coordinates.
 //
 // Deliberately no r -> 0 branch, unlike MagnetModel::evaluate. This models the
@@ -59,10 +59,10 @@ struct MagnetModel {
     // This is the per-magnet manufacturing tolerance that causes "Phantom Tilt"
     // (a magnet 5% strong reads, to geometry-only math, as a magnet that moved
     // closer), so it belongs to the magnet rather than to the sensor watching
-    // it. Correcting it on the sensor side would be numerically identical today
-    // -- ForwardModel pairs sensor i with magnet i one-to-one -- but stops being
-    // so the moment cross-magnet interference is modelled, since one scalar per
-    // sensor cannot then undo three different magnet strengths.
+    // it. That distinction used to be cosmetic, when each sensor saw exactly
+    // one magnet and a per-sensor scalar could have absorbed it. It no longer
+    // is: every sensor now sees all three magnets, and one scalar per sensor
+    // cannot undo three different magnet strengths.
     const float magnet_strength_mT;
 
     // magnet_rotation^T * magnet_pos_knob, precomputed.
