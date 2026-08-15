@@ -13,10 +13,16 @@ directory.
 Run the checks:
 
 ```bash
-./verify.sh        # Jacobian, against central finite differences
-./verify_schur.sh  # solver shape, against a dense reference solve
-./verify_arm.sh    # cross-compiles for cortex-m0plus, reports flash/RAM cost
+./verify.sh         # raw Jacobians, against central finite differences
+./verify_layout.sh  # P=45 column wiring, against FD of the real prediction
+./verify_schur.sh   # solver shape, against a dense reference solve
+./verify_arm.sh     # cross-compiles for cortex-m0plus, reports flash/RAM cost
 ```
+
+`verify.sh` and `verify_layout.sh` check different things and neither implies
+the other: the first says each raw derivative is correct, the second says they
+are assembled into the right *columns*. A transposed basis or an off-by-one
+magnet index passes the first and fails the second.
 
 The first two build on the host with `g++` and real Eigen 3.4
 (`libeigen3-dev`), no ARM toolchain, and print the measured error for every
