@@ -39,38 +39,26 @@ inline Eigen::Matrix<float, 3, 3> project_magnet_pos(
     return d_magnet_pos_i * MAGNET_POS_BASIS.block<3, 3>(3 * magnet_index, 0);
 }
 
-// TILT_UNIT_BASIS's projection is simpler still -- no cross-magnet mixing at
-// all, just dropping the spin column. Not worth a named constant:
-// `d_magnet_tilt_i.leftCols<2>()` (used directly in the test) is the
-// projection.
+// --- Tilt does NOT get a basis here. See bundle_gnomonic_chart.h. ----------
 //
-// Be precise about what that drops, though, because it is easy to read as
-// stronger than it is. leftCols<2>() removes the third COORDINATE column --
-// the response to eps = e_z. The direction that is actually dead is
-// R_mag.col(2), the magnet's own current polarization axis: the field is
-// invariant under R_mag -> R_mag exp(theta [e_z]_x) (a spin in the magnet's
-// LOCAL frame), and R exp(theta [v]_x) = exp(theta [Rv]_x) R turns that into
-// a left perturbation along R_mag e_z. The two coincide only at zero tilt.
-// test_bundle_shared_jacobian.cpp spins about magnet_rot.col(2) for exactly
-// this reason -- an earlier version used world e_2 and failed against a
-// correct implementation.
+// The PC side's equivalent, TILT_UNIT_BASIS, is [[1,0],[0,1],[0,0]] -- it
+// drops the third COORDINATE column, the response to eps = e_z. The direction
+// actually dead is R_mag.col(2), the magnet's own current polarization axis:
+// the field is invariant under R_mag -> R_mag exp(theta [e_z]_x) (a spin in
+// the magnet's LOCAL frame), and R exp(theta [v]_x) = exp(theta [Rv]_x) R
+// turns that into a left perturbation along R_mag e_z. Those coincide only at
+// zero tilt, so that basis is a nominal-frame gauge choice rather than an
+// exact annihilator -- fine in practice at tolerance-sized tilts, but only
+// approximately the thing it claims to be.
 //
-// So this is a nominal-frame gauge choice, exact only at zero tilt, not an
-// exact annihilator of the null direction. At the real tilts involved
-// (manufacturing tolerance, a degree or two) the leftover null component is
-// correspondingly small: the parameterization stays well-posed, the ridge
-// prior absorbs the near-null residue, and it matches what the PC side does,
-// since parameterization.py builds TILT_UNIT_BASIS from nominal geometry
-// too. The Jacobian columns themselves are exact regardless -- this is about
-// which 2-D subspace of them gets fitted, not about a wrong derivative.
+// On-device this is done differently, and exactly: bundle_gnomonic_chart.h
+// parameterizes the axis DIRECTION itself, so spin is unrepresentable rather
+// than projected away, and its chart_jacobian()'s columns are perpendicular
+// to the magnet's current axis at any tilt by construction. That also settles
+// the so3_left_jacobian question this comment used to leave open -- with an
+// explicit chart there is no convention to reconcile, you differentiate your
+// own map, and chart_jacobian() is that derivative.
 //
-// NOT reproduced here: the so3_left_jacobian factor bundle_geometry.py
-// applies on top of TILT_UNIT_BASIS. That factor exists there because scipy
-// parameterizes each magnet's tilt as a rotation vector relative to nominal.
-// It only belongs on-device if the bundle solver represents R_mag the same
-// way -- if it instead keeps R_mag as a persistent matrix and steps it with
-// R_mag = exp(d_eps) * R_mag each iteration (consistent with how
-// solve_pose.cpp already treats the pose rotation R), no correction is
-// needed and adding one would be the bug. This is a solver design decision,
-// not a fact about the Jacobian -- make it explicitly when the solver
-// exists, don't inherit whichever answer this comment defaulted to.
+// The nominal-frame basis is kept in the PC fit, so the two sides do differ
+// here; see TODO/on-device-calibration.md on what that means for
+// transferring RegularizationSigmas.

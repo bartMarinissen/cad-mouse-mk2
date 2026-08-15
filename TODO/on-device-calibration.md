@@ -48,6 +48,50 @@ findings that bear on whether this is worth doing:
   bundle-adjustment library. Only the elimination loop is bespoke, though —
   the 6×6 LDLT it is built on is the same call `solve_pose.cpp` already makes.
 
+## Decided: magnet tilt uses a gnomonic chart
+
+`bundle_gnomonic_chart.h`. Each magnet's tilt is 2 numbers — where its
+polarization axis crosses a plane one unit below the magnet, in the nominal
+magnet's frame, with nominal at (0,0). `R_mag` stops being state and becomes a
+derived quantity, rebuilt per magnet per iteration by a shortest-arc lift.
+
+Three things this buys, in descending order of how much they matter:
+
+- **Spin is unrepresentable rather than projected away.** A magnet is a solid
+  of revolution, so spin about its own axis is an exact symmetry and there are
+  only 2 measurable DOF. The old projection dropped a fixed coordinate column,
+  which is the dead direction only at zero tilt; the chart's derivative
+  columns are perpendicular to the magnet's *current* axis at any tilt, by
+  construction.
+- **It closes the `so3_left_jacobian` question.** With an explicit chart there
+  is no convention to reconcile against scipy's — you differentiate your own
+  map. Getting it wrong in either direction was a silent bug; now there is no
+  choice to get wrong.
+- **No drift, no trig.** Rebuilding from 2 floats can't accumulate
+  orthogonality error the way a stepped matrix does, and the lift is rational
+  plus one square root.
+
+Gnomonic specifically, not two Euler angles: both are 2-parameter charts, but
+Euler/spherical angles put their coordinate singularity at the pole, and the
+pole is nominal. The azimuth column would scale as `sin(theta)` — at a
+tolerance-sized tilt of a degree or two its weight in the normal equations is
+~1e-3 of the polar column's, the ridge prior would swallow it, and 2 nominal
+DOF would silently become ~1 fitted. The gnomonic chart's derivative at
+nominal is an orthonormal basis of the tangent plane, and its singularity sits
+at 90 degrees where the chart cannot reach.
+
+**Cost: none that matters.** The chart is outer-loop (per magnet per
+iteration, not per frame), and the only inner-loop change is a dense 3x2
+multiply where the old projection was a free column slice — ~18 MAC per
+(sensor, frame) against `H_ss`'s 3P² = 6,075 per sensor, about 0.3%. `P` is
+unchanged, so the term that actually dominates is untouched.
+
+**One interop consequence.** The PC fit keeps its nominal-frame
+`TILT_UNIT_BASIS`, so the two sides now use different tilt charts. To first
+order they agree up to a 90-degree relabel of the parameter plane, and an
+isotropic prior is invariant under that — but `RegularizationSigmas` should be
+converted deliberately rather than assumed to transfer.
+
 ## Design
 
 Two passes per solver iteration, nothing per-frame stored between them:
@@ -74,12 +118,8 @@ back-substitution stop being exact, silently.
 
 These block writing a real solver, and are not settled:
 
-- **How magnet tilt is parameterized on-device.** Whether the solver needs a
-  `so3_left_jacobian` correction for tilt (as `bundle_geometry.py` does)
-  depends on whether it keeps `R_mag` as a persistent matrix stepped in the
-  tangent space each iteration — matching `solve_pose.cpp`'s convention for
-  the pose rotation — or as a rotation vector from nominal. The prototype's
-  tilt columns are raw derivatives and do not commit to either.
+*(Magnet tilt's parameterization used to be listed here. It is now decided —
+see "Magnet tilt" below.)*
 - **The concrete shared-parameter column layout.** Which of the ~45 columns
   belong to which group. Needed before the per-frame blocks' real sparsity
   can be exploited: most groups touch only one sensor's 3 rows per frame, so

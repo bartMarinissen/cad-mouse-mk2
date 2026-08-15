@@ -27,12 +27,15 @@ struct SharedJacobianBlock {
                           // in here is structurally dead -- spin about the
                           // magnet's own polarization axis, an exact symmetry
                           // of the axisymmetric field -- but that direction is
-                          // R_mag.col(2), which is column 2 only at zero tilt.
-                          // Dropping it is the caller's job (leftCols<2>(),
-                          // matching the PC side's nominal-frame
-                          // TILT_UNIT_BASIS); see bundle_magnet_pos_gauge.h
-                          // for why that projection is a gauge choice rather
-                          // than an exact annihilator.
+                          // R_mag.col(2), not a fixed coordinate axis.
+                          // Removing it is the caller's job, deliberately:
+                          // this layer computes physics (how the field
+                          // responds to ANY rotation, a 3-DOF fact with no
+                          // modelling choice in it), and which 2-D subspace
+                          // gets fitted is a chart decision that lives in
+                          // bundle_gnomonic_chart.h::project_magnet_tilt.
+                          // Keeping them apart is what lets the chart change
+                          // without re-deriving or re-verifying any physics.
     Vec3 d_strength;      // dB/d(magnet_strength_mT)
 };
 

@@ -68,7 +68,17 @@ strictly weaker check of something exactly checkable.
   suspect the instrument before the algebra.
 - **The dead axis is the magnet's own current polarization axis**, not a fixed
   world axis. An earlier version of this test asserted the wrong one and failed
-  against a correct implementation.
+  against a correct implementation. `bundle_gnomonic_chart.h` exists so that
+  this stops being something to get right: it parameterizes the axis direction,
+  so spin has no representation to leak through.
+- **A test passing is not the same as a test biting.** `chart_jacobian`'s
+  spin-free check passes even with the `skew(n_knob)` factor deleted — a unit
+  vector's derivative is perpendicular to it automatically, so both the right
+  and wrong answers clear that bar, differing by a 90° rotation *within* the
+  tangent plane. The finite-difference check catches the same mutation at 115%
+  error. Both tests are load-bearing for different halves of the claim; the
+  test comments say which, and mutation-testing is how that was established
+  rather than assumed.
 - **Synthetic test data must be checked for rank, not assumed.** The Schur test
   originally generated matrix entries as `sin()` of a linear combination of
   indices. Every such matrix lives in a 2-D subspace regardless of its size,

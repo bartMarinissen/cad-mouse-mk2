@@ -35,6 +35,7 @@
 #include "bundle_shared_jacobian.h"
 #include "bundle_linear_jacobian.h"
 #include "bundle_magnet_pos_gauge.h"   // MAGNET_POS_BASIS, project_magnet_pos
+#include "bundle_gnomonic_chart.h"     // MagnetTilt, rotation_from_tilt, chart_jacobian
 
 static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm
 static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
@@ -298,6 +299,139 @@ void test_magnet_pos_gauge_projection(void) {
 }
 
 // ======================================================================
+// Gnomonic tilt chart (bundle_gnomonic_chart.h).
+//
+// Three separate claims, checked separately because they fail for different
+// reasons:
+//   1. the chart and its inverse agree, and nominal really is (0,0)
+//   2. the chart Jacobian matches finite differences of the real field
+//   3. its columns are spin-free at NONZERO tilt -- the property that
+//      motivated replacing leftCols<2>(), and the one a finite-difference
+//      check cannot see, since both projections agree at zero tilt where
+//      FD is most accurate
+// ======================================================================
+
+// A deliberately non-identity nominal, so "nominal frame" and "knob frame"
+// can't silently be conflated, and a tilt far larger than a real tolerance
+// so that the exact/approximate distinction in check 3 is visible at all.
+static const Mat3 CHART_NOMINAL = exp_so3(Vec3(0.11f, -0.07f, 0.05f));
+static const MagnetTilt CHART_TILT{0.06f, -0.04f};
+
+void test_gnomonic_chart_roundtrip(void) {
+    char msg[192];
+
+    // (0,0) must be exactly nominal -- the ridge prior pulls toward 0, so if
+    // this drifts the prior is quietly pulling toward the wrong orientation.
+    Mat3 at_zero = rotation_from_tilt(CHART_NOMINAL, MagnetTilt{0.0f, 0.0f});
+    float e_zero = (at_zero - CHART_NOMINAL).norm();
+    snprintf(msg, sizeof(msg), "tilt (0,0) is not nominal: |dR| = %.2e", e_zero);
+    TEST_ASSERT_TRUE_MESSAGE(e_zero < 1.0e-6f, msg);
+
+    const MagnetTilt probes[] = {
+        {0.0f, 0.0f}, {0.06f, -0.04f}, {-0.3f, 0.2f}, {0.9f, 0.9f},
+    };
+    for (const auto& t : probes) {
+        Mat3 R = rotation_from_tilt(CHART_NOMINAL, t);
+
+        // The lift must land in SO(3), or the forward model is being handed
+        // something that isn't a rotation.
+        float e_orth = (R.transpose() * R - Mat3::Identity()).norm();
+        snprintf(msg, sizeof(msg), "tilt (%.2f,%.2f): lift is not orthonormal, |R^T R - I| = %.2e",
+                 t.u, t.v, e_orth);
+        TEST_ASSERT_TRUE_MESSAGE(e_orth < 1.0e-5f, msg);
+
+        MagnetTilt back = tilt_from_rotation(CHART_NOMINAL, R);
+        float e_rt = std::fabs(back.u - t.u) + std::fabs(back.v - t.v);
+        snprintf(msg, sizeof(msg), "tilt (%.2f,%.2f): round-trip gave (%.4f,%.4f), err %.2e",
+                 t.u, t.v, back.u, back.v, e_rt);
+        TEST_ASSERT_TRUE_MESSAGE(e_rt < 1.0e-4f, msg);
+    }
+}
+
+void test_gnomonic_chart_jacobian(void) {
+    VirtualSensor sensor(SENSOR_POS[0]);
+    const Vec3 t_pose = BASE_T;
+    const Mat3 R = exp_so3(Vec3(0.05f, -0.03f, 0.02f));
+    const float strength = BICUBIC_FIELD_REFERENCE_MT;
+    char msg[192];
+
+    // Analytic: the raw 3x3 from the physics layer, projected through the
+    // chart -- exactly the composition a solver would assemble.
+    MagnetState state{MAGNET_LOCAL[0], rotation_from_tilt(CHART_NOMINAL, CHART_TILT), strength};
+    Vec3 B0; Eigen::Matrix<float, 3, 6> Jp; SharedJacobianBlock Js;
+    evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, state),
+                              t_pose, R, B0, Jp, Js);
+
+    Eigen::Matrix<float, 3, 2> J_analytic =
+        project_magnet_tilt(Js.d_magnet_tilt, chart_jacobian(CHART_NOMINAL, CHART_TILT));
+
+    // Numeric: perturb the chart PARAMETER and rebuild the rotation through
+    // the chart, so this exercises rotation_from_tilt and chart_jacobian
+    // together. A bug in either shows up here.
+    for (int p = 0; p < 2; ++p) {
+        MagnetTilt plus = CHART_TILT, minus = CHART_TILT;
+        (p == 0 ? plus.u : plus.v)  += FD_STEP_ANGULAR;
+        (p == 0 ? minus.u : minus.v) -= FD_STEP_ANGULAR;
+
+        MagnetState sp{MAGNET_LOCAL[0], rotation_from_tilt(CHART_NOMINAL, plus), strength};
+        MagnetState sm{MAGNET_LOCAL[0], rotation_from_tilt(CHART_NOMINAL, minus), strength};
+
+        Vec3 Bp, Bm; Eigen::Matrix<float, 3, 6> Jd; SharedJacobianBlock Jsd;
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sp),
+                                  t_pose, R, Bp, Jd, Jsd);
+        evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sm),
+                                  t_pose, R, Bm, Jd, Jsd);
+
+        Vec3 numeric = (Bp - Bm) / (2.0f * FD_STEP_ANGULAR);
+        Vec3 analytic = J_analytic.col(p);
+        float e = max_rel_error_mat<3, 1>(analytic, numeric);
+        snprintf(msg, sizeof(msg), "chart column %d (%s) mismatch, rel err %.5f",
+                 p, p == 0 ? "u" : "v", e);
+        TEST_ASSERT_TRUE_MESSAGE(e < REL_TOL, msg);
+    }
+}
+
+// What this does NOT establish, verified by mutation: dropping the
+// skew(n_knob) factor from chart_jacobian() leaves this test passing. That is
+// not a bug in the test, it is the geometry -- n is a unit vector, so
+// d(n)/dp is perpendicular to n automatically, and skew(n) d(n)/dp is a 90
+// degree rotation of it WITHIN the tangent plane. Both are spin-free; only
+// one is the correct eps. So this test pins down "no spin leaks in", and
+// test_gnomonic_chart_jacobian pins down "and it is the right vector in the
+// plane" -- it catches that same mutation at 115% error. Neither subsumes
+// the other; don't delete one on the strength of the other passing.
+void test_gnomonic_chart_is_spin_free(void) {
+    char msg[224];
+
+    Mat3 R_mag = rotation_from_tilt(CHART_NOMINAL, CHART_TILT);
+    Vec3 own_axis = R_mag.col(2);          // the actually-dead direction
+    Eigen::Matrix<float, 3, 2> V = chart_jacobian(CHART_NOMINAL, CHART_TILT);
+
+    // The claim: both columns are perpendicular to the magnet's CURRENT axis,
+    // at nonzero tilt, by construction rather than approximately.
+    for (int c = 0; c < 2; ++c) {
+        float leak = std::fabs(V.col(c).dot(own_axis)) / V.col(c).norm();
+        snprintf(msg, sizeof(msg),
+                 "chart column %d has spin component %.2e along the magnet's own axis",
+                 c, leak);
+        TEST_ASSERT_TRUE_MESSAGE(leak < 1.0e-6f, msg);
+    }
+
+    // The contrast, and the reason this test exists: the projection this
+    // replaced (leftCols<2>(), i.e. eps = e_x and e_y in the KNOB frame) is
+    // only spin-free when the magnet's axis happens to be e_z. At this tilt
+    // it is not, and the leftover component is first-order in the tilt. If
+    // this assertion ever starts failing it means CHART_NOMINAL/CHART_TILT
+    // drifted toward zero and the comparison above stopped being meaningful.
+    float old_leak = std::fabs(Vec3::UnitX().dot(own_axis))
+                    + std::fabs(Vec3::UnitY().dot(own_axis));
+    snprintf(msg, sizeof(msg),
+             "fixture too close to nominal to distinguish the two projections "
+             "(leftCols<2>() leak only %.2e)", old_leak);
+    TEST_ASSERT_TRUE_MESSAGE(old_leak > 1.0e-3f, msg);
+}
+
+// ======================================================================
 // Unity entry points
 // ======================================================================
 void setUp(void) {}
@@ -309,6 +443,9 @@ void setup() {
     RUN_TEST(test_shared_jacobian_grid);
     RUN_TEST(test_magnet_model_reuse_across_frames);
     RUN_TEST(test_magnet_pos_gauge_projection);
+    RUN_TEST(test_gnomonic_chart_roundtrip);
+    RUN_TEST(test_gnomonic_chart_jacobian);
+    RUN_TEST(test_gnomonic_chart_is_spin_free);
     UNITY_END();
 }
 
