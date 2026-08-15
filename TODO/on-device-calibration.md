@@ -103,3 +103,21 @@ These block writing a real solver, and are not settled:
   build, not an execution: no timing figure here comes from the device, and
   the speed question on a soft-float M0+ is exactly the one that decides
   whether a calibration takes seconds or minutes.
+- Nothing here has been through `pio test -e seeed_xiao_rp2040_test`, because
+  none of it is under `test_dir`. Promoting it there is the step that would
+  make it testable on hardware at all, and it is deliberately not taken yet.
+
+## The stack is the binding constraint, not total RAM
+
+Worth stating separately because it was got wrong once already. The RP2040
+gives each core a **4 KB** stack (`memmap_default.ld`: core0 in SCRATCH_Y,
+core1 in SCRATCH_X, both `LENGTH = 4k`). At P=45 the solver's two big
+structures are 9,528 and 8,280 bytes — each larger than the whole stack — so
+they have to be statically allocated, not automatic. An earlier version of
+`SCHUR_SOLVER_DESIGN.md` described them as stack locals, which would have
+smashed the stack on the first call and, with no MPU on a Cortex-M0+,
+corrupted memory below rather than faulting at the bug.
+
+This is also the clearest example of what on-device testing would catch that
+the host builds cannot: the host has an 8 MB stack and would run the same
+code without complaint forever.

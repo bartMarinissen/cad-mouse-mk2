@@ -9,6 +9,12 @@ using Mat3 = Eigen::Matrix3f;
 using Vector9f = Eigen::Matrix<float, 9, 1>;
 using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
 
+// Tried __attribute__((always_inline)) here and measured it on cortex-m0plus:
+// it does not help. The 24-instruction out-of-line body disappears, but the
+// caller grows by 32 (net +8 across the TU) and Eigen's 3x3 product stays a
+// separate 221-instruction out-of-line function taking Mat3 by reference --
+// so the three structural zeros remain invisible to the multiply either way.
+// Exploiting them needs a fused skew-product, not an inlining hint.
 inline Mat3 skew_matrix(const Vec3& v) {
     Mat3 m;
     // The comma operator strictly fills row-by-row

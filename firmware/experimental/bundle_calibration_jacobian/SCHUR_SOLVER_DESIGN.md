@@ -130,10 +130,31 @@ folded into the P×P accumulator or back-substituted, and is gone.
   it an `H_ss`, so it has no reason to have spent anything computing one.
 
 Peak memory for one solver iteration: one `SharedNormalEquations<P>`
-(P² + P floats, e.g. ~8.3 KB at P=45) + one frame at a time — ~8.4 KB
-transient during pass 1 (`FrameNormalEquations<P>`, P² + 7P + 6 floats),
-~1.2 KB during pass 2 (`FramePoseBlock<P>`, 7P + 42 floats). Independent
-of N in both passes.
+(P² + P floats, 8,280 bytes at P=45) + one frame at a time — 9,528 bytes
+during pass 1 (`FrameNormalEquations<P>`, P² + 7P + 6 floats), 1,248 bytes
+during pass 2 (`FramePoseBlock<P>`, 7P + 42 floats). Independent of N in
+both passes.
+
+**These cannot be stack locals on this device, and an earlier version of
+this document said they were.** The RP2040's stack is 4 KB *per core* --
+`memmap_default.ld` puts core0's in SCRATCH_Y and core1's in SCRATCH_X, both
+`LENGTH = 4k` -- so a `FrameNormalEquations<45>` at 9,528 bytes overflows it
+2.3x over and `SharedNormalEquations<45>` at 8,280 bytes 2x over. Declaring
+either as an ordinary local would smash the stack on the first call, and
+with no MPU on a Cortex-M0+ it would corrupt whatever sits below rather than
+fault cleanly at the point of the bug.
+
+Both therefore have to be statically allocated (file-scope, or members of a
+long-lived solver object) rather than automatic. That does not change the
+O(P²)-not-O(P·N) argument this design turns on -- the whole point is still
+that only one frame's worth exists at a time -- it changes *where* those
+bytes live. Note the pass-1/pass-2 split helps here for a second, unplanned
+reason: `FramePoseBlock<45>` at 1,248 bytes is the one structure that would
+comfortably fit on the stack.
+
+The 193 KB free-RAM figure above is the budget these static allocations come
+out of, so ~18 KB of solver state against it remains comfortable. The
+constraint is the stack specifically, not total RAM.
 
 ## Scope of this document
 

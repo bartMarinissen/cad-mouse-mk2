@@ -36,6 +36,11 @@
 // Built via 3 calls to add_sensor() (one per sensor -- matches
 // evaluate_bundle_jacobian's per-sensor 3-row output). Never stored in an
 // array across frames.
+//
+// At P=45 this is 1,248 bytes -- the one structure here small enough to be an
+// ordinary stack local on this device (4 KB stack per core; see
+// SCHUR_SOLVER_DESIGN.md). FrameNormalEquations and SharedNormalEquations are
+// both larger than the entire stack and must be statically allocated.
 template <int P>
 struct FramePoseBlock {
     Eigen::Matrix<float, 6, 6> H_pp = Eigen::Matrix<float, 6, 6>::Zero();
@@ -70,6 +75,11 @@ struct FramePoseBlock {
 // Pass 2 uses a freshly-rebuilt FramePoseBlock instead -- see
 // SCHUR_SOLVER_DESIGN.md for why pass 2 rebuilds rather than storing pass
 // 1's instances.
+//
+// MUST NOT be an ordinary local: 9,528 bytes at P=45 against a 4 KB per-core
+// stack. Statically allocate it (file scope, or a member of a long-lived
+// solver object). Same applies to SharedNormalEquations below at 8,280 bytes.
+// "One frame at a time" is about how many exist, not about where they live.
 template <int P>
 struct FrameNormalEquations {
     FramePoseBlock<P> pose;
