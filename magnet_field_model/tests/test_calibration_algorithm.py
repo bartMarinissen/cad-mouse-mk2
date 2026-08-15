@@ -440,9 +440,25 @@ def test_real_run_residual_improves():
 
 @pytest.mark.skipif(len(_real_runs()) < 2, reason="need at least two runs")
 def test_real_runs_agree_with_each_other():
-    """Three captures of the same hardware must produce the same parameters,
-    well inside the priors. This is the check that would have caught the old
-    calibrator immediately."""
+    """Three captures must produce the same parameters, well inside the priors.
+    This is the check that would have caught the old calibrator immediately.
+
+    Read the assertions narrowly: the three captures are NOT the same physical
+    configuration. Magnets went in and out of the harness between them and may
+    have been swapped (see calibration_runs/README.md); only the sensors and
+    PCB are common. What this pins is therefore the *sensor* parameters, plus
+    the two magnet quantities that survive the difference:
+
+    - in-plane magnet shape, which really is stable to ~0.03mm, and
+    - everything else only against its own prior width, which for magnet
+      strength is wide enough to swallow the ~19% the reseating produces.
+
+    In particular this does not, and cannot, pin magnet seating depth:
+    MAGNET_POS_BASIS gauge-fixes out-of-plane motion entirely, so a z reseat
+    projects to exactly zero and is absorbed into the per-frame poses. If a
+    future capture reseats magnets hard enough to fail this test, suspect the
+    tilt and strength terms, not the positions.
+    """
     results = []
     for path in _real_runs():
         raw = json.loads(path.read_text())
