@@ -173,9 +173,20 @@ so a frame's real contribution is far sparser than the P×P this forms.
 That sparsity is now quantified, and it is the largest optimization anywhere
 in this design: one sensor touches roughly 18–19 of the 45 columns, making a
 sparsity-aware `H_ss` accumulation about **6× cheaper** on the single term
-that dominates the solver. `TODO/on-device-calibration.md` has the per-group
-count and the layout it comes from (`parameterization.py`'s `GROUP_SLICES`,
-which turned out to already be decided rather than open).
+that dominates the solver.
+
+It is worth being exact about what that depends on, because an earlier
+version of this paragraph was not. The 6× follows from the *partition* —
+which parameters exist and which sensor's residuals touch which — and is
+invariant under reordering the columns, since permuting maps H to Π H Πᵀ and
+a permutation neither creates nor destroys zeros. Column *order* is a
+separate question, and it decides something different: whether those
+nonzeros are consolidated into contiguous blocks or scattered. Ordering by
+unit rather than by parameter type turns each sensor's 8 disjoint runs into
+2, and makes `H_ss` itself bordered block-diagonal — the same arrowhead as
+above, one level down. `TODO/on-device-calibration.md` has the partition, the
+proposed ordering, and the open interop question that comes with diverging
+from the PC side's layout.
 
 It remains a strict optimization on top of this implementation — same
 algorithm, same answer, less arithmetic — and this exact, general version is

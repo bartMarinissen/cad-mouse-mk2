@@ -124,7 +124,10 @@ see "Magnet tilt" below.)*
   does not say it's worth the firmware surface area, and that is the actual
   decision.
 
-## Not open after all: the P=45 column layout
+## The P=45 parameters, and how to order them
+
+The *partition* was never open — `parameterization.py` owns it. The
+*ordering* is, and is a real design question; both are below.
 
 This was listed as an open question — "which of the 45 columns belong to
 which group, needed before the sparsity can be exploited." That was a
@@ -144,24 +147,67 @@ the point.
 | `gain_sym` | 9 | 27:36 |
 | `gain_rot` | 9 | 36:45 |
 
-**With the layout known, the deferred sparsity optimization is worth
-quantifying, because it is much larger than anything else on this page.**
-Under `PAIRED_ONLY` sensor *i* sees only magnet *i*, so one sensor's 3 rows
-touch: all 3 `magnet_pos` columns (the gauge basis moves all three magnets
+**The sparsity that matters does not depend on this ordering at all.** Under
+`PAIRED_ONLY` sensor *i* sees only magnet *i*, so one sensor's 3 rows touch
+all 3 `magnet_pos` columns (the gauge basis moves all three magnets
 together), its own magnet's 2 `magnet_tilt` columns, `strength_mean`, 1–2
-`strength_diff`, its own 3 `sensor_offset`, and its own 8 gain columns —
-**about 18–19 of 45.**
+`strength_diff`, its own 3 `sensor_offset` and its own 8 gain columns —
+**about 18–19 of 45.** `H_ss += Jᵀ J` is only nonzero where both columns are
+live, so a sparsity-aware accumulation is ~3·19² ≈ 1,083 MAC per sensor
+against 3·45² = 6,075 dense: roughly a **6× cut on the term that dominates
+the solver**, when everything else considered on this page is worth ~0.3%.
 
-`H_ss += Jᵀ J` only has nonzeros where both columns are live, so a
-sparsity-aware accumulation costs ~3·19² ≈ 1,083 MAC per sensor against
-3·45² = 6,075 dense: roughly a **6× cut on the term that dominates the whole
-solver**. Every other optimization considered so far has been worth ~0.3%.
-This one is worth most of the total. It should be the first thing done if
-this is built, not a follow-up.
+That count is a property of the *partition* — which parameters exist and
+which sensor's residuals touch which — not of the column order. Permuting
+columns maps H to Π H Πᵀ, which relabels entries without creating or
+destroying zeros. An earlier version of this section said the layout had to
+be settled before the sparsity could be priced; that was wrong, and it
+confused needing `BLOCKS` with needing `GROUP_SLICES`.
 
-Counted from the basis shapes rather than measured — worth re-deriving in
-code before relying on the exact figure, though the order of magnitude is
-not in doubt.
+## Design: order columns by unit, not by parameter type
+
+Ordering does not change the operation count, but it decides whether the
+nonzeros are *consolidated* — and the PC's type-major order is close to
+worst-case for that. Sensor 0's 19 live columns land in 8 disjoint runs
+(`{0,1,2} {3,4} {9} {10} {12,13,14} {21,22} {27,28,29} {36,37,38}`).
+
+Partitioning by who-sees-what instead gives two runs per sensor:
+
+- **border (6):** `magnet_pos` 3 + `strength_mean` 1 + `strength_diff` 2 —
+  every sensor touches these
+- **per-unit `U_i` (13 each):** `tilt_i` 2 + `offset_i` 3 + `gain_i` 8 — only
+  sensor *i* touches these
+
+`strength_diff` is what fixes the border at 6 rather than 4: magnet 2's
+strength is `-d0-d1`, so sensor 2 touches both columns, and splitting them
+across `U_0`/`U_1` would make sensor 2 straddle two blocks.
+
+**`H_ss` is then itself bordered block-diagonal** — the same arrowhead as the
+outer problem, one level down — because `H_ss[U_i, U_j] = 0` exactly for
+i≠j: that entry needs a sensor touching both, and no sensor touches more than
+its own. Consequences:
+
+- storage 777 floats against 2025, ~2.6x — and `SharedNormalEquations`
+  already exceeds the 4 KB stack, so this is not only about MACs
+- each sensor's contribution becomes three fixed-size `H.block<a,b>(i,j) +=`
+  with compile-time extents, rather than a scatter through 8 runs with
+  runtime index arithmetic — which matters under `EIGEN_NO_MALLOC`
+- the reduced system can be Schur-eliminated *again*, folding the three 13x13
+  blocks into the border for a final 6x6 solve. Minor on its own (the P×P
+  LDLT was ~30k against 1.09M for accumulation) but free once ordered
+
+**Open, and the reason this is a Design and not a Decision:** the PC side is
+type-major, so diverging means the two parameter vectors differ by a fixed
+permutation, applied at the storage boundary and round-trip tested. That is
+cheap, but it is another seam where the two implementations can disagree —
+the exact thing moving calibration on-device is meant to remove. The
+alternative is reordering `parameterization.py` to match, which removes the
+seam entirely at the cost of churning the PC fit for the firmware's benefit.
+Not decided.
+
+All counts here are derived from basis shapes, not measured — worth
+re-deriving in code before relying on exact figures, though the orders of
+magnitude are not in doubt.
 
 ## Not built
 
