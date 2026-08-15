@@ -24,6 +24,8 @@ from numpy.typing import NDArray
 # --- The physical magnet the table models ---
 MAGNET_DIAMETER_MM = 6.0
 MAGNET_HEIGHT_MM = 6.0
+MAGNET_HALF_HEIGHT_MM = MAGNET_HEIGHT_MM / 2.0
+MAGNET_VOLUME_MM3 = np.pi * (MAGNET_DIAMETER_MM / 2.0) ** 2 * MAGNET_HEIGHT_MM
 
 # The polarization (remanence, Br) the table is generated at, baked into the
 # generated header as BICUBIC_FIELD_REFERENCE_MT. firmware's MagnetModel
@@ -55,7 +57,7 @@ def build_magnet(polarization_mt: float = BICUBIC_FIELD_REFERENCE_MT) -> magpy.m
     return magpy.magnet.Cylinder(
         polarization=(0, 0, -polarization_mt),
         dimension=(MAGNET_DIAMETER_MM, MAGNET_HEIGHT_MM),
-        position=(0, 0, MAGNET_HEIGHT_MM / 2.0),  # center at half-height -> bottom face at z=0
+        position=(0, 0, MAGNET_HALF_HEIGHT_MM),  # center at half-height -> bottom face at z=0
     )
 
 
@@ -95,6 +97,12 @@ def _hex_array_2d(arr: NDArray[np.float64]) -> str:
 
 
 def format_header(table: FieldTable, reference_mt: float) -> str:
+    half_height = MAGNET_HALF_HEIGHT_MM
+    # Polarization x volume. Tied to reference_mt for the same reason the table
+    # is: MagnetModel scales both by magnet_strength_mT / reference, so if the
+    # reference moved and this did not, the near and far models would silently
+    # describe magnets of different strength.
+    dipole_moment = reference_mt * MAGNET_VOLUME_MM3
     return f"""
 #pragma once
 #include "math3D.h"
@@ -112,6 +120,30 @@ constexpr Point BICUBIC_FAR    = {{ {table.r_line[-1]}, {table.z_line[-1]} }};
 // magnet is not this strong or weak -- MagnetModel divides its own
 // magnet_strength_mT by this to get the ratio it scales the table by.
 constexpr float BICUBIC_FIELD_REFERENCE_MT = {reference_mt}f;
+
+// --- Far-field (dipole) constants, for the cross-magnet terms ---
+//
+// The table above covers one magnet's own sensor. Every sensor also sees the
+// other two magnets, far enough away to be modelled as point dipoles instead
+// of interpolated; see design documentation/Math.md for the derivation and
+// dipole_field() in magnet_local_model.h for the implementation.
+
+// Where the equivalent point dipole sits in the magnet's local frame. The
+// frame's origin is the magnet's BOTTOM FACE (see local_field.py), but the
+// dipole belongs at the geometric centre -- placing it at the origin instead
+// is not a small error, it is tens of percent at cross-magnet range.
+constexpr float MAGNET_HALF_HEIGHT_MM = {half_height}f;
+
+// Dipole moment magnitude at BICUBIC_FIELD_REFERENCE_MT, in mT*mm^3, so it
+// scales by exactly the same ratio the table does and the two models can
+// never describe magnets of different strength.
+//
+// Units: with the moment in mT*mm^3 and distances in mm, the field
+//   B = (1/4pi)(3(m.rhat)rhat - m)/rho^3
+// comes out in mT with no further conversion. NOTE this is polarization x
+// volume, which is NOT magpylib's `dipole_moment` property -- that one is
+// SI (A*m^2) and differs from this by a factor of 1/mu0.
+constexpr float DIPOLE_MOMENT_AT_REFERENCE_MT_MM3 = {dipole_moment}f;
 
 extern const Vec2 BICUBIC_INTERPOLATION_TABLE[NZ][NR];
 
