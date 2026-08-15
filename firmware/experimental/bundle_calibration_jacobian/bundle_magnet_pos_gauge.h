@@ -40,9 +40,29 @@ inline Eigen::Matrix<float, 3, 3> project_magnet_pos(
 }
 
 // TILT_UNIT_BASIS's projection is simpler still -- no cross-magnet mixing at
-// all, just dropping the always-dead spin column. Not worth a named
-// constant: `d_magnet_tilt_i.leftCols<2>()` (used directly in the test) IS
-// the projection.
+// all, just dropping the spin column. Not worth a named constant:
+// `d_magnet_tilt_i.leftCols<2>()` (used directly in the test) is the
+// projection.
+//
+// Be precise about what that drops, though, because it is easy to read as
+// stronger than it is. leftCols<2>() removes the third COORDINATE column --
+// the response to eps = e_z. The direction that is actually dead is
+// R_mag.col(2), the magnet's own current polarization axis: the field is
+// invariant under R_mag -> R_mag exp(theta [e_z]_x) (a spin in the magnet's
+// LOCAL frame), and R exp(theta [v]_x) = exp(theta [Rv]_x) R turns that into
+// a left perturbation along R_mag e_z. The two coincide only at zero tilt.
+// test_bundle_shared_jacobian.cpp spins about magnet_rot.col(2) for exactly
+// this reason -- an earlier version used world e_2 and failed against a
+// correct implementation.
+//
+// So this is a nominal-frame gauge choice, exact only at zero tilt, not an
+// exact annihilator of the null direction. At the real tilts involved
+// (manufacturing tolerance, a degree or two) the leftover null component is
+// correspondingly small: the parameterization stays well-posed, the ridge
+// prior absorbs the near-null residue, and it matches what the PC side does,
+// since parameterization.py builds TILT_UNIT_BASIS from nominal geometry
+// too. The Jacobian columns themselves are exact regardless -- this is about
+// which 2-D subspace of them gets fitted, not about a wrong derivative.
 //
 // NOT reproduced here: the so3_left_jacobian factor bundle_geometry.py
 // applies on top of TILT_UNIT_BASIS. That factor exists there because scipy

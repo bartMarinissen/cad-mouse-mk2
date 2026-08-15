@@ -23,11 +23,16 @@
 // iteration, not inside this per-sensor function.
 struct SharedJacobianBlock {
     Mat3 d_magnet_pos;   // dB/dm_j,  knob-frame, all 3 raw columns live
-    Mat3 d_magnet_tilt;  // dB/d(eps); column 2 (spin about the magnet's own
-                          // polarization axis) is structurally dead -- left
-                          // populated here (matches whatever the skew product
-                          // produces) and dropped by the caller's projection,
-                          // exactly like the PC side's TILT_UNIT_BASIS does.
+    Mat3 d_magnet_tilt;  // dB/d(eps), all 3 raw columns live. One DIRECTION
+                          // in here is structurally dead -- spin about the
+                          // magnet's own polarization axis, an exact symmetry
+                          // of the axisymmetric field -- but that direction is
+                          // R_mag.col(2), which is column 2 only at zero tilt.
+                          // Dropping it is the caller's job (leftCols<2>(),
+                          // matching the PC side's nominal-frame
+                          // TILT_UNIT_BASIS); see bundle_magnet_pos_gauge.h
+                          // for why that projection is a gauge choice rather
+                          // than an exact annihilator.
     Vec3 d_strength;      // dB/d(magnet_strength_mT)
 };
 
