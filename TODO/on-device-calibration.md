@@ -196,14 +196,53 @@ its own. Consequences:
   blocks into the border for a final 6x6 solve. Minor on its own (the P×P
   LDLT was ~30k against 1.09M for accumulation) but free once ordered
 
-**Open, and the reason this is a Design and not a Decision:** the PC side is
-type-major, so diverging means the two parameter vectors differ by a fixed
-permutation, applied at the storage boundary and round-trip tested. That is
-cheap, but it is another seam where the two implementations can disagree —
-the exact thing moving calibration on-device is meant to remove. The
-alternative is reordering `parameterization.py` to match, which removes the
-seam entirely at the cost of churning the PC fit for the firmware's benefit.
-Not decided.
+**Decided: the firmware orders unit-major, and does not have to match the PC
+side.** The interop objection that made this a Design is withdrawn — the
+on-device layout is free to differ, so the two vectors are related by a fixed
+permutation applied at the storage boundary, and nothing else.
+
+### Put `magnet_tilt` in the border, not in the blocks
+
+The partition above holds under today's `PAIRED_ONLY` coupling. Modelling
+cross-magnet interference (`cross-magnet-interference.md`, an intended
+direction) changes it — but by less than it looks.
+
+**The outer arrowhead is untouched.** Math.md §7.1 requires only that frame
+*k*'s residual depends on `x` and `pose_k` alone. Cross-magnet coupling is
+entirely *within* a frame — sensor *i* seeing magnet *j* at one instant — and
+never links frame *k* to frame *l*. The Schur elimination, the streaming, the
+O(P²) memory argument: all unaffected.
+
+**`H_ss`'s own arrowhead survives too**, because what separates `U_i` from
+`U_j` is not magnetics. `sensor_offset` and `gain` belong to a specific
+physical sensor, and no amount of field cross-talk makes sensor *j*'s reading
+depend on sensor *i*'s gain matrix. Only `magnet_tilt` migrates, from
+per-unit to border (and `strength_diff` goes from 1–2 live columns per sensor
+to 2, since each sensor then sees all three magnets' strengths):
+
+| | border | `U_i` | live/sensor | `H_ss` speedup | storage |
+|---|---:|---:|---:|---:|---:|
+| `PAIRED_ONLY`, tilt in blocks | 6 | 13 | 19 | 5.6x | 777 |
+| `ALL_MAGNETS`, tilt in border | 12 | 11 | 23 | 3.8x | 903 |
+
+So there is a fork. Tilt in the blocks gives the full 5.6x now, but on the
+switch those 6 columns must leave the blocks and cannot join a contiguous
+border — they would sit at offsets 6, 19 and 32, and the border stops being
+one run. Tilt in the border makes the structure **invariant** across the
+switch: `ALL_MAGNETS` then changes only which entries happen to be zero, not
+the block geometry, so the accumulator does not need restructuring or
+re-verifying.
+
+Take the invariant ordering. Paying 47% of an optimization to avoid rebuilding
+and re-verifying the accumulator is the right side of that trade when the
+switch is intended rather than hypothetical, and 3.8x is still far larger than
+anything else available here.
+
+Note `evaluate_bundle_jacobian` is already per-(sensor, magnet), so
+`ALL_MAGNETS` means calling it 9 times per frame instead of 3 and
+accumulating — no interface change. The dipole correction that TODO proposes
+does not go through `VirtualSensor::evaluate` and so needs its own analytic
+Jacobian, but the shape it plugs into is already right.
 
 All counts here are derived from basis shapes, not measured — worth
 re-deriving in code before relying on exact figures, though the orders of

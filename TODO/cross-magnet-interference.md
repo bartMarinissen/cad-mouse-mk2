@@ -79,6 +79,26 @@ bicubic near-field table) to cover cross terms. Instead:
   addition next to the existing 3 bicubic lookups, not a multiplier on the
   expensive part of the pipeline.
 
+## Effect on on-device bundle calibration
+
+`on-device-calibration.md` depends on the sparsity structure of the
+calibration Hessian, so it is worth recording what switching to
+`ALL_MAGNETS` does to it: less than expected.
+
+- **The per-frame arrowhead is unaffected.** That structure needs only that
+  one frame's residual depends on the shared parameters and its own pose.
+  Cross-magnet coupling acts within a frame and never links two frames.
+- **The Hessian's own block structure survives**, because what keeps the
+  per-sensor blocks separate is that `sensor_offset` and `gain` belong to a
+  physical sensor — no field cross-talk makes sensor *j*'s reading depend on
+  sensor *i*'s gain. Only `magnet_tilt` moves from the per-sensor blocks into
+  the shared border, taking the available sparsity win from ~5.6x to ~3.8x.
+
+That is already accounted for: the on-device column ordering deliberately
+places `magnet_tilt` in the border now, so the block geometry is invariant
+across this switch and the accumulator will not need restructuring when it
+happens.
+
 ## Open questions
 
 - Where the dipole moment magnitude comes from, and whether it needs to match
