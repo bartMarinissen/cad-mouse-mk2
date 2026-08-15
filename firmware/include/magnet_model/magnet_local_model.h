@@ -25,6 +25,28 @@ constexpr BicubicField CALCULATED_BICUBIC_FIELD(BICUBIC_INTERPOLATION_TABLE, BIC
 // triangle side away; it is never evaluated near its own source.
 Vec3 dipole_field(const Vec3& m, const Vec3& r, Mat3& J);
 
+// One magnet's frozen geometry combined with the pose being evaluated: what
+// the magnet looks like from the world frame right now.
+//
+// Every field here depends on the magnet and the pose but NOT on which sensor
+// is looking, which is the whole reason the type exists. Once each sensor sees
+// all three magnets there are nine (sensor, magnet) pairs per evaluation but
+// still only three magnets, so ForwardModel builds these once per magnet and
+// passes them down rather than letting VirtualSensor rebuild them per pair.
+struct MagnetPlacement {
+    // R * magnet_rotation, mapping magnet-local directly to world. The
+    // interpolated path needs it to get into and out of the magnet's frame.
+    Mat3 R_total;
+    // The dipole's location: the magnet's geometric centre, in world
+    // coordinates. Cross terms measure their displacement from here.
+    Vec3 centre_world;
+    // The dipole's moment vector in world coordinates, magnitude
+    // moment_mT_mm3 along the magnet's own -z (its polarization axis).
+    // Carrying orientation as this one rotated vector is what lets the far
+    // field skip the frame machinery entirely -- see dipole_field().
+    Vec3 moment_world;
+};
+
 struct MagnetModel {
     const Vec3 magnet_pos_knob;
     const Mat3 magnet_rotation;
@@ -85,6 +107,11 @@ struct MagnetModel {
 
     // Evaluates the local field and populates the 3x3 local Jacobian
     Vec3 evaluate(const Vec3& v_l, Mat3& J_local) const;
+
+    // This magnet as seen from the world frame at pose (t, R). Cheap, and
+    // called once per magnet per forward-model evaluation rather than once
+    // per sensor/magnet pair -- see MagnetPlacement.
+    MagnetPlacement place(const Vec3& t, const Mat3& R) const;
 
 private:
     const BicubicField& field_model_;

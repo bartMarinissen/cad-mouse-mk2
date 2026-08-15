@@ -17,6 +17,19 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
       strength_ratio_(magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT) {}
 
 
+MagnetPlacement __not_in_flash_func(MagnetModel::place)(const Vec3& t, const Mat3& R) const {
+    MagnetPlacement p;
+    p.R_total = R * magnet_rotation;
+    p.centre_world = t + R * centre_knob;
+    // Polarization runs along the magnet's local -z, so the moment vector is
+    // -|m| times its own axis -- which, mapped to world, is R_total's third
+    // column. A column read and a scale: the entire cost of carrying this
+    // magnet's orientation into the far-field model.
+    p.moment_world = -moment_mT_mm3 * p.R_total.col(2);
+    return p;
+}
+
+
 // 1/(4*pi), the only constant in the dipole field. Written out rather than
 // computed from M_PI so it is a literal in the hot path.
 static constexpr float ONE_OVER_FOUR_PI = 0.07957747f;

@@ -401,8 +401,73 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     TEST_ASSERT_TRUE_MESSAGE(e < 0.05f, msg);
 }
 
+void test_cross_magnet_terms_are_actually_present(void) {
+    // Everything else here is a self-consistency check: the finite-difference
+    // tests compare the model against its own derivative, so they would pass
+    // just as happily if the cross-magnet contribution were silently zero.
+    // TODO/resolved/cross-magnet-interference.md measured that contribution at
+    // 1.7-4.5% of the field on captured data, so this asserts it is present
+    // and of that order.
+    //
+    // Paired-only is obtained by zeroing the cross magnets' moments rather
+    // than by a second code path: dipole_field returns zero field and zero
+    // gradient for m = 0, so this is the same arithmetic with the term
+    // switched off, not an independent reimplementation to disagree with.
+    MagnetModel magnets[3] = {
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
+    };
+    VirtualSensor sensors[3] = {
+        VirtualSensor(SENSOR_POS[0]),
+        VirtualSensor(SENSOR_POS[1]),
+        VirtualSensor(SENSOR_POS[2]),
+    };
+    ForwardModel fm(sensors, magnets);
+
+    const Mat3 R = Mat3::Identity();
+    char msg[224];
+
+    // Across the knob's heave range: the share grows with lift, because the
+    // paired magnet's field falls off fast while the cross magnets, a fixed
+    // triangle side away, barely change.
+    const float standoffs[] = { 4.3f, 6.0f, 8.0f };
+
+    for (float standoff : standoffs) {
+        const Vec3 t(0.0f, 0.0f, Positions::magnet_z_pos_from_pivot + standoff);
+
+        Eigen::Matrix<float, 9, 1> B_all;
+        Eigen::Matrix<float, 9, 6> J_unused;
+        fm.evaluate(t, R, B_all, J_unused);
+
+        // The same sensors, with the cross magnets present but inert.
+        MagnetPlacement placements[3] = {
+            magnets[0].place(t, R), magnets[1].place(t, R), magnets[2].place(t, R),
+        };
+        MagnetPlacement inert[3] = { placements[0], placements[1], placements[2] };
+        for (int j = 0; j < 3; ++j) inert[j].moment_world = Vec3::Zero();
+
+        Eigen::Matrix<float, 9, 1> B_paired;
+        for (int i = 0; i < 3; ++i) {
+            Vec3 B_i;
+            Eigen::Matrix<float, 3, 6> J_i;
+            sensors[i].evaluate(magnets[i], placements[i],
+                                inert[(i + 1) % 3], inert[(i + 2) % 3],
+                                t, B_i, J_i);
+            B_paired.block<3, 1>(i * 3, 0) = B_i;
+        }
+
+        const float share = (B_all - B_paired).norm() / B_paired.norm();
+        snprintf(msg, sizeof(msg),
+                 "cross-magnet share at standoff %.1fmm is %.2f%%, expected roughly 1-5%%",
+                 standoff, 100.0f * share);
+        TEST_ASSERT_TRUE_MESSAGE(share > 0.005f && share < 0.10f, msg);
+        TEST_MESSAGE(msg);
+    }
+}
+
 // ======================================================================
-// 3. ForwardModel: Grid Sweep & Calibration State Validation
+// 4. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
 // Updated to accept hardware calibration states.
@@ -577,6 +642,7 @@ static int run_all_tests() {
     RUN_TEST(test_magnet_strength_scales_field_and_jacobian);
     RUN_TEST(test_dipole_field_jacobian);
     RUN_TEST(test_dipole_matches_the_magnet_the_table_models);
+    RUN_TEST(test_cross_magnet_terms_are_actually_present);
     RUN_TEST(test_forward_model_jacobian_grid);
     return UNITY_END();
 }
