@@ -5,6 +5,26 @@
 // The actual Bi-cubic-field interpolation table
 constexpr BicubicField CALCULATED_BICUBIC_FIELD(BICUBIC_INTERPOLATION_TABLE, BICUBIC_ORIGIN, BICUBIC_FAR);
 
+// Field and gradient of an ideal point dipole, in whatever frame the caller
+// expresses m and r in.
+//
+//   m [in]  dipole moment, mT*mm^3 (see DIPOLE_MOMENT_AT_REFERENCE_MT_MM3)
+//   r [in]  displacement from the dipole to the field point, mm
+//   J [out] dB_a/dr_b, in that same frame
+//   returns the field there, mT
+//
+// Being frame-agnostic is the point rather than a nicety. A magnet's
+// orientation reaches this formula entirely through m -- one rotated vector --
+// so a caller holding a world-frame moment gets a world-frame gradient
+// straight out, skipping the transform-in, rotate-out and R J R^T congruence
+// that the interpolated path needs (Math.md 4.E). The table cannot do that:
+// it is tabulated in (r, z), so it must be handed magnet-local coordinates.
+//
+// Deliberately no r -> 0 branch, unlike MagnetModel::evaluate. This models the
+// magnets a sensor does NOT sit under, which the knob's geometry keeps a
+// triangle side away; it is never evaluated near its own source.
+Vec3 dipole_field(const Vec3& m, const Vec3& r, Mat3& J);
+
 struct MagnetModel {
     const Vec3 magnet_pos_knob;
     const Mat3 magnet_rotation;
@@ -31,6 +51,32 @@ struct MagnetModel {
     // it that way lets VirtualSensor::evaluate subtract a constant vector instead of
     // performing a second 3x3 rotation on every call.
     const Vec3 magnet_offset_local;
+
+    // --- The same magnet, as the far-field model sees it ---
+    //
+    // Both are what a *cross* sensor needs: one that this magnet is not paired
+    // with, and so evaluates through dipole_field() rather than the table.
+    // Precomputed here because they are frozen calibration constants, and
+    // because they depend only on the magnet -- ForwardModel lifts them out of
+    // the sensor loop, so each is built once per solve rather than per pair.
+
+    // This magnet's geometric centre in the knob frame, half a magnet along
+    // its own axis above magnet_pos_knob, which is the BOTTOM FACE. The
+    // equivalent dipole belongs at the centre; siting it at the bottom face
+    // instead is a tens-of-percent error at cross-magnet range, not a rounding
+    // one.
+    const Vec3 centre_knob;
+
+    // Dipole moment magnitude, mT*mm^3: the table's reference moment scaled by
+    // this magnet's own strength, through the same strength_ratio_ the
+    // interpolated path uses. So a magnet 5% strong is 5% strong in both
+    // models by construction, rather than by two constants being kept in
+    // agreement.
+    //
+    // Magnitude only. The polarization points along the magnet's local -z, so
+    // the moment VECTOR is -moment_mT_mm3 times the magnet's own axis, which
+    // in world coordinates is the third column of R * magnet_rotation.
+    const float moment_mT_mm3;
 
     // We assume BicubicField is passed by reference to avoid copying the grid
     MagnetModel(const BicubicField& field_model, const Vec3& m_local,

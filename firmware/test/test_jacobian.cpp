@@ -290,6 +290,118 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
 }
 
 // ======================================================================
+// 3. dipole_field: the far-field model used for the two magnets a sensor
+//    is NOT paired with. Same finite-difference treatment as the
+//    interpolated path -- it is a hand-derived Jacobian like every other
+//    link in the chain, and fails just as silently.
+// ======================================================================
+
+// Displacements at the geometry this model is actually used at: magnets sit a
+// triangle side apart (Positions::triangle_sidelength_mm = 28.58), a few mm to
+// a couple of cm above the sensor plane. Deliberately NOT probed near the
+// source -- dipole_field has no r->0 branch because nothing ever calls it
+// there, and probing close would test an approximation the design never
+// relies on.
+static const Vec3 DIPOLE_TEST_POINTS[] = {
+    Vec3( 28.58f,   0.0f,  -6.0f),
+    Vec3( 28.58f,   0.0f,  -9.0f),
+    Vec3( 20.0f,   20.6f, -15.0f),   // generic azimuth, no zero component
+    Vec3(  0.0f,   28.58f, -26.0f),
+    Vec3(-15.0f,   24.3f,  -3.0f),   // asymmetric
+};
+
+// A moment that is not axis-aligned, so a term that happens to vanish for
+// m = (0, 0, -M) cannot hide. The real caller passes the magnet's own axis,
+// but the formula is general and the test should exercise it as such.
+static const Vec3 DIPOLE_TEST_MOMENT(0.21f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3,
+                                     -0.34f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3,
+                                     -0.91f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3);
+
+static void check_dipole_at(const Vec3& m, const Vec3& r) {
+    Mat3 J_analytic;
+    dipole_field(m, r, J_analytic);
+
+    // Column j is dB/dr_j by central difference.
+    Mat3 J_numeric;
+    for (int j = 0; j < 3; ++j) {
+        Vec3 dr = Vec3::Zero();
+        dr[j] = FD_STEP_LINEAR;
+        Mat3 dummy;
+        const Vec3 B_plus  = dipole_field(m, (r + dr).eval(), dummy);
+        const Vec3 B_minus = dipole_field(m, (r - dr).eval(), dummy);
+        J_numeric.col(j) = (B_plus - B_minus) / (2.0f * FD_STEP_LINEAR);
+    }
+
+    char msg[192];
+    const float e = max_rel_error_mat<3, 3>(J_analytic, J_numeric);
+    snprintf(msg, sizeof(msg),
+             "dipole J mismatch at r=(%.2f, %.2f, %.2f), |r|=%.2f (rel err %.5f)",
+             r[0], r[1], r[2], r.norm(), e);
+    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
+
+    // Symmetry is not incidental: the implementation computes six entries and
+    // mirrors three, which is only valid because the field is curl-free and J
+    // is therefore minus the Hessian of a scalar potential. Asserted so that
+    // an asymmetric edit fails here rather than producing a plausible-looking
+    // solver that drifts.
+    const float asym = (J_analytic - J_analytic.transpose()).norm() / J_analytic.norm();
+    snprintf(msg, sizeof(msg),
+             "dipole J not symmetric at r=(%.2f, %.2f, %.2f): rel asymmetry %.3e",
+             r[0], r[1], r[2], asym);
+    TEST_ASSERT_TRUE_MESSAGE(asym < 1e-6f, msg);
+}
+
+void test_dipole_field_jacobian(void) {
+    for (const Vec3& r : DIPOLE_TEST_POINTS) {
+        check_dipole_at(DIPOLE_TEST_MOMENT, r);
+    }
+}
+
+void test_dipole_matches_the_magnet_the_table_models(void) {
+    // The two models have to describe the SAME magnet: the table is generated
+    // from a 6x6mm cylinder at BICUBIC_FIELD_REFERENCE_MT, and the dipole is
+    // supposed to be that cylinder's far-field limit. Nothing else in the
+    // suite would notice a moment that is off by a constant factor, or a
+    // dipole placed at the magnet's bottom face instead of its centre -- both
+    // produce a smooth, self-consistent, finite-difference-clean field that is
+    // simply the wrong size.
+    //
+    // The check is against MagnetModel::evaluate at the far edge of the
+    // table's domain, where both models are valid at once. Agreement there is
+    // limited by the dipole approximation itself (the cylinder is not a point
+    // at 10mm), so the tolerance is percent-scale on purpose -- this is a
+    // units-and-placement check, not a precision one. A wrong 1/mu0 factor
+    // would show up here as a factor of ~8e5, and the bottom-face-vs-centre
+    // error as tens of percent.
+    MagnetModel magnet(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+
+    // On the magnet's axis, at the bottom of the table's z range. Far enough
+    // out for the dipole limit to be close, still inside the interpolated
+    // domain. Local frame: origin at the bottom face, +z along polarization.
+    const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.z);
+
+    Mat3 J_table;
+    const Vec3 B_table = magnet.evaluate(v_l, J_table);
+
+    // Polarization is along local -z, so the moment vector is -|m| * z_hat.
+    const Vec3 m(0.0f, 0.0f, -magnet.moment_mT_mm3);
+    // Displacement from the DIPOLE (at the centre) to the field point, which
+    // is what makes MAGNET_HALF_HEIGHT_MM load-bearing here.
+    const Vec3 r = v_l - Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM);
+
+    Mat3 J_dipole;
+    const Vec3 B_dipole = dipole_field(m, r, J_dipole);
+
+    char msg[224];
+    const float e = max_rel_error_mat<3, 1>(B_dipole, B_table);
+    snprintf(msg, sizeof(msg),
+             "dipole vs table at z=%.1f: table (%.4f, %.4f, %.4f), dipole (%.4f, %.4f, %.4f), rel err %.4f",
+             v_l[2], B_table[0], B_table[1], B_table[2],
+             B_dipole[0], B_dipole[1], B_dipole[2], e);
+    TEST_ASSERT_TRUE_MESSAGE(e < 0.05f, msg);
+}
+
+// ======================================================================
 // 3. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
@@ -463,6 +575,8 @@ static int run_all_tests() {
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
     RUN_TEST(test_magnet_strength_scales_field_and_jacobian);
+    RUN_TEST(test_dipole_field_jacobian);
+    RUN_TEST(test_dipole_matches_the_magnet_the_table_models);
     RUN_TEST(test_forward_model_jacobian_grid);
     return UNITY_END();
 }
