@@ -1,12 +1,12 @@
 #pragma once
 // PROTOTYPE / SKETCH -- not wired into the firmware build (see README.md).
-// See SCHUR_SOLVER_DESIGN.md for the full derivation and the store-vs-
-// recompute memory tradeoff this shape is built around. Short version: the
-// bundle-calibration normal equations are arrowhead-shaped (dense P x P
-// shared block, block-diagonal 6x6 per-frame pose blocks, thin P x 6
-// coupling blocks) -- eliminating each frame's pose block via Schur
-// complement, one frame at a time, turns an O((P+6N)^2) memory problem into
-// O(P^2) persistent + O(P) transient, independent of N.
+// Derivation: design documentation/Math.md §7 (why the normal equations are
+// arrowhead-shaped, why eliminating each frame's pose block is an exact
+// identity, why it streams). Engineering tradeoffs (store vs. recompute,
+// memory budget): SCHUR_SOLVER_DESIGN.md. This file is the accumulator
+// those two describe -- H_pp/H_sp/H_ss/rhs_p/rhs_s below are Math.md §7's
+// D_k/B_k/A/b_k/a, one frame's terms except H_ss/rhs_s which are one
+// frame's ADDITIVE CONTRIBUTION to the shared corner (see FrameNormalEquations).
 //
 // Sign/scaling convention, stated once here rather than re-derived at every
 // call site: callers pass rows already divided by their sigma (matching

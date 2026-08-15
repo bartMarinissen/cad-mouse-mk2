@@ -87,6 +87,8 @@ strictly weaker check of something exactly checkable.
   code *builds* for the target and what it costs in flash, which is a
   different and much weaker claim than knowing how fast it runs there. Nothing
   here has executed on hardware.
-- **`design documentation/Math.md` owns the forward model and its Jacobian.**
-  The derivations in these headers extend it to the calibration parameters;
-  where the two describe the same quantity, `Math.md` is authoritative.
+- **`design documentation/Math.md` owns every derivation here.** §1–6 are the
+  forward model and its per-frame Jacobian; §7 is the arrowhead normal
+  equations and the Schur elimination `schur_normal_equations.h` implements.
+  This directory's comments point at it rather than restating it — where a
+  comment and `Math.md` seem to disagree, `Math.md` is right.

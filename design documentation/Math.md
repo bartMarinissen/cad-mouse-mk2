@@ -7,7 +7,9 @@ optimization loop.
 
 The structure below follows the natural computational order — global pose, to local
 geometry, to field lookup, to sensor output — so that each section corresponds to one
-conceptual stage of the pipeline.
+conceptual stage of the pipeline. §1–6 cover the single-frame pose solve. §7 extends
+this to bundle calibration — fitting the constants §1 holds frozen, jointly across many
+frames — and derives the block structure of that larger problem's normal equations.
 
 ---
 
@@ -316,3 +318,121 @@ sensor gains, and magnet tilts. Perturbing $R$ with the exact matrix exponential
 $\exp([\mathbf{w}]_\times)$ (not the first-order $I+[\mathbf{w}]_\times$) for the
 rotation columns is important here: using the same first-order approximation on both
 sides would let a shared error hide from the comparison.
+
+---
+
+## 7. Bundle Calibration — the Arrowhead Normal Equations
+
+§1–6 treat $\mathbf{s}_i$, $\mathbf{m}_i$, $R_{m,i}$, $G_i$ as frozen and solve for one
+pose. Calibration is the inverse problem: fit those constants themselves, from $N$
+captured frames at once, each contributing its own unknown pose. This section derives
+the shape of the resulting normal equations and how they're solved without ever forming
+the full dense system. It takes §2–§4's Jacobian as given — frame $k$'s own-pose block
+below is exactly $J$ from §4.F, unmodified — and does not re-derive how the shared
+constants' columns are computed; that extension of §4's chain rule to $\mathbf s_i$,
+$\mathbf m_i$, $R_{m,i}$, $G_i$ (plus sensor offset) lives with the prototype
+implementation in `firmware/experimental/bundle_calibration_jacobian/`.
+
+### 7.1 Setup
+
+Let $\mathbf{x}\in\mathbb{R}^P$ collect the shared constants being fit (magnet
+position/tilt/strength, sensor gain/offset — $P\approx45$), and let
+$\Delta\boldsymbol{\rho}_k\in\mathbb{R}^6$ be frame $k$'s own pose update ($k=1,\dots,N$,
+$N\approx60$), in the same local-chart sense as §2. The joint unknown is the stack
+$(\Delta\mathbf{x},\,\Delta\boldsymbol{\rho}_1,\dots,\Delta\boldsymbol{\rho}_N)\in
+\mathbb{R}^{P+6N}$.
+
+Frame $k$ contributes its own residual $\mathbf{r}_k\in\mathbb{R}^9$ — the same
+per-sensor forward model as §2, evaluated at frame $k$'s pose and the current shared
+estimate. **This section assumes $\mathbf{r}_k$ depends on $\mathbf{x}$ and
+$\boldsymbol{\rho}_k$ only** — not on any other frame's pose, not even indirectly through
+some function of the relationship between poses. A term like a temporal-smoothness prior
+linking consecutive frames would violate this and break everything below; nothing of
+that kind exists here, but it's the specific thing that would need to hold for whatever
+is added later.
+
+### 7.2 Block structure of the stacked Jacobian
+
+Under that assumption, differentiating $\mathbf{r}_k$ produces exactly two nonzero
+blocks — $C_k=\partial\mathbf{r}_k/\partial\mathbf{x}$ and
+$P_k=\partial\mathbf{r}_k/\partial\boldsymbol{\rho}_k$, the latter being §4.F's $J$
+verbatim, one instance per frame — and every other column of frame $k$'s row-block is
+exactly zero, since $\mathbf{r}_k$ doesn't depend on those variables at all:
+
+$$J = \begin{bmatrix}
+C_1 & P_1 & 0   & \cdots & 0 \\
+C_2 & 0   & P_2 & \cdots & 0 \\
+\vdots & \vdots & \vdots & \ddots & \vdots \\
+C_N & 0   & 0   & \cdots & P_N
+\end{bmatrix} \in \mathbb{R}^{9N\times(P+6N)}$$
+
+### 7.3 The normal equations inherit the shape
+
+Gauss-Newton (§5) forms $H=J^TJ$ and $\mathbf{g}=-J^T\mathbf{r}$ from whatever $J$ is
+handed to it; §5 used the single-frame $9\times6$ one, this is the same step applied to
+§7.2's stacked one. Multiplying $J^T$ by $J$ block-by-block:
+
+$$J^TJ = \begin{bmatrix}
+A        & B_1    & B_2    & \cdots & B_N   \\
+B_1^\top & D_1    & 0      & \cdots & 0     \\
+B_2^\top & 0      & D_2    & \cdots & 0     \\
+\vdots   & \vdots & \vdots & \ddots & \vdots \\
+B_N^\top & 0      & 0      & \cdots & D_N
+\end{bmatrix} = H, \qquad
+A=\sum_{k=1}^N C_k^\top C_k,\quad B_k=C_k^\top P_k,\quad D_k=P_k^\top P_k$$
+
+with the right-hand side splitting the same way:
+$\mathbf{a}=-\sum_k C_k^\top\mathbf{r}_k$, $\mathbf{b}_k=-P_k^\top\mathbf{r}_k$.
+
+The off-diagonal pose blocks are **exactly** zero, not merely small: block $(k,l)$ for
+$k\ne l$ multiplies row $k$'s pose-$l$ column — which is $0$ by §7.2 — against
+$P_l$, so it vanishes regardless of the data. The arrowhead shape is a direct
+consequence of §7.1's independence assumption, not a numerical coincidence that happens
+to hold approximately. ($A$ is dense: every frame contributes a $C_k^\top C_k$ term to
+the same $P\times P$ block. A damping term $\lambda I$, exactly as in §5, can be added to
+$D_k$ — and $A$ — without changing this structure; omitted above for clarity.)
+
+### 7.4 Eliminating the pose blocks
+
+As pure linear algebra, independent of where this system came from: row $k$ of $H\,
+\Delta=\mathbf{g}$ reads $B_k^\top\Delta\mathbf{x}+D_k\Delta\boldsymbol{\rho}_k=
+\mathbf{b}_k$, so — provided $D_k$ is invertible —
+
+$$\Delta\boldsymbol{\rho}_k = D_k^{-1}\big(\mathbf{b}_k - B_k^\top\Delta\mathbf{x}\big)$$
+
+is an *exact* expression for frame $k$'s pose update, still carrying the unknown
+$\Delta\mathbf{x}$. Substituting into the top block row and collecting
+$\Delta\mathbf{x}$ terms:
+
+$$\left(A - \sum_{k=1}^N B_kD_k^{-1}B_k^\top\right)\Delta\mathbf{x} \;=\; \mathbf{a} - \sum_{k=1}^N B_kD_k^{-1}\mathbf{b}_k$$
+
+a $P\times P$ system for $\Delta\mathbf{x}$ alone — the Schur complement of
+$\mathrm{diag}(D_1,\dots,D_N)$ in $H$. Nothing here is approximate: solving this for
+$\Delta\mathbf{x}$ and reading each $\Delta\boldsymbol{\rho}_k$ off the boxed line above
+gives the identical answer (to roundoff) that factoring the full $(P+6N)\times(P+6N)$
+system directly would. It's a reduction in work, not in accuracy — the same trick
+classical bundle adjustment uses to eliminate camera poses before solving for scene
+structure.
+
+### 7.5 Streaming the elimination
+
+The reduced system above still looks like it needs every frame's $B_k,D_k$ at once to
+form its two sums. It doesn't: each term touches only frame $k$'s own $C_k,P_k,
+\mathbf{r}_k$, so both sums accumulate one frame at a time. Build frame $k$'s local
+blocks, factor its $6\times6$ $D_k$ once, fold its contribution into a running
+$P\times P$ accumulator, and discard everything about that frame except what the
+accumulator retains — no frame's data is ever held alongside another's. After all $N$
+frames, solve the accumulated $P\times P$ system once for $\Delta\mathbf{x}$, then make
+a second pass, rebuilding each frame's $B_k,D_k,\mathbf{b}_k$ to recover its
+$\Delta\boldsymbol{\rho}_k$ from the boxed line in §7.4. Peak memory is one accumulator
+plus one frame's transient blocks — $O(P^2)$, independent of $N$ — instead of the full
+$(P+6N)^2$ a direct solve would need.
+
+`firmware/experimental/bundle_calibration_jacobian/schur_normal_equations.h` implements
+exactly this: `FrameNormalEquations`/`FramePoseBlock` accumulate one frame's $C_k,P_k$
+contribution, `SharedNormalEquations::absorb_frame` performs §7.4's fold into $A,
+\mathbf{a}$, and `solve_frame_pose_update` performs the back-substitution. It's checked
+against a dense assembly of the full arrowhead system rather than finite differences —
+§7.4 is an identity with a ground-truth answer, not an approximation to test for
+plausibility — see that directory's `README.md` for the verification methodology and
+`TODO/on-device-calibration.md` for what is and isn't built on top of it.

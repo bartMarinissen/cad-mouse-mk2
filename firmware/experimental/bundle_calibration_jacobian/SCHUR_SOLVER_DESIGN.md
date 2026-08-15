@@ -5,67 +5,39 @@ solver would work on — what has to exist in memory, when, and how big it is �
 not the LM/trust-region outer loop (damping, step acceptance, convergence),
 which is separate, later work.
 
-## The problem's shape
+**The derivation lives in `design documentation/Math.md` §7** — why the
+normal equations are arrowhead-shaped, why the elimination is an exact
+identity rather than an approximation, and why it streams one frame at a
+time. That's the one authoritative copy; this file is what's specific to
+turning it into working code: the store-vs-recompute memory tradeoff, the
+concrete data structures, and what precision the implementation actually
+hits.
 
-Per `magnet_field_model/calibration/bundle_params.py`, the PC-side solve's
-unknown vector is `[x_shared (P), pose_0 (6), pose_1 (6), ..., pose_{N-1} (6)]`
-— P ≈ 45 shared calibration parameters, N ≈ 60 frames. The normal equations
-`H dx = rhs` this implies are **arrowhead-shaped**:
+Names here follow the code (`H_pp`, `H_sp`, `H_ss`, `rhs_p`, `rhs_s`), which
+map onto Math.md §7's $D_k$, $B_k$, $A$, $\mathbf b_k$, $\mathbf a$
+respectively — one frame's terms, not summed, except `H_ss`/`rhs_s` which
+are each frame's *additive contribution* to the shared corner ($A$,
+$\mathbf a$ are sums over all frames).
 
-```
-H = [ H_ss      H_sp0^T  H_sp1^T  ...  H_sp,N-1^T ]
-    [ H_sp0     H_pp0    0        ...  0          ]
-    [ H_sp1     0        H_pp1    ...  0          ]
-    [ ...                                          ]
-    [ H_sp,N-1  0        0        ...  H_pp,N-1   ]
-```
+Verified against a dense reference (assemble the *full* arrowhead system,
+solve it directly, check the frame-by-frame path in
+`schur_normal_equations.h` agrees) rather than finite differences — Math.md
+§7.4 is a linear-algebra identity, so there's a ground-truth answer to check
+against, not just "plausible". Measured (host build, real Eigen 3.4,
+`mt19937`-seeded random synthetic frames): both `dx_shared` and every
+frame's `dx_pose` match the dense reference to ~7-9e-7 relative error —
+float32 machine precision, not an approximation. (The first version of this
+test used a hand-rolled deterministic generator, `sin()` of a linear index
+combination, instead of a real PRNG — every matrix it produced was silently
+rank-deficient, since `sin(x + shift)` is always a linear combination of
+`sin(x)`/`cos(x)` and so spans only a 2-D subspace regardless of matrix
+size. That made the test fail at ~100% relative error on a correct
+implementation; fixed by switching to `std::mt19937`, and the test now
+explicitly checks each synthetic frame's `H_pp` is actually full rank
+before trusting the comparison, so this failure mode can't silently
+reappear.)
 
-`H_ss` (P×P) is dense — every frame contributes to it. Each `H_ppf` (6×6) is
-**that frame's own pose block only** — no cross-frame coupling, because
-perturbing frame f's pose cannot affect frame g's residual. Each `H_spf`
-(P×6) couples frame f's pose to the shared parameters. This block-diagonal
-pose structure is exactly what makes a direct (P+6N)×(P+6N) dense solve
-wasteful: at P=45, N=60, that's a 405×405 system, most of whose off-diagonal
-structure is exact zero by construction.
-
-## Schur elimination: exact, not approximate
-
-Eliminating each frame's pose block first (classic bundle-adjustment trick)
-gives an algebraically **exact** reduced P×P system — not an approximation:
-
-```
-H_reduced  = H_ss  - sum_f  H_spf @ H_ppf^-1 @ H_spf^T
-rhs_reduced = rhs_s - sum_f  H_spf @ H_ppf^-1 @ rhs_pf
-```
-
-Solve `H_reduced @ dx_shared = rhs_reduced` (one P×P solve), then recover
-each frame's own pose update by back-substitution:
-
-```
-dx_posef = H_ppf^-1 @ (rhs_pf - H_spf^T @ dx_shared)
-```
-
-Both steps only ever need one frame's `H_ppf`/`H_spf`/`rhs_pf` at a time — the
-whole point of the reduction. `firmware/experimental/bundle_calibration_jacobian/schur_normal_equations.h`
-implements exactly this, generically in P, and `test_schur_normal_equations.cpp`
-verifies it against a dense reference (assemble the *full* arrowhead system,
-solve it directly, check both paths agree) — this is checkable **exactly**,
-unlike the Jacobian derivation: Schur complement is a linear-algebra identity,
-so there's a ground-truth answer to compare against, not just "plausible".
-Measured (host build, real Eigen 3.4, `mt19937`-seeded random synthetic
-frames): both `dx_shared` and every frame's `dx_pose` match the dense
-reference to ~7-9e-7 relative error — float32 machine precision, not an
-approximation. (The first version of this test used a hand-rolled
-deterministic generator, `sin()` of a linear index combination, instead of a
-real PRNG — every matrix it produced was silently rank-deficient, since
-`sin(x + shift)` is always a linear combination of `sin(x)`/`cos(x)` and so
-spans only a 2-D subspace regardless of matrix size. That made the test fail
-at ~100% relative error on a correct implementation; fixed by switching to
-`std::mt19937`, and the test now explicitly checks each synthetic frame's
-`H_pp` is actually full rank before trusting the comparison, so this
-failure mode can't silently reappear.)
-
-Note what's *not* new here: `H_ppf` is a 6×6, and `H_ppf.ldlt().solve(...)` is
+Note what's *not* new here: `H_pp` is a 6×6, and `H_pp.ldlt().solve(...)` is
 the same fixed-size LDLT call `solve_pose.cpp` already does, at the same
 size, once per frame. The only new primitive is a P×P dense LDLT (bigger,
 but still fixed-size, no-malloc, one call per solver iteration, not per
@@ -78,10 +50,10 @@ into `H_reduced`/`rhs_reduced` (call this **pass 1**), and then needs it
 *again* to back-substitute that frame's pose update once `dx_shared` is known
 (**pass 2**, which can only happen after pass 1 has finished for every frame
 and the P×P system has been solved). Between those two passes, something has
-to give: either keep every frame's `H_spf`/`H_ppf`/`rhs_pf` in memory, or
+to give: either keep every frame's `H_sp`/`H_pp`/`rhs_p` in memory, or
 throw them away and rebuild them.
 
-**Storing per frame:** `H_spf` alone is P×6 = 45×6 = 270 floats = 1080 bytes;
+**Storing per frame:** `H_sp` alone is P×6 = 45×6 = 270 floats = 1080 bytes;
 × 60 frames = **~65 KB**. Measured against what's actually left: a current
 `pio run -e seeed_xiao_rp2040` reports 64,516 bytes of static RAM used of
 262,144, so ~193 KB remains for stack and heap combined. Storing every frame's
