@@ -452,15 +452,38 @@ void test_forward_model_jacobian_grid(void) {
 void setUp(void) {}
 void tearDown(void) {}
 
-void setup() {
-    delay(2000); // let serial monitor attach
+// The suite itself, kept in one place because there are two entry points into
+// it: the board runs setup()/loop(), the host runs main(). Adding a test to
+// one and not the other is exactly the kind of divergence that would make the
+// two environments quietly disagree about what "passing" means.
+// Returns UNITY_END()'s failure count.
+static int run_all_tests() {
     UNITY_BEGIN();
     RUN_TEST(test_bicubic_field_derivatives);
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
     RUN_TEST(test_magnet_strength_scales_field_and_jacobian);
     RUN_TEST(test_forward_model_jacobian_grid);
-    UNITY_END();
+    return UNITY_END();
+}
+
+#ifdef ARDUINO
+
+void setup() {
+    delay(2000); // let serial monitor attach
+    run_all_tests();
 }
 
 void loop() {}
+
+#else
+
+// env:native_test (platformio.ini) builds without a framework, so there is no
+// setup()/loop() for anything to call -- the host runner starts at main(), and
+// the failure count has to come back as the exit status for `pio test` to
+// notice a failure at all.
+int main() {
+    return run_all_tests();
+}
+
+#endif
