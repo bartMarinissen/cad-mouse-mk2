@@ -120,13 +120,48 @@ These block writing a real solver, and are not settled:
 
 *(Magnet tilt's parameterization used to be listed here. It is now decided —
 see "Magnet tilt" below.)*
-- **The concrete shared-parameter column layout.** Which of the ~45 columns
-  belong to which group. Needed before the per-frame blocks' real sparsity
-  can be exploited: most groups touch only one sensor's 3 rows per frame, so
-  the dense P×P the prototype forms is far denser than the problem is.
 - **Whether it should be built at all.** The above says it's possible. It
   does not say it's worth the firmware surface area, and that is the actual
   decision.
+
+## Not open after all: the P=45 column layout
+
+This was listed as an open question — "which of the 45 columns belong to
+which group, needed before the sparsity can be exploited." That was a
+mistake: `parameterization.py` already owns a concrete layout in
+`GROUP_SLICES`, which `bundle_geometry.py`'s hot path reads directly. The
+firmware should mirror it rather than invent one, since the two agreeing is
+the point.
+
+| group | free | slice |
+|---|---:|---|
+| `magnet_pos` | 3 | 0:3 |
+| `magnet_tilt` | 6 | 3:9 |
+| `magnet_strength_mean` | 1 | 9:10 |
+| `magnet_strength_diff` | 2 | 10:12 |
+| `sensor_offset` | 9 | 12:21 |
+| `gain_aniso` | 6 | 21:27 |
+| `gain_sym` | 9 | 27:36 |
+| `gain_rot` | 9 | 36:45 |
+
+**With the layout known, the deferred sparsity optimization is worth
+quantifying, because it is much larger than anything else on this page.**
+Under `PAIRED_ONLY` sensor *i* sees only magnet *i*, so one sensor's 3 rows
+touch: all 3 `magnet_pos` columns (the gauge basis moves all three magnets
+together), its own magnet's 2 `magnet_tilt` columns, `strength_mean`, 1–2
+`strength_diff`, its own 3 `sensor_offset`, and its own 8 gain columns —
+**about 18–19 of 45.**
+
+`H_ss += Jᵀ J` only has nonzeros where both columns are live, so a
+sparsity-aware accumulation costs ~3·19² ≈ 1,083 MAC per sensor against
+3·45² = 6,075 dense: roughly a **6× cut on the term that dominates the whole
+solver**. Every other optimization considered so far has been worth ~0.3%.
+This one is worth most of the total. It should be the first thing done if
+this is built, not a follow-up.
+
+Counted from the basis shapes rather than measured — worth re-deriving in
+code before relying on the exact figure, though the order of magnitude is
+not in doubt.
 
 ## Not built
 

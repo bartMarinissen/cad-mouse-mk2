@@ -169,7 +169,15 @@ shape specifically: **the dense P×P is deliberate, not an oversight.** Most
 shared-parameter groups touch only one sensor's 3 rows per frame — only
 magnet position and the strength mean are genuinely dense across all three —
 so a frame's real contribution is far sparser than the P×P this forms.
-Exploiting that needs the concrete column layout settled first, and it is a
-strict optimization on top of this: same algorithm, same answer, less
-arithmetic. Getting the exact general version right first is what makes a
-sparse version checkable against something.
+
+That sparsity is now quantified, and it is the largest optimization anywhere
+in this design: one sensor touches roughly 18–19 of the 45 columns, making a
+sparsity-aware `H_ss` accumulation about **6× cheaper** on the single term
+that dominates the solver. `TODO/on-device-calibration.md` has the per-group
+count and the layout it comes from (`parameterization.py`'s `GROUP_SLICES`,
+which turned out to already be decided rather than open).
+
+It remains a strict optimization on top of this implementation — same
+algorithm, same answer, less arithmetic — and this exact, general version is
+what makes a sparse one checkable against something, which is why it is
+written this way first rather than skipped.
