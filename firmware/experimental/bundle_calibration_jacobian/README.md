@@ -16,6 +16,7 @@ Run the checks:
 ./verify.sh         # raw Jacobians, against central finite differences
 ./verify_layout.sh  # P=45 column wiring, against FD of the real prediction
 ./verify_schur.sh   # solver shape, against a dense reference solve
+./verify_solver.sh  # end-to-end LM fit of synthetic data
 ./verify_arm.sh     # cross-compiles for cortex-m0plus, reports flash/RAM cost
 ```
 
@@ -97,6 +98,24 @@ strictly weaker check of something exactly checkable.
 - **Pass 2 must linearize where pass 1 did.** Applying the shared update before
   every frame has been back-substituted makes the back-substitution silently
   stop being exact. `SCHUR_SOLVER_DESIGN.md` has the detail.
+- **Check your probe poses are inside the bicubic table before believing any
+  of this.** Every test here originally used a hand-picked `BASE_T` with
+  `z = 6`, which puts the magnet-local query at `z_l = +9` — outside the
+  table's domain entirely (bounds live in `magnet_model_table.h`; the knob
+  actually rests ~21mm up, per `Positions::approx_rest_pose`). Every FD test
+  **passed** out there, because analytic-vs-numeric consistency holds in the
+  extrapolation region too. What broke was the solver: fed extrapolated
+  "measurements" of 500–2500 mT against a 1000 mT reference, LM stalled after
+  a 4× cost reduction. Moved inside the table, the same solver converges by
+  seven orders of magnitude. A solver failing to converge can be a statement
+  about its data rather than about itself.
+- **FD steps here are per-group and were measured, not guessed.** Three groups
+  need non-default steps for two different reasons, both roundoff: strength
+  and `sensor_offset` are in mT and enter a large prediction additively, and
+  the tilt chart moves the field only by `|B|·O(h)`. Each was set by sweeping
+  the step and watching which direction the error moved — error *growing* as
+  the step shrinks means the instrument is at fault, not the algebra. The
+  sweeps are recorded next to the constants.
 - **The instruction-count figures in the headers are static host x86 counts**,
   the same method `TODO/Performance.md` uses. They are directionally real and
   are not RP2040 soft-float measurements. `verify_arm.sh` establishes this

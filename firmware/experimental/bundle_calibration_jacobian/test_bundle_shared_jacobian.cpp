@@ -47,7 +47,14 @@ static const Vec3 SENSOR_POS[3] = {
 static const Vec3 MAGNET_LOCAL[3] = {
     Positions::Magnet_1_knob, Positions::Magnet_2_knob, Positions::Magnet_3_knob,
 };
-static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
+// Offset from the real rest pose, not an invented one. Positions.h owns the
+// geometry; the knob sits ~21mm above the sensor plane, so a hand-picked
+// z=6 puts the magnet-local query at z_l = +9 -- outside the bicubic table's
+// domain entirely (bounds live in magnet_model_table.h). Finite-difference
+// checks still PASS out there, because analytic-vs-numeric consistency holds
+// in the extrapolation region too; they just stop being about the region the
+// knob actually reaches. firmware/test/README flags exactly this.
+static const Vec3 BASE_T = Positions::approx_rest_pos + Vec3(2.0f, -1.5f, 0.0f);
 
 static Mat3 exp_so3(const Vec3& w) {
     float theta = w.norm();
@@ -368,10 +375,18 @@ void test_gnomonic_chart_jacobian(void) {
     // Numeric: perturb the chart PARAMETER and rebuild the rotation through
     // the chart, so this exercises rotation_from_tilt and chart_jacobian
     // together. A bug in either shows up here.
+    // Larger than FD_STEP_ANGULAR, and measured rather than guessed: a tilt
+    // perturbation moves the field only by |B| * O(h), so at the real rest
+    // pose the differenced signal sinks toward float32 epsilon. Sweeping the
+    // step gave 5e-3 pass / 2e-3 pass / 5e-4 1.3% / 1e-4 3.5% / 2e-5 10.8% --
+    // error growing as the step shrinks, which is cancellation, not
+    // truncation. The raw d_magnet_tilt check above keeps FD_STEP_ANGULAR
+    // because it differences a bigger quantity and passes there.
+    constexpr float CHART_FD_STEP = 2.0e-3f;
     for (int p = 0; p < 2; ++p) {
         MagnetTilt plus = CHART_TILT, minus = CHART_TILT;
-        (p == 0 ? plus.u : plus.v)  += FD_STEP_ANGULAR;
-        (p == 0 ? minus.u : minus.v) -= FD_STEP_ANGULAR;
+        (p == 0 ? plus.u : plus.v)  += CHART_FD_STEP;
+        (p == 0 ? minus.u : minus.v) -= CHART_FD_STEP;
 
         MagnetState sp{MAGNET_LOCAL[0], rotation_from_tilt(CHART_NOMINAL, plus), strength};
         MagnetState sm{MAGNET_LOCAL[0], rotation_from_tilt(CHART_NOMINAL, minus), strength};
@@ -382,7 +397,7 @@ void test_gnomonic_chart_jacobian(void) {
         evaluate_bundle_jacobian(sensor, build_magnet_model(CALCULATED_BICUBIC_FIELD, sm),
                                   t_pose, R, Bm, Jd, Jsd);
 
-        Vec3 numeric = (Bp - Bm) / (2.0f * FD_STEP_ANGULAR);
+        Vec3 numeric = (Bp - Bm) / (2.0f * CHART_FD_STEP);
         Vec3 analytic = J_analytic.col(p);
         float e = max_rel_error_mat<3, 1>(analytic, numeric);
         snprintf(msg, sizeof(msg), "chart column %d (%s) mismatch, rel err %.5f",

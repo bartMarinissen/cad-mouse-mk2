@@ -34,7 +34,14 @@ static const Vec3 SENSOR_POS[3] = {
 static const Vec3 MAGNET_LOCAL[3] = {
     Positions::Magnet_1_knob, Positions::Magnet_2_knob, Positions::Magnet_3_knob,
 };
-static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
+// Offset from the real rest pose, not an invented one. Positions.h owns the
+// geometry; the knob sits ~21mm above the sensor plane, so a hand-picked
+// z=6 puts the magnet-local query at z_l = +9 -- outside the bicubic table's
+// domain entirely (bounds live in magnet_model_table.h). Finite-difference
+// checks still PASS out there, because analytic-vs-numeric consistency holds
+// in the extrapolation region too; they just stop being about the region the
+// knob actually reaches. firmware/test/README flags exactly this.
+static const Vec3 BASE_T = Positions::approx_rest_pos + Vec3(2.0f, -1.5f, 0.0f);
 
 static Mat3 exp_so3(const Vec3& w) {
     float theta = w.norm();
@@ -71,9 +78,24 @@ using ParamVector = Eigen::Matrix<float, N_SHARED_PARAMS, 1>;
 // The remaining groups (position in mm, the dimensionless tilt chart, and
 // gain, which multiplies the field so a 5e-4 gain step already moves it by
 // ~0.25 mT) are all comfortably above the noise floor at the small step.
+// The tilt columns need a LARGER step for the opposite-looking reason -- also
+// roundoff, not truncation. A tilt perturbation only moves the field by
+// |B| * O(h), and inside the table's valid domain |B| is far smaller than the
+// extrapolated values this test used to probe, so the differenced signal sinks
+// toward float32 epsilon. Swept, at the rest pose:
+//
+//     step    5e-3    2e-3    5e-4    1e-4    2e-5
+//     err     pass    pass   1.8%    3.5%   10.8%
+//
+// Error GROWING as the step shrinks is the cancellation signature (truncation
+// error would shrink), so the analytic column is right and the instrument was
+// wrong. 2e-3 sits in the flat region with margin at both ends.
 static float fd_step_for_column(int j) {
     if (j == COL_STRENGTH_MEAN || j == COL_STRENGTH_DIFF || j == COL_STRENGTH_DIFF + 1) {
         return 0.5f;   // mT
+    }
+    if (j >= COL_MAGNET_TILT && j < COL_MAGNET_TILT + 2 * N_MAGNETS) {
+        return 2.0e-3f;   // gnomonic chart units
     }
     for (int i = 0; i < N_SENSORS; ++i) {
         const int base = unit_block_start(i) + UNIT_OFFSET_SENSOR_OFFSET;

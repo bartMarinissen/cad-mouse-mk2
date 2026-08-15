@@ -92,6 +92,24 @@ order they agree up to a 90-degree relabel of the parameter plane, and an
 isotropic prior is invariant under that — but `RegularizationSigmas` should be
 converted deliberately rather than assumed to transfer.
 
+## Built: the solver
+
+`bundle_solver.h`, verified end to end by `verify_solver.sh` — 30 synthetic
+frames generated from a known parameter vector through the real forward model,
+then fitted from nominal. Cost falls from 232 to 8.9e-6, an RMS residual of
+0.00018 mT over 270 observations, in 23 iterations. A second test starts the
+fit *at* the answer and checks the pose back-substitution does not drift poses
+that were already correct — pass 2 runs every iteration regardless, so a sign
+error there would otherwise hide behind the shared fit absorbing it.
+
+The linear solve is a plain dense `H.ldlt()`. `H_ss`'s own bordered
+block-diagonal structure could be Schur-eliminated a second time, reducing the
+45x45 to a 12x12, and deliberately is not: the P×P factorization is ~30k MAC
+against ~1.09M for the accumulation it sits on, so that optimizes ~3% of an
+iteration in exchange for a second differently-shaped elimination to keep
+correct. The block structure earns its keep in the *accumulation*, which is
+where the cost is. Structure for accumulation, dense solve.
+
 ## Design
 
 Two passes per solver iteration, nothing per-frame stored between them:
@@ -116,10 +134,9 @@ back-substitution stop being exact, silently.
 
 ## Open questions
 
-These block writing a real solver, and are not settled:
+*(Magnet tilt's parameterization and the column ordering used to be listed
+here. Both are now decided — see the sections above.)*
 
-*(Magnet tilt's parameterization used to be listed here. It is now decided —
-see "Magnet tilt" below.)*
 - **Whether it should be built at all.** The above says it's possible. It
   does not say it's worth the firmware surface area, and that is the actual
   decision.
@@ -250,10 +267,9 @@ magnitude are not in doubt.
 
 ## Not built
 
-- The LM/trust-region outer loop — damping, step acceptance, convergence.
-  The prototype is the per-iteration inner machinery only.
-- Wiring the raw per-sensor derivatives into the solver's P-wide column
-  layout: gauge-basis projection and per-observation sigma weighting.
+- Cross-magnet coupling itself — the solver calls the per-(sensor, magnet)
+  entry point once per sensor, not once per pair. See
+  `cross-magnet-interference.md`; the layout is already sized for the switch.
 - Finite-difference coverage for the gain and offset derivatives. They are
   linear post-multiplies with no chain-rule content, so there is little for a
   bug to hide in, but they are unverified.
