@@ -69,7 +69,7 @@ being owned/reachable anywhere either).
   `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`. Sensor-side correction
   would have been numerically identical while `ForwardModel` pairs sensor *i*
   with magnet *i* one-to-one, but that stops holding once cross-magnet
-  interference is modelled (`TODO/cross-magnet-interference.md`), and strength
+  interference is modelled (`TODO/resolved/cross-magnet-interference.md`), and strength
   is a property of the magnet. Note gain and strength are one degree of freedom
   split by the fit's `det(G)=1` gauge — neither is meaningful without the
   other.

@@ -145,16 +145,18 @@ solve_knob_pose()                    Levenberg-Marquardt Gauss-Newton, ≤10 ite
    (solve_pose.cpp)                  6x6 normal equations each iteration
         │  each iteration calls:
         ▼
-ForwardModel::evaluate(t, R)         loops the 3 sensor/magnet pairs
-   (forward_model.cpp)
-        │  per pair:
+ForwardModel::evaluate(t, R)         places each magnet in the world once,
+   (forward_model.cpp)               then loops the 3 sensors
+        │  per sensor, all 3 magnets:
         ▼
-VirtualSensor::evaluate(magnet, t, R) transforms sensor into magnet-local frame,
-   (virtual_sensor.cpp)              composes the 3x6 Jacobian analytically
-        │
+VirtualSensor::evaluate(...)         paired magnet via the interpolated field
+   (virtual_sensor.cpp)              below; the other 2 via dipole_field().
+        │                            Sums both, then composes the 3x6
+        │                            Jacobian analytically once.
         ▼
 MagnetModel::evaluate(v_local)       cylindrical (r,z) decomposition of the
    (magnet_local_model.cpp)          local offset, handles r→0 singularity
+        │                            (paired magnet only)
         │
         ▼
 BicubicField::evaluate(r, z)         Catmull-Rom bicubic interpolation over a
@@ -334,17 +336,16 @@ Two caveats on the exported numbers:
   `magnet_field_model/bicubic_table.py` generated the table at, currently
   1000 mT and arbitrary — any magnet's real Br divided by it gives the right
   scale regardless of what that reference happens to be.
-- The fitted values are effective parameters for this model, not measured
-  physics. `ForwardModel::evaluate()` pairs sensor *i* with magnet *i* only,
-  ignoring the other two magnets ~28.58mm away — worth 1.7–4.5% of the field.
-  The Python fit is deliberately pinned to that same single-magnet model
-  (`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING = PAIRED_ONLY`)
-  so the two agree; fitting the complete model instead and exporting *that*
-  leaves the cross term uncompensated and measures 3.6% worse. Cross-magnet
-  field therefore ends up absorbed into gain/offset/strength, exactly as the
-  old hand-tuned `Config::magnet_gains` absorbed it. See
-  `TODO/cross-magnet-interference.md` for the measurements and the one-constant
-  path back.
+- Every sensor sees every magnet. Its own is evaluated through the
+  interpolated field above; the other two, ~28.58mm away and worth 1.7–4.5%
+  of the signal, through `dipole_field()`'s point-dipole approximation. The
+  Python fit models the same three-magnet physics
+  (`calibration/bundle_geometry.py`'s `SENSOR_MAGNET_COUPLING = ALL_MAGNETS`),
+  so the fitted magnet strengths mean what they say rather than absorbing a
+  cross term the firmware could not reproduce. The two are not bit-identical:
+  the fit uses the exact cylinder solution where the firmware approximates,
+  a difference under 0.02% of the field. See
+  `TODO/resolved/cross-magnet-interference.md`.
 - `VirtualSensor` no longer carries a gain; correction happens entirely in
   `SensorController::read_mT()` (issue #6 below).
 

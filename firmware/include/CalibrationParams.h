@@ -85,18 +85,16 @@ struct CalibrationParams {
   // sensor_gain from one calibration and a magnet_strength_mT from another,
   // and do not "normalize" one without the other.
   //
-  // These are EFFECTIVE values, not measured magnet remanence. The
-  // calibration fits under the same single-magnet model this firmware
-  // implements (calibration/bundle_geometry.py's SENSOR_MAGNET_COUPLING =
-  // PAIRED_ONLY), so cross-magnet field -- every sensor also sees the other
-  // two magnets, ~28.58mm away -- gets absorbed into these strengths, the
-  // gains and the offsets rather than being modelled. That is deliberate:
-  // fitting the physically complete model and then running the result
-  // through ForwardModel::evaluate, which pairs sensor i with magnet i only,
-  // leaves that term uncompensated and measured ~3.6% worse on captured
-  // hardware data. Do not read a fitted value here as "this magnet's real
-  // Br"; treat the whole set as one self-consistent tuning for this model.
-  // See TODO/cross-magnet-interference.md.
+  // These now mean roughly what they say. The fit and this firmware both
+  // model cross-magnet field -- every sensor sees the other two magnets,
+  // ~28.58mm away -- so it is no longer absorbed into these strengths. They
+  // were EFFECTIVE values while it was, and older stored calibrations are
+  // still those values: they were fitted to compensate a term the firmware
+  // did not have, and are not interchangeable with ones fitted since.
+  // Recalibrate rather than reusing a blob from before that change.
+  //
+  // Still not a substitute for measuring a magnet, since the det(G)=1 gauge
+  // above is what fixes the scale.
   //
   // Config::defaultCalibration() sets these to BICUBIC_FIELD_REFERENCE_MT,
   // which is the consistent default rather than a placeholder: it makes the
