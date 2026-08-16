@@ -110,6 +110,39 @@ iteration in exchange for a second differently-shaped elimination to keep
 correct. The block structure earns its keep in the *accumulation*, which is
 where the cost is. Structure for accumulation, dense solve.
 
+## Decided: priors, and magnet_strength_mean carries none
+
+`nominal_prior_sigma()` in `bundle_param_layout.h` ports
+`bundle_params.py`'s `RegularizationSigmas` into the firmware's unit-major
+column order. Same beliefs about the same hardware, permuted, not
+independently chosen: magnet position 1 mm (3D-printed knob), tilt 0.06 rad,
+strength spread 0.1, sensor offset 1.8 mT, gain aniso 0.25, gain sym/rot 0.03.
+
+**`magnet_strength_mean` is deliberately unregularized**, matching `None`
+there. The nominal it would be centred on is a round guess; real magnets
+plausibly run anywhere from 500 to 1500 mT, with no reason to prefer the
+middle, and this has to work for units nobody has measured. A prior there
+would drag the fitted field scale toward a number nobody stands behind.
+
+That is safe despite the parameter being near-degenerate with position and
+gain (`cross-magnet-interference.md`), for a specific reason worth keeping: a
+flat direction only survives if it lies *entirely* within unregularized
+coordinates. `magnet_strength_mean` is one column, and alone it is strongly
+observable — it scales the field. It is only degenerate in *combination* with
+position and gain, and those are strongly and justifiably regularized, so the
+prior on the partners supplies curvature along the whole combined direction.
+Measured: with the nominal priors, the fit recovers a +6% synthetic field
+scale as +5.97%.
+
+**Magnet strength is a dimensionless multiplier, not an mT offset**, matching
+`bundle_geometry.py`'s `magnet_strength = 1.0 + offset`. This was got wrong
+first: an absolute mT parameterization makes the ported sigmas off by the
+nominal strength — a factor of ~1000 — and it needs a chain-rule factor of
+`nominal_strength_mT` in the Jacobian column, because
+`SharedJacobianBlock::d_strength` is the absolute derivative. Both errors
+mis-fit everything else rather than failing outright; the column-wiring test
+caught both.
+
 ## Design
 
 Two passes per solver iteration, nothing per-frame stored between them:

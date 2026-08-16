@@ -115,9 +115,22 @@ struct SharedNormalEquations {
     // nominal (x_current) is 0 with the given prior stddev (sigma). Pass
     // sigma = infinity (or skip the call for that index) for an
     // unregularized parameter, matching sigma=None there.
+    // A non-finite sigma means NO prior on that parameter, and is skipped
+    // explicitly rather than left to fall out of 1/(inf*inf) == 0. It does
+    // fall out correctly, but this is a deliberate modelling choice
+    // (magnet_strength_mean carries no prior -- see nominal_prior_sigma()),
+    // and a choice that load-bearing should not depend on a reader knowing
+    // IEEE-754 divides to zero there.
+    //
+    // sigma <= 0 is NOT handled: it would mean an infinitely strong prior,
+    // i.e. a hard constraint, which this is the wrong mechanism for. It puts
+    // a non-finite value on the diagonal, which surfaces as a non-finite
+    // step -- BundleSolver checks allFinite() and rejects it. Loud, rather
+    // than silently fitting something else.
     void add_prior(const Eigen::Matrix<float, P, 1>& x_current,
                     const Eigen::Matrix<float, P, 1>& sigma) {
         for (int i = 0; i < P; ++i) {
+            if (!std::isfinite(sigma[i])) continue;   // unregularized
             const float inv_sigma2 = 1.0f / (sigma[i] * sigma[i]);
             H(i, i) += inv_sigma2;
             rhs[i] -= x_current[i] * inv_sigma2;

@@ -92,6 +92,50 @@ inline Vec2 strength_diff_coefficients(int magnet_index) {
     return Vec2(-1.0f, -1.0f);
 }
 
+// Prior stddevs, per parameter, in THIS file's column order. Values are
+// bundle_params.py's RegularizationSigmas -- the same beliefs about the same
+// hardware, not independently chosen. They cannot simply be copied across,
+// because that file lays its vector out type-major and this one unit-major;
+// filling by group here is the permutation, done once.
+//
+// Two units notes:
+//  - magnet_tilt's 0.06 is radians there, against a rotation-vector
+//    parameterization. Here tilt is the gnomonic chart, whose radial
+//    coordinate is tan(theta) -- equal to theta to third order, so at a
+//    tolerance-sized tilt the number transfers unchanged. The chart is also
+//    rotated 90 degrees relative to that one, which an isotropic prior does
+//    not notice.
+//  - magnet_strength_mean is deliberately UNREGULARIZED (infinity), matching
+//    None there. The nominal it would be centred on is a round guess, and
+//    this has to work for magnets nobody has measured -- a prior there would
+//    drag the fitted field scale toward a number nobody stands behind.
+//    Safe despite the parameter being near-degenerate with position and gain
+//    (see TODO/cross-magnet-interference.md): a flat direction only survives
+//    if it lies ENTIRELY in unregularized coordinates, and every parameter
+//    this one trades against is itself strongly regularized, so the prior on
+//    the partners supplies curvature along the whole combined direction.
+inline Eigen::Matrix<float, N_SHARED_PARAMS, 1> nominal_prior_sigma() {
+    Eigen::Matrix<float, N_SHARED_PARAMS, 1> s;
+    const float unregularized = std::numeric_limits<float>::infinity();
+
+    s.segment<3>(COL_MAGNET_POS).setConstant(1.0f);        // mm, 3D-printed knob
+    s[COL_STRENGTH_MEAN] = unregularized;                   // see above
+    s.segment<2>(COL_STRENGTH_DIFF).setConstant(0.1f);     // one batch, graded ~1%
+    s.segment<6>(COL_MAGNET_TILT).setConstant(0.06f);      // ~1.7 degrees
+
+    for (int i = 0; i < N_SENSORS; ++i) {
+        const int base = unit_block_start(i);
+        s.segment<3>(base + UNIT_OFFSET_SENSOR_OFFSET).setConstant(1.8f);   // mT
+        // Gain basis index order is aniso {0,1}, sym {2,3,4}, rot {5,6,7} --
+        // GAIN_GROUP_BASIS_INDICES in parameterization.py, mirrored by
+        // GAIN_BASIS in bundle_linear_jacobian.h.
+        s.segment<2>(base + UNIT_OFFSET_GAIN + 0).setConstant(0.25f);   // aniso
+        s.segment<3>(base + UNIT_OFFSET_GAIN + 2).setConstant(0.03f);   // sym
+        s.segment<3>(base + UNIT_OFFSET_GAIN + 5).setConstant(0.03f);   // rot
+    }
+    return s;
+}
+
 // Accumulates the columns that depend on ONE MAGNET's parameters. Call once
 // per magnet contributing to this sensor's reading -- today exactly once
 // (PAIRED_ONLY, magnet_index == sensor_index), and once per magnet if
@@ -111,7 +155,7 @@ inline Vec2 strength_diff_coefficients(int magnet_index) {
 // columns are already complete derivatives and must NOT be multiplied again,
 // so this cannot be done by scaling the assembled row.
 inline void add_magnet_columns(
-    SharedRow& row, int magnet_index, const Mat3& gain,
+    SharedRow& row, int magnet_index, const Mat3& gain, float nominal_strength_mT,
     const SharedJacobianBlock& J, const Eigen::Matrix<float, 3, 2>& chart_j
 ) {
     row.block<3, 3>(0, COL_MAGNET_POS) +=
@@ -120,7 +164,17 @@ inline void add_magnet_columns(
     // Strength enters the prediction as a scalar multiplier, so its whole
     // effect on these 3 rows is the single column J.d_strength, weighted by
     // this magnet's coefficient in each strength basis.
-    const Vec3 g_strength = gain * J.d_strength;
+    //
+    // nominal_strength_mT is the chain-rule factor, and it is easy to drop:
+    // J.d_strength is d(B)/d(strength_mT), an ABSOLUTE derivative, while the
+    // fitted parameter is a dimensionless multiplier (see
+    // BundleSolver::rebuild_from_params), so
+    //   d(B)/d(multiplier) = d(B)/d(strength_mT) * d(strength_mT)/d(multiplier)
+    //                      = J.d_strength * nominal_strength_mT.
+    // Omitting it makes these columns wrong by exactly the nominal strength --
+    // a factor of ~1000 -- which LM absorbs by mis-fitting everything else
+    // rather than by failing outright.
+    const Vec3 g_strength = gain * J.d_strength * nominal_strength_mT;
     row.block<3, 1>(0, COL_STRENGTH_MEAN) += g_strength;   // MEAN_BASIS is all-ones
     const Vec2 diff = strength_diff_coefficients(magnet_index);
     row.block<3, 1>(0, COL_STRENGTH_DIFF + 0) += g_strength * diff.x();

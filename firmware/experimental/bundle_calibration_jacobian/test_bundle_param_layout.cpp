@@ -65,19 +65,17 @@ using ParamVector = Eigen::Matrix<float, N_SHARED_PARAMS, 1>;
 // FD step per column, and it genuinely has to vary -- firmware/test/README's
 // "step sizes carry unit assumptions", hit for real here.
 //
-// Two groups are in FIELD units (mT) and enter the prediction additively:
-// magnet strength, and sensor_offset. The predicted field is O(500 mT), so a
-// 5e-4 step moves the 7th significant digit of a float32 -- right at
-// epsilon (~1.2e-7). Differencing that leaves ~2% noise, which looks exactly
-// like a 2%-wrong derivative. Measured before this was fixed: the offset
-// columns came out as 0.9766 and 1.0376 against an analytic identity.
+// sensor_offset is in FIELD units (mT) and enters the prediction additively.
+// The predicted field is large, so a 5e-4 step moves the 7th significant digit
+// of a float32 -- right at epsilon (~1.2e-7). Differencing that leaves ~2%
+// noise, which looks exactly like a 2%-wrong derivative. Measured before this
+// was fixed: the offset columns came out as 0.9766 and 1.0376 against an
+// analytic identity. It enters linearly, so a large step costs no truncation
+// error at all -- 0.5 mT is a pure win, not a tradeoff.
 //
-// Both groups enter linearly, so a large step costs no truncation error at
-// all -- 0.5 mT is a pure win, not a tradeoff.
-//
-// The remaining groups (position in mm, the dimensionless tilt chart, and
-// gain, which multiplies the field so a 5e-4 gain step already moves it by
-// ~0.25 mT) are all comfortably above the noise floor at the small step.
+// Magnet strength is NOT in mT: it is a dimensionless multiplier on the whole
+// field (see BundleSolver::rebuild_from_params), so it behaves like gain and
+// the default step is fine.
 // The tilt columns need a LARGER step for the opposite-looking reason -- also
 // roundoff, not truncation. A tilt perturbation only moves the field by
 // |B| * O(h), and inside the table's valid domain |B| is far smaller than the
@@ -92,7 +90,7 @@ using ParamVector = Eigen::Matrix<float, N_SHARED_PARAMS, 1>;
 // wrong. 2e-3 sits in the flat region with margin at both ends.
 static float fd_step_for_column(int j) {
     if (j == COL_STRENGTH_MEAN || j == COL_STRENGTH_DIFF || j == COL_STRENGTH_DIFF + 1) {
-        return 0.5f;   // mT
+        return 5.0e-4f;   // dimensionless multiplier; scales the whole field
     }
     if (j >= COL_MAGNET_TILT && j < COL_MAGNET_TILT + 2 * N_MAGNETS) {
         return 2.0e-3f;   // gnomonic chart units
@@ -140,10 +138,12 @@ static BundleState state_from_params(const ParamVector& x) {
         s.magnets[m].pos = MAGNET_LOCAL[m]
             + MAGNET_POS_BASIS.block<3, 3>(3 * m, 0) * x.segment<3>(COL_MAGNET_POS);
 
+        // Multiplier around 1, matching bundle_geometry.py -- see
+        // BundleSolver::rebuild_from_params.
         const Vec2 diff = reference_strength_diff_coefficients(m);
         s.magnets[m].strength_mT = BICUBIC_FIELD_REFERENCE_MT
-            + x[COL_STRENGTH_MEAN]
-            + diff.dot(x.segment<2>(COL_STRENGTH_DIFF));
+            * (1.0f + x[COL_STRENGTH_MEAN]
+                    + diff.dot(x.segment<2>(COL_STRENGTH_DIFF)));
 
         MagnetTilt tilt{x[COL_MAGNET_TILT + 2 * m], x[COL_MAGNET_TILT + 2 * m + 1]};
         s.magnets[m].rotation = rotation_from_tilt(NOMINAL_ROT[m], tilt);
@@ -181,7 +181,7 @@ static SharedRow assemble_row(int sensor_index, const ParamVector& x,
     MagnetTilt tilt{x[COL_MAGNET_TILT + 2 * m], x[COL_MAGNET_TILT + 2 * m + 1]};
 
     SharedRow row = SharedRow::Zero();
-    add_magnet_columns(row, m, s.gains[sensor_index], J_shared,
+    add_magnet_columns(row, m, s.gains[sensor_index], BICUBIC_FIELD_REFERENCE_MT, J_shared,
                         chart_jacobian(NOMINAL_ROT[m], tilt));
     add_sensor_columns(row, sensor_index, B);
     return row;
@@ -191,8 +191,8 @@ void test_assembled_row_matches_finite_differences(void) {
     // Deliberately non-zero, and different in every group.
     ParamVector x0 = ParamVector::Zero();
     x0.segment<3>(COL_MAGNET_POS)    << 0.05f, -0.03f, 0.04f;
-    x0[COL_STRENGTH_MEAN]            = 4.0f;
-    x0.segment<2>(COL_STRENGTH_DIFF) << 2.5f, -1.5f;
+    x0[COL_STRENGTH_MEAN]            = 0.04f;
+    x0.segment<2>(COL_STRENGTH_DIFF) << 0.025f, -0.015f;
     for (int m = 0; m < N_MAGNETS; ++m) {
         x0[COL_MAGNET_TILT + 2 * m]     = 0.02f * (m + 1);
         x0[COL_MAGNET_TILT + 2 * m + 1] = -0.015f * (m + 1);

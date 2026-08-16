@@ -109,10 +109,17 @@ struct BundleSolver {
             magnets[m].pos = geometry.magnet_nominal_pos[m]
                 + MAGNET_POS_BASIS.block<3, 3>(3 * m, 0) * params.template segment<3>(COL_MAGNET_POS);
 
+            // MULTIPLIER, not an mT offset: matches bundle_geometry.py's
+            // `magnet_strength = 1.0 + offset`, and is the parameterization the
+            // physical beliefs are actually stated in -- "magnets from one
+            // batch are graded to ~1% of each other" and "the scale could be
+            // 500-1500 mT" are both relative claims. Getting this wrong makes
+            // bundle_params.py's prior sigmas transfer off by the nominal
+            // strength, i.e. a factor of ~1000.
             const Vec2 diff = strength_diff_coefficients(m);
             magnets[m].strength_mT = geometry.magnet_nominal_strength_mT
-                + params[COL_STRENGTH_MEAN]
-                + diff.dot(params.template segment<2>(COL_STRENGTH_DIFF));
+                * (1.0f + params[COL_STRENGTH_MEAN]
+                        + diff.dot(params.template segment<2>(COL_STRENGTH_DIFF)));
 
             const MagnetTilt tilt{params[COL_MAGNET_TILT + 2 * m],
                                    params[COL_MAGNET_TILT + 2 * m + 1]};
@@ -164,7 +171,8 @@ struct BundleSolver {
             evaluate_bundle_jacobian(sensor, magnet, f.t, f.R, B, J_pose, J_shared);
 
             SharedRow row = SharedRow::Zero();
-            add_magnet_columns(row, i, gains[i], J_shared, chart[i]);   // PAIRED_ONLY
+            add_magnet_columns(row, i, gains[i], geometry.magnet_nominal_strength_mT,
+                                J_shared, chart[i]);   // PAIRED_ONLY
             add_sensor_columns(row, i, B);
 
             const Vec3 residual = (gains[i] * B + offsets[i] - f.measured[i]) * inv_sigma;
