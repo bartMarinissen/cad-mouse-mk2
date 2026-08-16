@@ -1,24 +1,24 @@
 #include "magnet_model/solve_pose.h"
-#include <ArduinoEigenDense.h>
 #include <magnet_model/forward_model.h>
 #include "math3D.h"
 
-using Vector6f = Eigen::Matrix<float, 6, 1>;
-using Vector9f = Eigen::Matrix<float, 9, 1>;
-using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
-using Matrix6x6f = Eigen::Matrix<float, 6, 6>;
+// Only used in this file, so kept local rather than promoted to math3D.h
+// (TODO/eigen-to-bla-migration.md's "one owner per fact" rule applies to
+// shared facts, not single-use-site ones).
+using Vector6f = BLA::Matrix<6, 1, float>;
+using Matrix6x6f = BLA::Matrix<6, 6, float>;
 
 float __not_in_flash_func(solve_knob_pose)(
-    Eigen::Vector3f& t,                // In/Out: Current translation guess
-    Eigen::Matrix3f& R,                // In/Out: Current rotation matrix guess
+    Vec3& t,                           // In/Out: Current translation guess
+    Mat3& R,                           // In/Out: Current rotation matrix guess
     const ForwardModel& model,         // Your evaluated forward model
-    const Eigen::Vector3f measured_fields[3], // The 9x1 vector of Hall sensor readings
+    const Vec3 measured_fields[3],     // The 9x1 vector of Hall sensor readings
     Vector9f *residual_out,
     Matrix9x6f *Jacobian_out
 ) {
     const int MAX_ITER = 10;
     const float TOLERANCE = 3e-3f; // Stop if the update step is smaller than this
-    
+
     // Work directly in the caller's buffers whenever it supplied them. With
     // Config::statistics enabled MotionController passes both on every call, so
     // the copy that used to happen at the end of this function was live -- 63
@@ -31,9 +31,13 @@ float __not_in_flash_func(solve_knob_pose)(
     for (int iter = 0; iter < MAX_ITER; ++iter) {
         // 1. Evaluate forward model (assuming it populates predicted fields)
         model.evaluate(t, R, residual, jacobian);
-        residual.block<3, 1>(0, 0) -= measured_fields[0];
-        residual.block<3, 1>(3, 0) -= measured_fields[1];
-        residual.block<3, 1>(6, 0) -= measured_fields[2];
+        // Submatrix() returns a temporary RefMatrix view, and BLA's -=
+        // (a free function requiring a non-const lvalue) can't bind to
+        // that -- assignment (a RefMatrix member, works on temporaries
+        // too) is the form that compiles. See TODO/eigen-to-bla-migration.md.
+        residual.Submatrix<3, 1>(0, 0) = residual.Submatrix<3, 1>(0, 0) - measured_fields[0];
+        residual.Submatrix<3, 1>(3, 0) = residual.Submatrix<3, 1>(3, 0) - measured_fields[1];
+        residual.Submatrix<3, 1>(6, 0) = residual.Submatrix<3, 1>(6, 0) - measured_fields[2];
 
         // 2. Construct Damped Normal Equations (Levenberg-Marquardt).
         // H = J^T J is symmetric, so only its lower triangle is worth computing:
@@ -44,46 +48,54 @@ float __not_in_flash_func(solve_knob_pose)(
         Matrix6x6f H;
         for (int i = 0; i < 6; ++i) {
             for (int j = 0; j <= i; ++j) {
-                const float h = jacobian.col(i).dot(jacobian.col(j));
+                const float h = dot(jacobian.Column(i), jacobian.Column(j));
                 H(i, j) = h;
                 H(j, i) = h;
             }
         }
         const float LAMBDA = 0.02f;
-        H.diagonal().array() += LAMBDA;
-        Vector6f g = -jacobian.transpose() * residual;
+        for (int i = 0; i < 6; ++i) H(i, i) += LAMBDA;
+        Vector6f g = -(~jacobian * residual);
 
-        auto ldlt = H.ldlt();
-        // 3. Solve the 6x6 linear system
-        Vector6f dx = ldlt.solve(g);
+        // 3. Solve the 6x6 linear system. CholeskyDecompose factorizes H
+        // in place (it's rebuilt fresh every iteration, so nothing downstream
+        // reads the pre-factorization H again) and reports positive_definite
+        // explicitly rather than degrading silently the way Eigen's LDLT
+        // did -- H = J^T J + LAMBDA*I is SPD by construction as long as
+        // nothing upstream is already NaN/Inf, so treat a failure here the
+        // same as the allFinite() check below.
+        auto chol = BLA::CholeskyDecompose(H);
+        if (!chol.positive_definite) {
+            // Math collapsed (NaN or Inf, or a non-SPD H). Reject update and abort solver.
+            Serial.println("NAN ERROR");
+            delay(1000);
+            break;
+        }
+        Vector6f dx = BLA::CholeskySolve(chol, g);
 
-        if (!dx.allFinite()) {
+        if (!all_finite(dx)) {
             // Math collapsed (NaN or Inf). Reject update and abort solver.
             Serial.println("NAN ERROR");
             delay(1000);
-            break; 
+            break;
         }
 
         // 4. Check for convergence - use squared norm to save a square root
-        if (dx.squaredNorm() < TOLERANCE * TOLERANCE) {
-            break; 
+        if (dot(dx, dx) < TOLERANCE * TOLERANCE) {
+            break;
         }
 
         // 5. Extract updates
-        Eigen::Vector3f dt = dx.head<3>();
-        Eigen::Vector3f dw = dx.tail<3>();
+        Vec3 dt = dx.Submatrix<3, 1>(0, 0);
+        Vec3 dw = dx.Submatrix<3, 1>(3, 0);
 
-        // 6. Apply Updates 
+        // 6. Apply Updates
         t += dt;
 
-        float w_norm = dw.norm();
+        float w_norm = BLA::Norm(dw);
         if (w_norm > 1e-7f) {
-            // Recompute angle since we might have clamped dw
-            float angle = w_norm;
-            Eigen::AngleAxisf dR(angle, dw / angle);
-            
             // Exactly matches your analytic Jacobian derivation: R_new = exp([w]x) * R_old
-            R = (dR * R).eval();
+            R = exp_so3(dw) * R;
         }
     }
     // No copy-out needed: when the caller supplied buffers, the loop above has
@@ -94,7 +106,7 @@ float __not_in_flash_func(solve_knob_pose)(
     // R is now caller-persisted state, hot-started back in on the next call
     // rather than reset to identity every time -- so unlike a value that's
     // rebuilt from scratch each call, small float error in the per-iteration
-    // AngleAxisf update above can accumulate across many thousands of calls.
+    // rotation update above can accumulate across many thousands of calls.
     // The whole forward-model/Jacobian chain assumes R^T == R^-1, so this
     // matters for correctness, not just cosmetics. One correction per call
     // (not per iteration -- drift within a single solve's handful of
@@ -103,5 +115,5 @@ float __not_in_flash_func(solve_knob_pose)(
     // drift has actually built up.
     R = orthonormalize_approx(R);
 
-    return residual.norm();
+    return BLA::Norm(residual);
 }

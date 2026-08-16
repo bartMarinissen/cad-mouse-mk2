@@ -207,11 +207,14 @@ def test_corrupting_any_region_breaks_the_crc():
 
 
 def test_blob_matrices_are_row_major():
-    """Row-major is the load-bearing convention: Eigen stores Matrix3f
-    column-major, so the firmware serializes through m(r, c) accessors
-    specifically so this side can stay a plain .ravel(). A transposed gain
-    matrix would still pass the CRC and still look plausible, so nothing
-    downstream would catch it - only this test would."""
+    """Row-major is the load-bearing convention: the firmware serializes
+    through m(r, c) accessors specifically so this side can stay a plain
+    .ravel() regardless of which C++ matrix library reads it (Eigen stored
+    Matrix3f column-major; BLA's Matrix -- TODO/eigen-to-bla-migration.md --
+    happens to be row-major natively, but the accessor-based serialization
+    doesn't depend on that). A transposed gain matrix would still pass the
+    CRC and still look plausible, so nothing downstream would catch it -
+    only this test would."""
     rng = np.random.default_rng(53)
     geom = BundleGeometry.from_shared(rng.normal(scale=0.02, size=N_SHARED_PARAMS))
     _, payload, _ = _unpack_blob(format_binary(geom))
@@ -347,8 +350,9 @@ def test_cpp_struct_layout_matches_the_blob_payload(tmp_path):
     is that cffi's ABI model agrees with a real compiler's. That is worth
     checking, and it is why this test survives the move to cffi.
 
-    Only possible because the struct is plain arrays: with Eigen members it
-    would be neither trivially copyable nor host-compilable without Eigen.
+    Only possible because the struct is plain arrays: with matrix-library
+    (formerly Eigen, now BLA -- see TODO/eigen-to-bla-migration.md) members
+    it would be neither trivially copyable nor host-compilable standalone.
     """
     rng = np.random.default_rng(71)
     geom = BundleGeometry.from_shared(rng.normal(scale=0.02, size=N_SHARED_PARAMS))

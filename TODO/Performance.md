@@ -1,5 +1,14 @@
 # solve_pose performance
 
+**Everything below was measured against the Eigen-based solver.**
+`TODO/eigen-to-bla-migration.md` has since replaced Eigen with
+`BasicLinearAlgebra`, and measured a real +11%/+28% flash/RAM regression
+doing so, not yet root-caused. The Eigen-specific findings here (the
+non-inlining, the blocked-GEMM dispatch for `jacobian.transpose() *
+jacobian`) describe why that rewrite happened, not the current library --
+re-running this document's own measurement methodology against the new
+solver is exactly the open item that migration left behind.
+
 The whole loop runs at 50Hz, and `solve_knob_pose()` (`firmware/src/magnet_model/solve_pose.cpp`)
 currently eats a little under half that budget — call it 10ms. Goal is to get
 it down toward ~4ms if we can. This file is the investigation notes: assembly-

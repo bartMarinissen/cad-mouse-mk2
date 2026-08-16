@@ -34,8 +34,11 @@ enclosure/           Fusion 360 / STEP / STL — mechanical design, not code
 `platformio.ini` at repo root points PlatformIO at `firmware/{src,include,lib,test}`.
 Board: Seeed XIAO RP2040 (dual-core Cortex-M0+, **no hardware FPU** — all float
 math is software-emulated, which is why solver perf tuning matters: `-O2`,
-`-fassociative-math`/`-freciprocal-math`/etc. relaxed-fp flags, `EIGEN_NO_MALLOC`
-to force fixed-size Eigen types only, no heap allocation anywhere in the hot path).
+`-fassociative-math`/`-freciprocal-math`/etc. relaxed-fp flags, and fixed-size
+`BLA::Matrix` types throughout so nothing in the hot path can heap-allocate --
+see `TODO/eigen-to-bla-migration.md` for the switch away from Eigen, which
+needed an explicit `EIGEN_NO_MALLOC` flag for the same guarantee BLA's plain
+fixed-size array storage gives structurally).
 
 ## Firmware: control flow
 
@@ -183,7 +186,7 @@ it after touching any `evaluate()` in `magnet_model/`.
 Geometry constants (sensor/magnet positions, triangle side length, 6mm z-standoff)
 live in [`positions.h`](firmware/include/magnet_model/positions.h). Physical
 constant: `#include "math3D.h"` for `Vec3`/`Mat3`/`skew_matrix` typedefs
-(thin Eigen wrapper, `ArduinoEigenDense`).
+(thin wrapper over `BasicLinearAlgebra` -- see `TODO/eigen-to-bla-migration.md`).
 
 ### Codegen: Python → firmware table
 
@@ -254,13 +257,16 @@ struct's own 300 bytes, and a CRC-32 over everything before it.
 
 Reading one is a `memcpy` — check magic, version and CRC, copy the payload into
 the struct, then range-check it. That works because `CalibrationParams` is
-**plain arrays rather than Eigen types**, which buys three things at once:
-`memcpy` into it is defined behaviour (`Eigen::Matrix` has a user-provided copy
-constructor, so a struct of `Mat3`/`Vec3` is not trivially copyable), `sizeof ==
-300` is a language guarantee instead of an observation, and the layout can be
-**row-major** to match numpy rather than the column-major Eigen would impose —
-a transposed gain matrix passes both the CRC and every plausibility check, so
-that ordering is worth pinning down. Consumers convert with `toMat3()`/
+**plain arrays rather than matrix-library types**, which buys three things at
+once: `memcpy` into it is defined behaviour (`BLA::Matrix` -- like
+`Eigen::Matrix` before it, see `TODO/eigen-to-bla-migration.md` -- declares
+non-trivial constructors, so a struct of `Mat3`/`Vec3` is not trivially
+copyable), `sizeof == 300` is a language guarantee instead of an observation,
+and the layout is **row-major** to match numpy — a transposed gain matrix
+passes both the CRC and every plausibility check, so that ordering is worth
+pinning down (BLA's own storage happens to be row-major too, so `toMat3()`
+below is now a plain per-element copy rather than a reinterpret). Consumers
+convert with `toMat3()`/
 `toVec3()` at construction, where they already copied the values out.
 
 `board_build.filesystem_size` in `platformio.ini` carves out the partition —

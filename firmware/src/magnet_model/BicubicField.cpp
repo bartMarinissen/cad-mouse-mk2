@@ -130,7 +130,8 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
     const float t2 = t * t, t3 = t2 * t;
     const float u2 = u * u, u3 = u2 * u;
 
-    // Because Eigen matrix can't be constexpr, these are left repeated and not simplified
+    // Because BLA::Matrix can't be constexpr either (TODO/eigen-to-bla-migration.md
+    // left that explicitly out of scope), these are left repeated and not simplified
 
     // The standard Catmull-ROM basis weights for t
     float a0 =      -0.5f * t  +        t2 - 0.5f * t3;
@@ -190,7 +191,7 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
             const int jj = j0 - 1 + k;
             const Vec2 p1 = grid_[jj][0];
             const Vec2 p2 = grid_[jj][1];
-            const Vec2 p0(-p2.x(), p2.y());
+            const Vec2 p0(-p2(0), p2(1));
             const Vec2 p3 = grid_[jj][2];
             row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
             row_deriv[k] = p0 * da0_dt + p1 * da1_dt + p2 * da2_dt + p3 * da3_dt;

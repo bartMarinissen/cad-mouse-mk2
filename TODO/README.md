@@ -89,6 +89,11 @@ too, not just the file.
   bundle calibration is now PC-initiated via `CAL_START`, closing the old
   accidental-entry bug. A knob-side exit gesture and `BundleState.cpp`'s
   `takeActivity()`-instead-of-`buttonBits()` bug are still open.
+- **[`eigen-to-bla-migration.md`](eigen-to-bla-migration.md)** — Eigen
+  replaced with `BasicLinearAlgebra` (non-vendored, no constexpr work) across
+  the firmware; builds clean and the Jacobian test suite passes natively on
+  host. Open: an unexplained +11%/+28% flash/RAM regression, and nothing
+  verified on real hardware yet.
 - **[`cross-magnet-interference.md`](cross-magnet-interference.md)** —
   Cross-magnet field coupling (measured 1.7–4.5% of the signal) is
   quantified but not modelled in firmware; a Python-side fitting workaround

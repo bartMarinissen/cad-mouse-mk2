@@ -25,7 +25,7 @@ constexpr size_t kCrcOffset = kBlobSize - 4;
 
 // This one IS load-bearing: the payload is a raw copy of the struct, so
 // memcpy'ing into it is only defined behaviour while it stays trivially
-// copyable. Keeping CalibrationParams plain arrays rather than Eigen types is
+// copyable. Keeping CalibrationParams plain arrays rather than matrix types is
 // what buys that -- see the note in CalibrationParams.h.
 static_assert(std::is_trivially_copyable<CalibrationParams>::value,
               "the stored format is a raw copy of CalibrationParams");
@@ -159,7 +159,7 @@ bool isPlausible(const CalibrationParams& params) {
     // or an absurd one. Fitted lands near 1 under the det(G)=1 gauge; the
     // default's scalar gains land near 0.885. Two orders either way clears
     // both without encoding either gauge.
-    const float gainDet = fabsf(toMat3(params.sensor_gain[i]).determinant());
+    const float gainDet = fabsf(BLA::Determinant(toMat3(params.sensor_gain[i])));
     if (gainDet < 0.01f || gainDet > 100.0f) {
       return false;
     }

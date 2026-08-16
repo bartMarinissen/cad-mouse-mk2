@@ -112,7 +112,8 @@ def format_cpp(geometry: BundleGeometry) -> str:
 
     This used to assign each field in turn, because designated initializers
     are C++20 and this firmware does not require that standard. Now that
-    CalibrationParams is plain arrays rather than Eigen types, ordinary
+    CalibrationParams is plain arrays rather than matrix-library types
+    (formerly Eigen, now BLA - see TODO/eigen-to-bla-migration.md), ordinary
     (non-designated) nested-brace aggregate initialization does the job and
     has been valid since C++98 - so the emitted snippet is one initializer
     whose shape mirrors the struct, which is easier to eyeball against the

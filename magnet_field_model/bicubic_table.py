@@ -101,7 +101,6 @@ def format_header(table: FieldTable, reference_mt: float) -> str:
 
 struct Point {{ float r; float z; }};
 
-using Vec2 = Eigen::Vector2f;
 constexpr int NR = {len(table.r_line)};
 constexpr int NZ = {len(table.z_line)};
 

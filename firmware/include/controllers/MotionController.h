@@ -4,9 +4,6 @@
 #include "magnet_model/forward_model.h"
 #include "magnet_model/positions.h"
 
-using Vector9f = Eigen::Matrix<float, 9, 1>;
-using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
-
 struct Statistics {
   static constexpr float smoothing = 0.99f;
 
@@ -61,7 +58,7 @@ class MotionController {
   // The rotation half of the hot start. Kept as a matrix rather than rebuilt
   // from last_rot each frame: going back through Euler angles is both lossy and
   // expensive, and this is the solver's actual state variable.
-  Mat3 last_R = Mat3::Identity();
+  Mat3 last_R = identity3();
 
  private:
   static float clampf(float v, float lo, float hi);

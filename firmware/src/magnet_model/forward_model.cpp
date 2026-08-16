@@ -26,21 +26,21 @@ ForwardModel::ForwardModel(const CalibrationParams& cal)
           }
     {}
 
-void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t,  
-                            const Mat3& R, 
-                            Eigen::Matrix<float, 9, 1> &B_field, 
-                            Eigen::Matrix<float, 9, 6> &J) const {
+void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t,
+                            const Mat3& R,
+                            Vector9f &B_field,
+                            Matrix9x6f &J) const {
 
     for (int i = 0; i < 3; ++i) {
 
         // 4. Rotate field back to global frame to get the field as measured by the sensors
         Vec3 B_sensor_magnet_global;
-        Eigen::Matrix<float, 3, 6> J_sensor_magnet;
+        Matrix3x6f J_sensor_magnet;
 
         sensors_[i].evaluate(magnets_[i], t, R, B_sensor_magnet_global, J_sensor_magnet);
 
         // 7. Copy blocks into the flat 9x6 global Jacobian and the expected field
-        J.block<3, 6>(i * 3, 0) = J_sensor_magnet;
-        B_field.block<3, 1>(i * 3, 0) = B_sensor_magnet_global;
+        J.Submatrix<3, 6>(i * 3, 0) = J_sensor_magnet;
+        B_field.Submatrix<3, 1>(i * 3, 0) = B_sensor_magnet_global;
     }
 }
