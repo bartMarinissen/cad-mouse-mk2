@@ -13,8 +13,7 @@ bool TelemetryController::enabled() const { return Config::ENABLE_TELEMETRY; }
 
 void TelemetryController::publish(const float motion[6], float residual_percent, int buttonBits,
                                   bool hidReportSent, Statistics const &stats,
-                                  const float raw_field[9], const Vec3 &last_pos, const Vec3 &last_rot, 
-                                  float rcond) {
+                                  const float raw_field[9], const Vec3 &last_pos, const Vec3 &last_rot) {
   if (!enabled()) {
     return;
   }
@@ -69,11 +68,11 @@ void TelemetryController::publish(const float motion[6], float residual_percent,
   // Latin-1 0xB0 renders wrong in this terminal). Fixing that properly
   // means giving each row its own border byte-offset instead of the
   // shared one set up above, which isn't worth it for a debug printout.
-  len = snprintf(temp, sizeof(temp), "        X mm   Y mm   Z mm    Pitch  Roll Twist");
+  len = snprintf(temp, sizeof(temp), "        X mm   Y mm  Z mm   Pitch  Roll  Twist");
   memcpy(buffer[row++], temp, len);
 
   // Actual Measured Pose (Raw output from the solver)
-  len = snprintf(temp, sizeof(temp), "| Pose: %5.3f %5.3f %5.3f %6.3f %5.1f %5.3f",
+  len = snprintf(temp, sizeof(temp), "| Pose: %5.3f %5.3f %5.3f %6.3f %5.3f %5.3f",
                  last_pos(0), last_pos(1), last_pos(2),
                  last_rot(0), last_rot(1), last_rot(2));
   memcpy(buffer[row++], temp, len);
@@ -142,9 +141,7 @@ void TelemetryController::publish(const float motion[6], float residual_percent,
   row++;  // blank
 
   // Footer 1 (Residual & Condition Number)
-  len = snprintf(temp, sizeof(temp), "| Res: %5.2f%% | Rcond: %5.0f",
-                 residual_percent,
-                 rcond);
+  len = snprintf(temp, sizeof(temp), "| Res: %5.2f%% ", residual_percent);
   memcpy(buffer[row++], temp, len);
 
   // Footer 2 (Update Rate, Buttons, HID status)

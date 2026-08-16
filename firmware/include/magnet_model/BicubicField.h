@@ -34,9 +34,5 @@ public:
     {}
 
     // Value and gradient (d/dr, d/dz, each a Vec2) at (r, z).
-    void evaluate(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_dz) const noexcept;
-
-    Vec2 value(float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return v; }
-    Vec2 ddr  (float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return a; }
-    Vec2 ddz  (float r, float z) const noexcept { Vec2 v{}, a{}, b{}; evaluate(r, z, v, a, b); return b; }
+    Vec2 evaluate(float r, float z, Mat2 &jacobian) const noexcept;
 };

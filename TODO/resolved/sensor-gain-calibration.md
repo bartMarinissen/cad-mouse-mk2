@@ -60,7 +60,7 @@ being owned/reachable anywhere either).
   LittleFS read gets added behind.
 - ~~Does `Sensor::sensor_gain` become redundant once `SensorController`
   pre-corrects readings?~~ **Moot.** `Sensor` no longer has that field at all —
-  it holds only `sensor_pos_global`. Gain lives solely in `SensorController`,
+  it holds only `sensor_pos_world`. Gain lives solely in `SensorController`,
   and the solver never sees an uncorrected reading, so there is no half-active
   second path. The "Current state" section above is stale on this point.
 - ~~Where does per-magnet strength live?~~ **Answered.** `MagnetModel` owns a

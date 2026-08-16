@@ -22,26 +22,8 @@ constexpr BicubicField CALCULATED_BICUBIC_FIELD(BICUBIC_INTERPOLATION_TABLE, BIC
 // triangle side away; it is never evaluated near its own source.
 Vec3 dipole_field(const Vec3& m, const Vec3& r, Mat3& J);
 
-// One magnet's frozen geometry combined with the pose being evaluated: what
-// the magnet looks like from the world frame right now.
-//
-// Due to cross-magnet modeling it is more efficient to pre-calculate this 
-// once and re-use it.
-//
-// Note: the way one should create these is though MagnetModel.place()
-struct MagnetPlacement {
-    // R * magnet_rotation, mapping magnet-local directly to world. The
-    // interpolated path needs it to get into and out of the magnet's frame.
-    Mat3 R_total;
-    // The dipole's location: the magnet's geometric centre, in world
-    // coordinates. Cross terms measure their displacement from here.
-    Vec3 centre_world;
-    // The dipole's moment vector in world coordinates, magnitude
-    // moment_mT_mm3 along the magnet's own -z (its polarization axis).
-    // Carrying orientation as this one rotated vector is what lets the far
-    // field skip the frame machinery entirely -- see dipole_field().
-    Vec3 moment_world;
-};
+// Forward declaration
+struct MagnetPlacement;
 
 struct MagnetModel {
     // The magnet position in the knob frame
@@ -55,16 +37,6 @@ struct MagnetModel {
     // stronger than that reads out proportionally weaker/stronger; the bundle
     // calibration fits the real per-unit value.
     const float magnet_strength_mT;
-
-    // magnet_rotation^T * magnet_pos_knob, precomputed.
-    // This is effectively the negative knob origin position in the magnet frame
-    //
-    // Math.md 3.2 writes the sensor position in the magnet-local frame as
-    //   v_l = R_total^T (s - t) - R_mag^T m
-    // where the second term depends only on frozen calibration constants. Doing
-    // it that way lets VirtualSensor::evaluate subtract a constant vector instead of
-    // performing a second 3x3 rotation on every call.
-    const Vec3 magnet_offset_local;
 
     // --- The magnet info as required for the dipole model ------
 
@@ -95,8 +67,15 @@ struct MagnetModel {
                 const Mat3 &magnet_rotation = Mat3::Identity(),
                 float magnet_strength_mT = BICUBIC_FIELD_REFERENCE_MT);
 
-    // Evaluates the local field and populates the 3x3 local Jacobian
-    Vec3 evaluate(const Vec3& v_l, Mat3& J_local) const;
+    /**
+     * Evaluate the magnetic field acording to this model at position p_local in the local magnet frame
+     * 
+     * Returns the magnetic field, and outputs the jacobian in J_local.
+     * 
+     * Note, since this works in the magnet local frame, magnet_pos_knob and magnet_rotation
+     * are ignored here
+     */
+    Vec3 evaluate(const Vec3& p_local, Mat3& J_local) const;
 
     // This magnet as seen from the world frame at pose (t, R). Cheap, and
     // called once per magnet per forward-model evaluation rather than once
@@ -108,4 +87,55 @@ private:
     // magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT, precomputed once so
     // evaluate() does a multiply on every call instead of a divide.
     const float strength_ratio_;
+};
+
+
+// One magnet's frozen geometry combined with the pose being evaluated: what
+// the magnet looks like from the world frame right now.
+//
+// Due to cross-magnet modeling it is more efficient to pre-calculate this 
+// once and re-use it.
+//
+// Note: the way one should create these is though MagnetModel.place()
+struct MagnetPlacement {
+    // R * magnet_rotation, mapping magnet-local directly to world. The
+    // interpolated path needs it to get into and out of the magnet's frame.
+    Mat3 R_total;
+    // The dipole's location: the magnet's geometric centre, in world
+    // coordinates. Cross terms measure their displacement from here.
+    Vec3 centre_world;
+    // The magnet-local origin in the world frame. Needing to have this is
+    // Another strong argument for needing to change the bicubic table to work 
+    // relative to the magnet centre instead of the magnet bottom face.
+    // That would cause centre_world and origin_world to collapse
+    Vec3 origin_world;
+    // The dipole's moment vector in world coordinates, magnitude
+    // moment_mT_mm3 along the magnet's own -z (its polarization axis).
+    // Carrying orientation as this one rotated vector is what lets the far
+    // field skip the frame machinery entirely -- see dipole_field().
+    Vec3 moment_world;
+
+    // The underlying magnet model.
+    // Note, we know that the magnet-model outlives this because they live 
+    // for effectively the entire lifetime of the program.
+    const MagnetModel& magnet;
+
+    /**
+     * Get the field of this magnet using the far approximation in the world frame
+     * at position p_world in the world frame. This uses a dipole model
+     * 
+     * (As of now, the magnet frame origin is not the centre of the magnet)
+     * 
+     * Returns the magnetic field, outputs the jacobian w.r.t. p_world in J_world.
+     */
+    Vec3 far_approx_world(const Vec3& p_world, Mat3& J_world) const;
+    
+    /**
+     * Get the field of this magnet using the near approximation in the world frame
+     * at position p_world in the world frame. This uses interpolation based on 
+     * an exact model.
+     * 
+     * Returns the magnetic field,  outputs the jacobian w.r.t. p_world  in J_world.
+     */
+    Vec3 near_approx_world(const Vec3& p_world, Mat3& J_world) const;
 };

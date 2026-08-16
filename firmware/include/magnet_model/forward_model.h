@@ -16,10 +16,14 @@ public:
     // constructor above stays for tests that want to hand-place things.
     explicit ForwardModel(const CalibrationParams& cal);
 
-    // Computes the 9x1 residual and 9x6 Jacobian for a given pose
-    // Note the pose for this jacobian is in terms of a translation vector t 
-    //  and a rotation vector omega. But we caluclate it in terms of a rotation MATRIX R.
-    void evaluate(const Vec3& t, 
+    /**
+     * Computes the 9x1 magnetic field per sensor and 9x6 Jacobian for a given pose of the knob.
+     * 
+     * The pose is given as: 
+     *   t_world, the position of the knob origin in the world frame
+     *   R, the rotation matrix needed to translate from the world frame to the knob frame
+     */
+    void evaluate(const Vec3& t_world, 
                   const Mat3& R, 
                   Eigen::Matrix<float, 9, 1> &B_field, 
                   Eigen::Matrix<float, 9, 6> &J) const;

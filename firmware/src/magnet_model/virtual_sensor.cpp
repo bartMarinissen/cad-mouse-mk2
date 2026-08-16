@@ -1,86 +1,82 @@
 #include "magnet_model/virtual_sensor.h"
 
-VirtualSensor::VirtualSensor(Vec3 sensor_pos_global)
-    : sensor_pos_global(sensor_pos_global)
+VirtualSensor::VirtualSensor(Vec3 sensor_pos_world)
+    : sensor_pos_world(sensor_pos_world)
     {}
 
-// Evaluate the field a sensor sees from all three magnets, and a given translation from the global frame to the knob frame
-void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
+// Evaluate the field a sensor sees from all three magnets, and a given transformation from the global frame to the knob frame
+// The transformation from the global to the knob frame (a translation + a rotation) is encoded in the 3 MagnetPlacements
+// t_world also captures the translation part, but is only used for the rotation part of the jacobian
+void __not_in_flash_func(VirtualSensor::evaluate)(
         const MagnetPlacement &paired_placement,
         const MagnetPlacement &cross_a,
         const MagnetPlacement &cross_b,
-        const Vec3& t,
-        Eigen::Matrix<float, 3, 1> &B_field_global,
+        const Vec3& t_world,
+        Eigen::Matrix<float, 3, 1> &B_world,
         Eigen::Matrix<float, 3, 6> &J) const {
 
-    // 1. Global geometry. Shared by every magnet: all three ride the same
-    // rigid knob, so there is one v per sensor, not one per pair.
-    const Vec3 v = sensor_pos_global - t;
 
-    // 2. Paired magnet, through the interpolated near field.
-    //
-    // R_total = R * R_mag maps magnet-local straight to global, and is built
-    // once per magnet by MagnetModel::place rather than here. Both places 
-    // We need the magnet's own tilt can use this directly:
-    //   R * (R_mag * B_local)             ->  R_total * B_local
-    //   R * (R_mag * J * R_mag^T) * R^T   ->  R_total * J * R_total^T
-    const Mat3 R_total_T = paired_placement.R_total.transpose();
+    /** -----
+    * Get the local field and the displacement jacobian
+    *   ------
+    */
+    // Get the main contribution from the near magnet.
+    Mat3 J_displacement_world; // displacement Jacobian accumulator    
+    B_world = paired_placement.near_approx_world(sensor_pos_world, J_displacement_world);
 
-    // Sensor position in the magnet-local frame, per Math.md 3.2. The
-    // R_mag^T * m term is a frozen calibration constant, precomputed in
-    // MagnetModel rather than re-rotated here every call.
-    const Vec3 sensor_magnet_rel = R_total_T * v - paired.magnet_offset_local;
-
-    Mat3 J_local;
-    const Vec3 B_local = paired.evaluate(sensor_magnet_rel, J_local);
-
-    // Straight from magnet-local to global. M is the field's gradient in world
-    // coordinates (Math.md 4.F).
-    Vec3 B_total = paired_placement.R_total * B_local;
-    Mat3 J_world = paired_placement.R_total * J_local * R_total_T;
-
-    // 3. The other two magnets, as point dipoles.
-    //
-    // These come back already in world coordinates, so there is no frame to
-    // transform into, nothing to rotate back, and no R J R^T congruence -- the
-    // three operations that dominate the paired branch above. That is what
-    // makes six extra pairs affordable; see dipole_field().
+    // The other two magnets, as point dipoles.
+    // All in the same world frame, so we can accumulate directly.
     Mat3 J_cross_a, J_cross_b;
-    const Vec3 B_cross_a = dipole_field(cross_a.moment_world,
-                                        (sensor_pos_global - cross_a.centre_world).eval(),
-                                        J_cross_a);
-    const Vec3 B_cross_b = dipole_field(cross_b.moment_world,
-                                        (sensor_pos_global - cross_b.centre_world).eval(),
-                                        J_cross_b);
+    B_world += cross_a.far_approx_world(sensor_pos_world, J_cross_a);
+    B_world += cross_b.far_approx_world(sensor_pos_world, J_cross_b);
+    J_displacement_world += J_cross_a + J_cross_b;
 
-    // 4. Superposition, before assembly rather than after. Fields add, and
-    // both Jacobian blocks below are linear in B and M, so one assembly on the
-    // summed quantities is exact and costs a third of three assemblies.
-    B_total += B_cross_a + B_cross_b;
-    J_world += J_cross_a + J_cross_b;
+    /**  -----
+     * Assemble the full jacobian from the displacement jacobian
+     *   -----
+     * 
+     * We now need to take a jacobian w.r.t. sensor_pos_world
+     * and use it to build the full 3x6 jacobina w.r.t 
+     * the knob translation t and the knob rotation w.
+     * 
+     * w here is a rotation vector. We don't use that vector to represent rotation
+     * internally instead we use a 3x3 matrix R.
+     * 
+     * Eventually in the solver we solve for a small update to the rotation vector w
+     * and use that to update the rotation matrix R.
+     * 
+     * The rotation matrix R isn't passed into this function, its already processed in the
+     * MagnetPlacement's passed in.
+     */  
 
-    B_field_global = B_total;
+    // The position of the sensor relative to the knob origin in the world frame.
+    // This is the 'lever' with which knob rotation moves the sensor
+    const Vec3 v_world = sensor_pos_world - t_world;
 
-    // 5. Assemble the Jacobian blocks
-    J.block<3, 3>(0, 0) = -J_world;
+    // the knob displacement t is in the opposite direction as sensor_pos_world.
+    // So we flip the sign since ∂v_world/∂t = -1
+    J.block<3, 3>(0, 0) = -J_displacement_world;
 
-    // J_rot = M * [v]_x - [B_field_global]_x, with both skew products written
-    // out. A skew matrix has a zero diagonal, so a general 3x3 product spends a
+    // The rotation jacobian is much more complicated. See math.md for more details behind the formula.
+    // J_rot = J_displacement_world * [v_world]_x - [B_world]_x
+    //
+    // Here we compute this in two steps by hand-rolling the skew-matrices to take full advantage
+    // of the zeroes it has. 
+    
+    // A skew matrix has a zero diagonal, so a general 3x3 product spends a
     // third of its multiplies on structural zeros; column j of [a]_x has only
     // two non-zero entries.
-    const float vx = v.x(), vy = v.y(), vz = v.z();
+    // So here we calculate J_displacement_world * [v_world]_x
     for (int i = 0; i < 3; ++i) {
-        const float m0 = J_world(i, 0), m1 = J_world(i, 1), m2 = J_world(i, 2);
-        J(i, 3) = m1 * vz - m2 * vy;
-        J(i, 4) = m2 * vx - m0 * vz;
-        J(i, 5) = m0 * vy - m1 * vx;
+        const float m0 = J_displacement_world(i, 0), m1 = J_displacement_world(i, 1), m2 = J_displacement_world(i, 2);
+        J(i, 3) = m1 * v_world.z() - m2 * v_world.y();
+        J(i, 4) = m2 * v_world.x() - m0 * v_world.z();
+        J(i, 5) = m0 * v_world.y() - m1 * v_world.x();
     }
-
-    // ... then -[B]_x, which touches six entries rather than nine. Note this
-    // uses the pre-gain physical field, as Math.md 4.F requires, and the
-    // summed field rather than the paired magnet's alone.
-    const float Bx = B_total.x(), By = B_total.y(), Bz = B_total.z();
-    J(0, 4) += Bz;   J(0, 5) -= By;
-    J(1, 3) -= Bz;   J(1, 5) += Bx;
-    J(2, 3) += By;   J(2, 4) -= Bx;
+    // ... then -[B]_x, which touches six entries rather than nine.
+    // Note, since we do not apply gain in the forward model when solving the pose, we don't need to worry about it here
+    // despite the note in math.md
+    J(0, 4) += B_world.z();   J(0, 5) -= B_world.y();
+    J(1, 3) -= B_world.z();   J(1, 5) += B_world.x();
+    J(2, 3) += B_world.y();   J(2, 4) -= B_world.x();
 }

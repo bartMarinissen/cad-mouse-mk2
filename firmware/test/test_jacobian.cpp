@@ -147,17 +147,18 @@ static Mat3 exp_so3(const Vec3& w) {
 // ======================================================================
 
 static void check_bicubic_point(float r0, float z0) {
-    Vec2 val0, ddr0, ddz0;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, val0, ddr0, ddz0);
+    Mat2 jac0;
+    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, jac0);
+    const Vec2 ddr0 = jac0.col(0);
+    const Vec2 ddz0 = jac0.col(1);
 
-    Vec2 val_rp, val_rm, dummy_a, dummy_b;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, val_rp, dummy_a, dummy_b);
-    CALCULATED_BICUBIC_FIELD.evaluate(r0 - FD_STEP_LINEAR, z0, val_rm, dummy_a, dummy_b);
+    Mat2 dummy_jac;
+    Vec2 val_rp = CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, dummy_jac);
+    Vec2 val_rm = CALCULATED_BICUBIC_FIELD.evaluate(r0 - FD_STEP_LINEAR, z0, dummy_jac);
     Vec2 ddr_num = (val_rp - val_rm) / (2.0f * FD_STEP_LINEAR);
 
-    Vec2 val_zp, val_zm;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 + FD_STEP_LINEAR, val_zp, dummy_a, dummy_b);
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 - FD_STEP_LINEAR, val_zm, dummy_a, dummy_b);
+    Vec2 val_zp = CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 + FD_STEP_LINEAR, dummy_jac);
+    Vec2 val_zm = CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 - FD_STEP_LINEAR, dummy_jac);
     Vec2 ddz_num = (val_zp - val_zm) / (2.0f * FD_STEP_LINEAR);
 
     char msg[128];
@@ -451,7 +452,7 @@ void test_cross_magnet_terms_are_actually_present(void) {
         for (int i = 0; i < 3; ++i) {
             Vec3 B_i;
             Eigen::Matrix<float, 3, 6> J_i;
-            sensors[i].evaluate(magnets[i], placements[i],
+            sensors[i].evaluate(placements[i],
                                 inert[(i + 1) % 3], inert[(i + 2) % 3],
                                 t, B_i, J_i);
             B_paired.block<3, 1>(i * 3, 0) = B_i;

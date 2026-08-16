@@ -5,7 +5,7 @@ model that predicts sensor readings from a candidate pose, and the exact analyti
 Jacobian of that model, which drives a Levenberg-Marquardt (damped Gauss-Newton)
 optimization loop.
 
-The structure below follows the natural computational order — global pose, to local
+The structure below follows the natural computational order — world pose, to local
 geometry, to field lookup, to sensor output — so that each section corresponds to one
 conceptual stage of the pipeline.
 
@@ -18,11 +18,11 @@ $\{1,2,3\}$. Every sensor sees every magnet, so most quantities below carry both
 
 | Symbol | Meaning |
 |---|---|
-| $\mathbf{s}_i$ | sensor $i$ position, global/PCB frame (constant) |
+| $\mathbf{s}_i$ | sensor $i$ position, world/PCB frame (constant) |
 | $\mathbf{m}_j$ | magnet $j$ resting position (bottom face), knob frame (constant) |
 | $R_{m,j}$ | magnet $j$'s tilt inside the knob (constant) |
 | $G_i$ | sensor $i$'s gain/distortion matrix (constant) |
-| $\mathbf{t}$ | knob translation, global frame (**solved for**) |
+| $\mathbf{t}$ | knob translation, world frame (**solved for**) |
 | $R$ | knob rotation matrix (**solved for**) |
 | $\boldsymbol{\rho}=(\mathbf t,\boldsymbol\omega)$ | 6DOF pose coordinates: translation + rotation-update vector |
 | $R(\boldsymbol\omega)=\exp([\boldsymbol\omega]_\times)$ | rotation as a function of $\boldsymbol\omega\in\mathfrak{so}(3)$ (Rodrigues) |
@@ -31,12 +31,12 @@ $\{1,2,3\}$. Every sensor sees every magnet, so most quantities below carry both
 | $R_{total,j} = R\,R_{m,j}$ | combined knob + magnet rotation |
 | $\mathbf{v}_{l,ij}$ | sensor $i$'s position relative to magnet $j$, in magnet $j$'s local frame |
 | $\mathbf{B}_{l,ij}$ | field at sensor $i$ from magnet $j$, in magnet $j$'s local frame |
-| $\mathbf{B}_{g,ij}$ | field at sensor $i$ from magnet $j$, global frame (pre-gain) |
-| $\mathbf{B}_{g,i}=\sum_j \mathbf{B}_{g,ij}$ | total field at sensor $i$, global frame (pre-gain) |
+| $\mathbf{B}_{w,ij}$ | field at sensor $i$ from magnet $j$, world frame (pre-gain) |
+| $\mathbf{B}_{w,i}=\sum_j \mathbf{B}_{w,ij}$ | total field at sensor $i$, world frame (pre-gain) |
 | $\hat{\mathbf{B}}_i$ | predicted sensor reading |
 | $h$ | magnet half-height; the dipole sits this far above $\mathbf{m}_j$ along the magnet's axis (§3.6) |
-| $\boldsymbol{\mu}_j$ | magnet $j$'s dipole moment, global frame (§3.6) |
-| $\mathbf{c}_j$ | magnet $j$'s geometric centre, global frame (§3.6) |
+| $\boldsymbol{\mu}_j$ | magnet $j$'s dipole moment, world frame (§3.6) |
+| $\mathbf{c}_j$ | magnet $j$'s geometric centre, world frame (§3.6) |
 
 Only $\mathbf{t}$ and $R$ are optimization variables. Everything else — $\mathbf{s}_i$,
 $\mathbf{m}_j$, $R_{m,j}$, $G_i$ — is a frozen calibration constant, and so contributes
@@ -64,7 +64,7 @@ where $B_j:\mathbb{R}^3\to\mathbb{R}^3$ — defined in §3.3–3.4 — maps a lo
 to the field magnet $j$ produces there.
 
 **Where the sum sits matters.** Superposition is a property of the *field*, so the sum
-has to be taken there, at $\mathbf{B}_g$, and not somewhere more convenient further out.
+has to be taken there, at $\mathbf{B}_w$, and not somewhere more convenient further out.
 Everything downstream of it — the gain $G_i$, and both Jacobian blocks in §4.F — is
 linear in the field, which is what lets the implementation add up the per-magnet
 contributions first and apply the outer stages once per sensor rather than once per
@@ -78,7 +78,7 @@ evaluation — see §3.6.
 
 Note that $\boldsymbol\omega$ appears **twice**:
 once rotating into the local frame ($R^T$, inside $B_j$'s argument) and once rotating
-back out to global ($R$, outside). This is the reason the Jacobian derivation in §4 needs
+back out to world frame ($R$, outside). This is the reason the Jacobian derivation in §4 needs
 the product rule rather than a single pass of the chain rule — both occurrences must be
 differentiated and their contributions summed.
 
@@ -102,7 +102,7 @@ one sensor/magnet pair at a time.
 ### 3.1 Combined rotation
 
 The knob's rotation $R$ (the solved-for state) and the magnet's fixed tilt $R_{m,j}$
-compose into a single rotation from magnet-local space to global space:
+compose into a single rotation from the magnet-local frame to world frame:
 
 $$R_{total,j} = R \, R_{m,j}$$
 
@@ -139,12 +139,12 @@ function $B_j$ from §2:
 
 $$\mathbf{B}_{l,ij} = B_j(\mathbf{v}_{l,ij}) = \begin{bmatrix} B_r c_x \\ B_r c_y \\ B_z \end{bmatrix}$$
 
-### 3.5 Back to global frame, then gain
+### 3.5 Back to world frame, then gain
 
-The local field is rotated into the global frame, summed over magnets, then passed
+The local field is rotated into the world frame, summed over magnets, then passed
 through the sensor's own gain/distortion matrix to give the predicted sensor reading:
 
-$$\mathbf{B}_{g,ij} = R_{total,j}\, \mathbf{B}_{l,ij}, \qquad \mathbf{B}_{g,i} = \sum_j \mathbf{B}_{g,ij}, \qquad \hat{\mathbf{B}}_i = f_i(\boldsymbol\rho) = G_i\, \mathbf{B}_{g,i}$$
+$$\mathbf{B}_{w,ij} = R_{total,j}\, \mathbf{B}_{l,ij}, \qquad \mathbf{B}_{w,i} = \sum_j \mathbf{B}_{w,ij}, \qquad \hat{\mathbf{B}}_i = f_i(\boldsymbol\rho) = G_i\, \mathbf{B}_{w,i}$$
 
 (An additive sensor baseline/offset, if calibrated, is handled upstream as a
 correction to the raw measurement rather than as a term in this model.)
@@ -176,7 +176,7 @@ Two details are load-bearing rather than incidental:
   reference moment (polarization × volume, in mT·mm³) scaled by the same per-magnet
   strength ratio that scales the interpolated field, so the near and far models cannot
   describe magnets of different strength. Polarization runs along the magnet's local
-  $-\hat{\mathbf{z}}$, so in global coordinates $\boldsymbol\mu_j = -|\boldsymbol\mu_j|\,R_{total,j}\,\hat{\mathbf{z}}$
+  $-\hat{\mathbf{z}}$, so in world coordinates $\boldsymbol\mu_j = -|\boldsymbol\mu_j|\,R_{total,j}\,\hat{\mathbf{z}}$
   — the third column of $R_{total,j}$, scaled.
 
 **Which branch applies is fixed by geometry, not measured per evaluation.** Over the
@@ -187,8 +187,8 @@ the gap between them is never visited.
 
 Unlike §3.3–3.4 this branch is **frame-agnostic**. A magnet's orientation reaches the
 formula entirely through $\boldsymbol\mu$, a single vector, so supplying $\boldsymbol\mu_j$
-and $\mathbf{r} = \mathbf{s}_i - \mathbf{c}_j$ in global coordinates yields the global
-field and (§4.E) the global gradient directly — no rotation into the magnet's frame and
+and $\mathbf{r} = \mathbf{s}_i - \mathbf{c}_j$ in world coordinates yields the world
+field and (§4.E) the world gradient directly — no rotation into the magnet's frame and
 no rotation back. The interpolated branch has no such freedom: it is tabulated in
 $(r,z)$ and must be handed magnet-local coordinates.
 
@@ -207,7 +207,7 @@ and substitute inward until only $\Delta\mathbf{t}$ and $\Delta\boldsymbol{\omeg
 remain.
 
 Two skew-symmetric identities recur throughout. They follow from the convention that a
-small rotation update is a **left** (global/spatial) perturbation of the current
+small rotation update is a **left** (world/spatial) perturbation of the current
 rotation: $R_{new}=\exp([\Delta\boldsymbol{\omega}]_\times)R \approx (I+[\Delta\boldsymbol{\omega}]_\times)R$.
 
 - **Identity 1** (cross-product anticommutativity): for any vectors $\mathbf{a},\mathbf{b}$: $[\mathbf{a}]_\times \mathbf{b} = -[\mathbf{b}]_\times \mathbf{a}$
@@ -219,22 +219,22 @@ $$\Delta(R^T) = -R^T\,\Delta R\,R^T = -R^T[\Delta\boldsymbol{\omega}]_\times$$
 
 $G_i$ is a frozen constant, so it passes straight through:
 
-$$\Delta\hat{\mathbf{B}}_i = G_i\, \Delta\mathbf{B}_{g,i}$$
+$$\Delta\hat{\mathbf{B}}_i = G_i\, \Delta\mathbf{B}_{w,i}$$
 
-### 4.B Middle layer — global field variation
+### 4.B Middle layer — world field variation
 
 §4.B–4.D take **one** (sensor, magnet) pair at a time, through the interpolated branch.
 §4.E does the same for the far-field branch, and §4.F sums the results over $j$.
 
-From $\mathbf{B}_{g,ij}=R_{total,j}\mathbf{B}_{l,ij}$, the product rule gives:
+From $\mathbf{B}_{w,ij}=R_{total,j}\mathbf{B}_{l,ij}$, the product rule gives:
 
-$$\Delta\mathbf{B}_{g,ij} = (\Delta R_{total,j})\,\mathbf{B}_{l,ij} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
+$$\Delta\mathbf{B}_{w,ij} = (\Delta R_{total,j})\,\mathbf{B}_{l,ij} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
 
-$R_{m,j}$ is constant, so $\Delta R_{total,j} = (\Delta R)R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R\, R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R_{total,j}$ (Identity 2). Substituting, then applying Identity 1 with $\mathbf{a}=\Delta\boldsymbol{\omega}$, $\mathbf{b}=\mathbf{B}_{g,ij}=R_{total,j}\mathbf{B}_{l,ij}$:
+$R_{m,j}$ is constant, so $\Delta R_{total,j} = (\Delta R)R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R\, R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R_{total,j}$ (Identity 2). Substituting, then applying Identity 1 with $\mathbf{a}=\Delta\boldsymbol{\omega}$, $\mathbf{b}=\mathbf{B}_{w,ij}=R_{total,j}\mathbf{B}_{l,ij}$:
 
-$$[\Delta\boldsymbol{\omega}]_\times \mathbf{B}_{g,ij} = -[\mathbf{B}_{g,ij}]_\times \Delta\boldsymbol{\omega}$$
+$$[\Delta\boldsymbol{\omega}]_\times \mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times \Delta\boldsymbol{\omega}$$
 
-$$\Rightarrow \quad \Delta\mathbf{B}_{g,ij} = -[\mathbf{B}_{g,ij}]_\times \Delta\boldsymbol{\omega} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
+$$\Rightarrow \quad \Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times \Delta\boldsymbol{\omega} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
 
 ### 4.C Inner layer — local vector variation
 
@@ -344,39 +344,39 @@ implementation computes six entries and mirrors three on exactly this basis, and
 `test_dipole_field_jacobian` asserts the symmetry so that an edit breaking it fails
 loudly rather than producing a plausible-looking solver.
 
-Because §3.6 is evaluated in global coordinates, $J_{dipole}$ **is** that magnet's
+Because §3.6 is evaluated in the world frame, $J_{dipole}$ **is** that magnet's
 contribution to $M$ below — there is no $R\,J\,R^T$ congruence to apply.
 
 ### 4.F Assembly — folding it all back together
 
 Substitute §4.C's $\Delta\mathbf{v}_{l,ij}$ into $\Delta\mathbf{B}_{l,ij}=J_{local}\Delta\mathbf{v}_{l,ij}$, then into §4.B, for one magnet $j$:
 
-$$\Delta\mathbf{B}_{g,ij} = -[\mathbf{B}_{g,ij}]_\times\Delta\boldsymbol{\omega} + R_{total,j}J_{local}\Big(R_{total,j}^T[\mathbf{v}]_\times\Delta\boldsymbol{\omega} - R_{total,j}^T\Delta\mathbf{t}\Big)$$
+$$\Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times\Delta\boldsymbol{\omega} + R_{total,j}J_{local}\Big(R_{total,j}^T[\mathbf{v}]_\times\Delta\boldsymbol{\omega} - R_{total,j}^T\Delta\mathbf{t}\Big)$$
 
-Define that magnet's field gradient in global coordinates:
+Define that magnet's field gradient in the world frame:
 
-$$M_{ij} = R_{total,j}\,J_{local}\,R_{total,j}^T \quad\text{(interpolated branch)}, \qquad M_{ij} = J_{dipole} \quad\text{(§3.6 branch, already global)}$$
+$$M_{ij} = R_{total,j}\,J_{local}\,R_{total,j}^T \quad\text{(interpolated branch)}, \qquad M_{ij} = J_{dipole} \quad\text{(§3.6 branch, already in the world frame)}$$
 
 Distributing and grouping by $\Delta\mathbf{t}$ / $\Delta\boldsymbol{\omega}$, then summing
 over magnets — note $\mathbf{v} = \mathbf{s}_i-\mathbf{t}$ carries no $j$, since all three
 magnets ride the same rigid knob:
 
-$$\Delta\mathbf{B}_{g,i} = \sum_j \Delta\mathbf{B}_{g,ij} = \underbrace{\Big(-\sum_j M_{ij}\Big)}_{\text{translation}}\Delta\mathbf{t} + \underbrace{\Big(\Big(\sum_j M_{ij}\Big)[\mathbf{v}]_\times - \Big[\sum_j \mathbf{B}_{g,ij}\Big]_\times\Big)}_{\text{rotation}}\Delta\boldsymbol{\omega}$$
+$$\Delta\mathbf{B}_{w,i} = \sum_j \Delta\mathbf{B}_{w,ij} = \underbrace{\Big(-\sum_j M_{ij}\Big)}_{\text{translation}}\Delta\mathbf{t} + \underbrace{\Big(\Big(\sum_j M_{ij}\Big)[\mathbf{v}]_\times - \Big[\sum_j \mathbf{B}_{w,ij}\Big]_\times\Big)}_{\text{rotation}}\Delta\boldsymbol{\omega}$$
 
 **Summing before assembling is exact, not an approximation**, and it is the step that
 makes cross-magnet modelling affordable. Both blocks are linear in $M_{ij}$ and
-$\mathbf{B}_{g,ij}$, and $[\,\cdot\,]_\times$ is linear in its argument, so
+$\mathbf{B}_{w,ij}$, and $[\,\cdot\,]_\times$ is linear in its argument, so
 $\sum_j$ commutes with everything outside it. The consequence is that the skew products
 and block assembly run **once per sensor** rather than once per (sensor, magnet) pair —
 three times per evaluation instead of nine.
 
 Folding in the gain from §4.A gives the final $3\times3$ blocks, with
-$M_i = \sum_j M_{ij}$ and $\mathbf{B}_{g,i} = \sum_j \mathbf{B}_{g,ij}$:
+$M_i = \sum_j M_{ij}$ and $\mathbf{B}_{w,i} = \sum_j \mathbf{B}_{w,ij}$:
 
-$$J_{trans} = G_i(-M_i), \qquad J_{rot} = G_i\big(M_i[\mathbf{v}]_\times - [\mathbf{B}_{g,i}]_\times\big)$$
+$$J_{trans} = G_i(-M_i), \qquad J_{rot} = G_i\big(M_i[\mathbf{v}]_\times - [\mathbf{B}_{w,i}]_\times\big)$$
 
-**Crucial detail:** $[\mathbf{B}_{g,i}]_\times$ must be built from the pre-gain, physical
-field $\mathbf{B}_{g,i}$, *before* $G_i$ is applied — it appears inside §4.B, ahead of
+**Crucial detail:** $[\mathbf{B}_{w,i}]_\times$ must be built from the pre-gain, physical
+field $\mathbf{B}_{w,i}$, *before* $G_i$ is applied — it appears inside §4.B, ahead of
 §4.A's gain step, so using the gained field here would be a subtly wrong Jacobian even
 though the residual itself is computed post-gain. It must also be the **summed** field:
 using the paired magnet's contribution alone would drop the cross terms from the

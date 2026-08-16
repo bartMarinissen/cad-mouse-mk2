@@ -4,9 +4,9 @@
 
 
 struct VirtualSensor {
-    Vec3 sensor_pos_global;
+    Vec3 sensor_pos_world;
 
-    VirtualSensor(Vec3 sensor_pos_global);
+    VirtualSensor(Vec3 sensor_pos_world);
 
     // The field this sensor sees from ALL THREE magnets, and its 3x6 Jacobian
     // with respect to the knob pose.
@@ -28,10 +28,10 @@ struct VirtualSensor {
     // BEFORE the 3x6 blocks are assembled. Both blocks are linear in those two
     // quantities, so summing first is exact, and it means the skew products
     // and block assembly run once per sensor instead of once per pair.
-    void evaluate(const MagnetModel &paired, const MagnetPlacement &paired_placement,
+    void evaluate(const MagnetPlacement &paired_placement,
         const MagnetPlacement &cross_a,
         const MagnetPlacement &cross_b,
-        const Vec3& t,
-        Eigen::Matrix<float, 3, 1> &B_field_global,
+        const Vec3& t_world,
+        Eigen::Matrix<float, 3, 1> &B_world,
         Eigen::Matrix<float, 3, 6> &J) const;
 };

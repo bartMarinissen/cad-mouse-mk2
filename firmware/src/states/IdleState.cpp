@@ -47,11 +47,8 @@ void IdleState::runMotionPipeline(float dt, unsigned long now) {
   if (telemetry.enabled()) {
     // we have the raw field as raw
     // we can get the pose from motion.last_pos and motion.last_rot
-
-    //auto eig_vals = motion.statistics.last_jacobian.jacobiSvd().singularValues();
-    float rcond = 1.0;
     telemetry.publish(
-      motionOut, res_percent, buttonBits, hidReportSent, motion.statistics, raw, motion.last_pos, motion.last_rot, rcond);
+      motionOut, res_percent, buttonBits, hidReportSent, motion.statistics, raw, motion.last_pos, motion.last_rot);
   }
 }
 
