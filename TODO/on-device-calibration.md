@@ -96,11 +96,14 @@ converted deliberately rather than assumed to transfer.
 
 `bundle_solver.h`, verified end to end by `verify_solver.sh` — 30 synthetic
 frames generated from a known parameter vector through the real forward model,
-then fitted from nominal. Cost falls from 232 to 8.9e-6, an RMS residual of
-0.00018 mT over 270 observations, in 23 iterations. A second test starts the
+then fitted from nominal. Cost falls from 1423 to 1.1e-7, an RMS residual of
+0.00002 mT over 270 observations, in 20 iterations. A second test starts the
 fit *at* the answer and checks the pose back-substitution does not drift poses
 that were already correct — pass 2 runs every iteration regardless, so a sign
-error there would otherwise hide behind the shared fit absorbing it.
+error there would otherwise hide behind the shared fit absorbing it. Two more
+cover the ridge term: that a tight prior pulls a weakly-observable parameter
+toward nominal rather than away from it, and that the unregularized
+`magnet_strength_mean` stays both well-posed and well-determined.
 
 The linear solve is a plain dense `H.ldlt()`. `H_ss`'s own bordered
 block-diagonal structure could be Schur-eliminated a second time, reducing the
