@@ -73,7 +73,7 @@ bool HIDController::axesReportChanged(const ReportAxes& axes) const {
 
 bool HIDController::sendReports(const float motion[6], uint16_t buttonBits) {
   const ReportAxes axes = makeAxesReport(motion);
-  const bool sendAxes = axesReportChanged(axes);
+  const bool sendAxes = true || axesReportChanged(axes);
   const bool sendButtons = (buttonBits != buttonBitsSent_);
 
   if (!usbHid_.ready() || (!sendAxes && !sendButtons)) {

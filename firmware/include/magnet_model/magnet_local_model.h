@@ -13,12 +13,9 @@ constexpr BicubicField CALCULATED_BICUBIC_FIELD(BICUBIC_INTERPOLATION_TABLE, BIC
 //   J [out] dB_a/dr_b, in that same frame
 //   returns the field there, mT
 //
-// Being frame-agnostic is the point rather than a nicety. A magnet's
-// orientation reaches this formula entirely through m -- one rotated vector --
-// so a caller holding a world-frame moment gets a world-frame gradient
-// straight out, skipping the transform-in, rotate-out and R J R^T congruence
-// that the interpolated path needs (Math.md 4.F). The table cannot do that:
-// it is tabulated in (r, z), so it must be handed magnet-local coordinates.
+// Being frame-agnostic allows us to calculate this in the world frame instead
+// of needing to go to the magnet frame and back. That means a single rotation
+// instead of two rotations.
 //
 // Deliberately no r -> 0 branch, unlike MagnetModel::evaluate. This models the
 // magnets a sensor does NOT sit under, which the knob's geometry keeps a
@@ -28,11 +25,10 @@ Vec3 dipole_field(const Vec3& m, const Vec3& r, Mat3& J);
 // One magnet's frozen geometry combined with the pose being evaluated: what
 // the magnet looks like from the world frame right now.
 //
-// Every field here depends on the magnet and the pose but NOT on which sensor
-// is looking, which is the whole reason the type exists. Once each sensor sees
-// all three magnets there are nine (sensor, magnet) pairs per evaluation but
-// still only three magnets, so ForwardModel builds these once per magnet and
-// passes them down rather than letting VirtualSensor rebuild them per pair.
+// Due to cross-magnet modeling it is more efficient to pre-calculate this 
+// once and re-use it.
+//
+// Note: the way one should create these is though MagnetModel.place()
 struct MagnetPlacement {
     // R * magnet_rotation, mapping magnet-local directly to world. The
     // interpolated path needs it to get into and out of the magnet's frame.
@@ -48,24 +44,20 @@ struct MagnetPlacement {
 };
 
 struct MagnetModel {
+    // The magnet position in the knob frame
     const Vec3 magnet_pos_knob;
+    // The orientation of the magnet compared to the knob frame.
+    // At perfect manufacturing this would be the identity.
     const Mat3 magnet_rotation;
     // This magnet's polarization (remanence, Br), in mT. Defaults to
     // BICUBIC_FIELD_REFERENCE_MT (magnet_model_table.h) -- i.e. "exactly the
     // magnet the bicubic table was generated for" -- so a magnet weaker or
     // stronger than that reads out proportionally weaker/stronger; the bundle
     // calibration fits the real per-unit value.
-    //
-    // This is the per-magnet manufacturing tolerance that causes "Phantom Tilt"
-    // (a magnet 5% strong reads, to geometry-only math, as a magnet that moved
-    // closer), so it belongs to the magnet rather than to the sensor watching
-    // it. That distinction used to be cosmetic, when each sensor saw exactly
-    // one magnet and a per-sensor scalar could have absorbed it. It no longer
-    // is: every sensor now sees all three magnets, and one scalar per sensor
-    // cannot undo three different magnet strengths.
     const float magnet_strength_mT;
 
     // magnet_rotation^T * magnet_pos_knob, precomputed.
+    // This is effectively the negative knob origin position in the magnet frame
     //
     // Math.md 3.2 writes the sensor position in the magnet-local frame as
     //   v_l = R_total^T (s - t) - R_mag^T m
@@ -74,10 +66,9 @@ struct MagnetModel {
     // performing a second 3x3 rotation on every call.
     const Vec3 magnet_offset_local;
 
-    // --- The same magnet, as the far-field model sees it ---
-    //
-    // Both are what a *cross* sensor needs: one that this magnet is not paired
-    // with, and so evaluates through dipole_field() rather than the table.
+    // --- The magnet info as required for the dipole model ------
+
+    // The dipole model is used for what a *cross* sensor needs.
     // Precomputed here because they are frozen calibration constants, and
     // because they depend only on the magnet -- ForwardModel lifts them out of
     // the sensor loop, so each is built once per solve rather than per pair.
@@ -87,13 +78,12 @@ struct MagnetModel {
     // equivalent dipole belongs at the centre; siting it at the bottom face
     // instead is a tens-of-percent error at cross-magnet range, not a rounding
     // one.
-    const Vec3 centre_knob;
+    // Note: we should change the magnet local frame to sit centered on the magnet center.
+    // That would make this definitionally equal to magnet_pos_knob.
+    const Vec3 magnet_centre_knob;
 
     // Dipole moment magnitude, mT*mm^3: the table's reference moment scaled by
-    // this magnet's own strength, through the same strength_ratio_ the
-    // interpolated path uses. So a magnet 5% strong is 5% strong in both
-    // models by construction, rather than by two constants being kept in
-    // agreement.
+    // this magnet's own strength, through the same strength_ratio. 
     //
     // Magnitude only. The polarization points along the magnet's local -z, so
     // the moment VECTOR is -moment_mT_mm3 times the magnet's own axis, which

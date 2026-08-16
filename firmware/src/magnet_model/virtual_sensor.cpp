@@ -20,10 +20,8 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     // 2. Paired magnet, through the interpolated near field.
     //
     // R_total = R * R_mag maps magnet-local straight to global, and is built
-    // once per magnet by MagnetModel::place rather than here -- with three
-    // sensors now looking at it, computing it per pair would build the same
-    // matrix three times. Both places the magnet's own tilt used to appear
-    // still collapse onto it:
+    // once per magnet by MagnetModel::place rather than here. Both places 
+    // We need the magnet's own tilt can use this directly:
     //   R * (R_mag * B_local)             ->  R_total * B_local
     //   R * (R_mag * J * R_mag^T) * R^T   ->  R_total * J * R_total^T
     const Mat3 R_total_T = paired_placement.R_total.transpose();
@@ -39,7 +37,7 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     // Straight from magnet-local to global. M is the field's gradient in world
     // coordinates (Math.md 4.F).
     Vec3 B_total = paired_placement.R_total * B_local;
-    Mat3 M_total = paired_placement.R_total * J_local * R_total_T;
+    Mat3 J_world = paired_placement.R_total * J_local * R_total_T;
 
     // 3. The other two magnets, as point dipoles.
     //
@@ -47,24 +45,24 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     // transform into, nothing to rotate back, and no R J R^T congruence -- the
     // three operations that dominate the paired branch above. That is what
     // makes six extra pairs affordable; see dipole_field().
-    Mat3 M_cross_a, M_cross_b;
+    Mat3 J_cross_a, J_cross_b;
     const Vec3 B_cross_a = dipole_field(cross_a.moment_world,
                                         (sensor_pos_global - cross_a.centre_world).eval(),
-                                        M_cross_a);
+                                        J_cross_a);
     const Vec3 B_cross_b = dipole_field(cross_b.moment_world,
                                         (sensor_pos_global - cross_b.centre_world).eval(),
-                                        M_cross_b);
+                                        J_cross_b);
 
     // 4. Superposition, before assembly rather than after. Fields add, and
     // both Jacobian blocks below are linear in B and M, so one assembly on the
     // summed quantities is exact and costs a third of three assemblies.
     B_total += B_cross_a + B_cross_b;
-    M_total += M_cross_a + M_cross_b;
+    J_world += J_cross_a + J_cross_b;
 
     B_field_global = B_total;
 
     // 5. Assemble the Jacobian blocks
-    J.block<3, 3>(0, 0) = -M_total;
+    J.block<3, 3>(0, 0) = -J_world;
 
     // J_rot = M * [v]_x - [B_field_global]_x, with both skew products written
     // out. A skew matrix has a zero diagonal, so a general 3x3 product spends a
@@ -72,7 +70,7 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &paired,
     // two non-zero entries.
     const float vx = v.x(), vy = v.y(), vz = v.z();
     for (int i = 0; i < 3; ++i) {
-        const float m0 = M_total(i, 0), m1 = M_total(i, 1), m2 = M_total(i, 2);
+        const float m0 = J_world(i, 0), m1 = J_world(i, 1), m2 = J_world(i, 2);
         J(i, 3) = m1 * vz - m2 * vy;
         J(i, 4) = m2 * vx - m0 * vz;
         J(i, 5) = m0 * vy - m1 * vx;

@@ -10,7 +10,7 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
       magnet_offset_local(magnet_rotation.transpose() * m_local),
       // The centre is half a magnet along the magnet's OWN axis, not the
       // knob's z, so the tilt has to be applied to the offset before adding.
-      centre_knob(m_local + magnet_rotation * Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM)),
+      magnet_centre_knob(m_local + magnet_rotation * Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM)),
       moment_mT_mm3((magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT)
                     * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3),
       field_model_(field_model),
@@ -20,7 +20,7 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
 MagnetPlacement __not_in_flash_func(MagnetModel::place)(const Vec3& t, const Mat3& R) const {
     MagnetPlacement p;
     p.R_total = R * magnet_rotation;
-    p.centre_world = t + R * centre_knob;
+    p.centre_world = t + R * magnet_centre_knob;
     // Polarization runs along the magnet's local -z, so the moment vector is
     // -|m| times its own axis -- which, mapped to world, is R_total's third
     // column. A column read and a scale: the entire cost of carrying this
@@ -39,39 +39,52 @@ static constexpr float ONE_OVER_FOUR_PI = 0.07957747f;
  * Returns the field. See the header for the frame convention.
  *
  * Straight from Math.md 4.E:
- *   B   = k[ 3(m.r) r rho^-5  -  m rho^-3 ]
- *   J_ab = k[ 3 rho^-5 (m_a r_b + r_a m_b + (m.r) d_ab)  -  15 (m.r) rho^-7 r_a r_b ]
+ *   B   = k[ 3(m·r) r rho^-5  -  m rho^-3 ]
+ *   J_ab = k[ 3 rho^-5 (m_a r_b + r_a m_b + (m·r) d_ab)  -  15 (m.r) rho^-7 r_a r_b ]
  */
 Vec3 __not_in_flash_func(dipole_field)(const Vec3& m, const Vec3& r, Mat3& J) {
-    const float rho2 = r.squaredNorm();
+    const float rho_sq = r.squaredNorm();
     // One divide and one sqrt for the whole chain; every other power of rho
     // below is a multiply, matching how evaluate() handles r_reciprocal.
-    const float inv_rho2 = 1.0f / rho2;
-    const float inv_rho = sqrtf(inv_rho2);
-    const float inv_rho3 = inv_rho2 * inv_rho;
-    const float inv_rho5 = inv_rho3 * inv_rho2;
+    const float inv_rho_pow2 = 1.0f / rho_sq;
+    const float inv_rho = sqrtf(inv_rho_pow2);
+    const float inv_rho_pow3 = inv_rho_pow2 * inv_rho;
+    const float inv_rho_pow5 = inv_rho_pow3 * inv_rho_pow2;
 
     const float mdotr = m.dot(r);
 
-    const Vec3 B_local = (3.0f * ONE_OVER_FOUR_PI * mdotr * inv_rho5) * r
-                       - (ONE_OVER_FOUR_PI * inv_rho3) * m;
+    const Vec3 B_local = (3.0f * ONE_OVER_FOUR_PI * mdotr * inv_rho_pow5) * r
+                       - (ONE_OVER_FOUR_PI * inv_rho_pow3) * m;
 
     // J is symmetric -- it is minus the Hessian of a scalar potential, the
     // field being curl-free away from its source -- so six entries are
     // computed and three mirrored rather than nine evaluated.
-    const float a3 = 3.0f * ONE_OVER_FOUR_PI * inv_rho5;
-    const float a15 = 5.0f * a3 * mdotr * inv_rho2;   // 15 k (m.r) rho^-7
-    const float diag = a3 * mdotr;
+
+    /* We (potentially pre-empting stuff the compiler would optimize anyway) optmize the computation of the jacobian.
+     * Distributing K over the sum, and the extracting two constants
+     * 
+     *  J_ab = k[ 3 rho^-5  (m_a r_b + r_a m_b + (m·r) d_ab) -   15 (m·r) rho^-7 r_a r_b ]
+     *       = 3 k 3 rho^-5 (m_a r_b + r_a m_b + (m·r) d_ab) - 15 k (m·r) rho^-7 (r_a r_b)
+     *       =     a3       (m_a r_b + r_a m_b + (m·r) d_ab) -          a15      (r_a r_b)
+     * Where:
+     *  a3  = 3 k 3 rho^-5
+     *  a15 = 15 k (m.r) rho^-7  
+     *      = 5 a3 (m.r) rho^-2
+     */
+    const float a3 = 3.0f * ONE_OVER_FOUR_PI * inv_rho_pow5;
+    const float a15 = 5.0f * a3 * mdotr * inv_rho_pow2;   // 15 k (m.r) rho^-7
 
     const float mx = m.x(), my = m.y(), mz = m.z();
     const float rx = r.x(), ry = r.y(), rz = r.z();
 
-    const float jxx = 2.0f * a3 * mx * rx + diag - a15 * rx * rx;
-    const float jyy = 2.0f * a3 * my * ry + diag - a15 * ry * ry;
-    const float jzz = 2.0f * a3 * mz * rz + diag - a15 * rz * rz;
-    const float jxy = a3 * (mx * ry + rx * my) - a15 * rx * ry;
-    const float jxz = a3 * (mx * rz + rx * mz) - a15 * rx * rz;
-    const float jyz = a3 * (my * rz + ry * mz) - a15 * ry * rz;
+    // Diagonal terms where kronecker delta d_ab = 1
+    const float jxx = a3 * (2.0f * mx * rx + mdotr) - a15 * rx * rx;
+    const float jyy = a3 * (2.0f * my * ry + mdotr) - a15 * ry * ry;
+    const float jzz = a3 * (2.0f * mz * rz + mdotr) - a15 * rz * rz;
+    // off diagonal terms
+    const float jxy = a3 * (2.0f * mx * ry        ) - a15 * rx * ry;
+    const float jxz = a3 * (2.0f * mx * rz        ) - a15 * rx * rz;
+    const float jyz = a3 * (2.0f * my * rz        ) - a15 * ry * rz;
 
     J << jxx, jxy, jxz,
          jxy, jyy, jyz,
