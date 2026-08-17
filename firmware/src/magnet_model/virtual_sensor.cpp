@@ -42,6 +42,14 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &magnet, con
     // out. A skew matrix has a zero diagonal, so a general 3x3 product spends a
     // third of its multiplies on structural zeros; column j of [a]_x has only
     // two non-zero entries.
+    //
+    // A file-scoped `#pragma GCC optimize("finite-math-only")` was tried here
+    // to let GCC fold the clean skew_matrix()-based form itself (see
+    // TODO/Performance.md's "-O3, scoped -ffinite-math-only" pass) -- but
+    // measured on the real build, it doesn't reach parity (51 calls vs. this
+    // hand form's 33), unlike the whole-TU command-line-flag measurement it
+    // was extrapolated from. Kept written out until a real per-file
+    // build-flag override is tried instead of a pragma.
     const float vx = v(0), vy = v(1), vz = v(2);
     for (int i = 0; i < 3; ++i) {
         const float m0 = M(i, 0), m1 = M(i, 1), m2 = M(i, 2);

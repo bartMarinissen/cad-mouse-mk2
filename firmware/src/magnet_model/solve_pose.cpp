@@ -40,19 +40,12 @@ float __not_in_flash_func(solve_knob_pose)(
         residual.Submatrix<3, 1>(6, 0) = residual.Submatrix<3, 1>(6, 0) - measured_fields[2];
 
         // 2. Construct Damped Normal Equations (Levenberg-Marquardt).
-        // H = J^T J is symmetric, so only its lower triangle is worth computing:
-        // 21 dot products of length 9 instead of a full 36-entry product, which
-        // saves ~135 multiplies and ~120 adds per iteration. The upper triangle
-        // is mirrored in so H stays a well-formed symmetric matrix for whatever
-        // reads it next.
-        Matrix6x6f H;
-        for (int i = 0; i < 6; ++i) {
-            for (int j = 0; j <= i; ++j) {
-                const float h = dot(jacobian.Column(i), jacobian.Column(j));
-                H(i, j) = h;
-                H(j, i) = h;
-            }
-        }
+        // H = J^T J. This project builds at -O3 project-wide, where GCC fully
+        // unrolls this multiply and value-numbers H(i,j)/H(j,i) as the same
+        // expression -- landing on the exact same soft-float call count as a
+        // hand-written 21-dot-product lower-triangle-only version (see
+        // TODO/Performance.md's "-O3" pass), so the general form is kept.
+        Matrix6x6f H = ~jacobian * jacobian;
         const float LAMBDA = 0.02f;
         for (int i = 0; i < 6; ++i) H(i, i) += LAMBDA;
         Vector6f g = -(~jacobian * residual);

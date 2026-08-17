@@ -783,6 +783,52 @@ real loss, not a wash. Given that, **the hand-unrolled skew-matrix code
 stays.** Not applied; recorded here so the next person doesn't re-try
 attribute scoping expecting it to reach parity.
 
+### Went to `-O3` project-wide; `H = JᵀJ` reverted for free, the skew fix via pragma did not extrapolate
+
+Decided to actually pay `-O3`'s project-wide cost (checked against the real
+XIAO RP2040 budget: 2 MB flash / 264 KB RAM, comfortably affordable) and
+contain `-ffinite-math-only`'s NaN-safety-net risk by scoping it to just
+`virtual_sensor.cpp` via `#pragma GCC push_options` /
+`optimize("finite-math-only")` / `pop_options` — the idea being that with
+`-O3` now a real project-wide command-line flag, only the single
+`finite-math-only` flag needs scoping, which earlier testing (the section
+above) showed reaches exact parity for a *single* flag scoped alone.
+
+`platformio.ini`'s `-O3` change and `solve_pose.cpp`'s `H = JᵀJ` revert
+(`Matrix6x6f H = ~jacobian * jacobian;`) are applied and verified: full
+build succeeds, **Flash 327,040 B (16.1%) / RAM 70,900 B (27.0%)** — up from
+the pre-`-O3` baseline of 298,976 B / 63,348 B, and well inside budget.
+`H = JᵀJ` doesn't depend on `finite-math-only` at all, only on `-O3` itself
+being real (not scoped), so it isn't affected by what follows.
+
+**The skew-matrix pragma did not extrapolate to the real build.** Compiling
+the actual `virtual_sensor.cpp` object from the real build (`-O3`
+project-wide + the file-scoped pragma) and disassembling it directly:
+the skew computation lands on **51 soft-float calls, not the target 33** —
+the same number as `-O3` alone, no finite-math benefit at all. This is a
+genuinely new combination the prior section didn't test: it only measured
+"ambient `-O2` + scoped `finite-math-only` alone" (54, parity) and "ambient
+`-O2`-ish + scoped `O3,finite-math-only` combined in one string" (51, no
+benefit) — never "ambient *real* command-line `-O3` + scoped
+`finite-math-only` alone on top of it," which is exactly this case, and it
+also caps at 51. Whatever GCC does differently between a `-O` level set via
+the actual command line versus reconstructed through `optimize`
+attribute/pragma machinery, it evidently affects this fold even when the
+pragma itself only ever asks for the one flag.
+
+**Reverted just the skew part back to the hand-unrolled form** rather than
+ship a real 55% regression (51 vs. 33 calls) under the mistaken belief that
+parity was reached — the file no longer carries the pragma. `-O3`
+project-wide and the `H = JᵀJ` revert stand on their own regardless of how
+the skew question resolves.
+
+**Still open**: a genuine per-*file* build-flag override (a PlatformIO/SCons
+rule that puts `-ffinite-math-only` on `virtual_sensor.cpp`'s actual compile
+command, not a pragma) is the one mechanism not yet tried that matches how
+the original 33-call measurement was actually obtained (real command-line
+flags on the whole TU, not attribute/pragma reconstruction) — untested
+whether it reaches 33 in the real build the way the pragma didn't.
+
 **Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
 costs 18 soft-float calls per length-9 call rather than the achievable 17
 — it initializes its accumulator to `0.0f` and adds every term, instead of

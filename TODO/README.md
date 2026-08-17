@@ -80,15 +80,17 @@ too, not just the file.
   profiling of `solve_knob_pose`; three completed optimization passes
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
   ~50Hz to ~80Hz, plus a fourth pass confirming BLA (post eigen-to-bla
-  migration) inlines its own glue code far better than Eigen did. At the
-  project's actual `-O2` none of the hand-unrolled optimizations are safe to
-  revert (measured, not assumed); at `-O3` the `H = JᵀJ` one becomes free but
-  the skew-matrix one only closes with `-O3 -ffinite-math-only` together,
-  which risks the solver's NaN safety net — tested scoping that combination
-  to just one function/file via `__attribute__((optimize(...)))` and
-  `#pragma GCC optimize`, and it doesn't reach parity (caps at 51 calls vs.
-  the target 33), so nothing was applied. Iteration-count telemetry and an
-  on-device wall-clock re-measurement of the combined changes are still open.
+  migration) inlines its own glue code far better than Eigen did. The
+  project now builds at `-O3` project-wide (Flash 327,040 B / RAM 70,900 B,
+  both well inside budget), which made the `H = JᵀJ` hand-unrolling free and
+  it's been reverted to `~jacobian * jacobian`. The skew-matrix
+  hand-unrolling is still in place: scoping `-ffinite-math-only` to just
+  `virtual_sensor.cpp` via `#pragma GCC optimize` was tried and measured on
+  the real build to *not* reach parity (51 calls vs. the target 33), so it
+  was reverted rather than kept as a silent regression; a real per-file
+  build-flag override (not a pragma) is the one untried option left.
+  Iteration-count telemetry and an on-device wall-clock re-measurement of
+  the combined changes are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual

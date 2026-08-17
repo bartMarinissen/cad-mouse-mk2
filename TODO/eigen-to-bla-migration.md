@@ -57,7 +57,12 @@ ordinary non-virtual member — still callable directly, just not through
 the buggy BLA build), RAM 63,348 B (−1.8% vs. baseline)** — confirmed via
 `nm` that zero `vtable for BLA::*` symbols remain, and the bicubic table is
 back to exactly 8 bytes/entry (37,128 B total). BLA now beats Eigen on both
-axes, which is the result the migration was originally trying to get.
+axes, which is the result the migration was originally trying to get. (This
+comparison was measured at the project's then-current `-O2`; the project
+has since moved to `-O3` project-wide, so current flash/RAM numbers live in
+`Performance.md`, not here — the `-O2`-vs-`-O2` Eigen/BLA comparison above
+is still valid on its own terms, just not directly comparable to the
+current build.)
 
 ### Verification actually performed
 
@@ -171,12 +176,16 @@ actually ships. Corrections made during implementation:
 
 - ~~Whether BLA actually inlines better than Eigen did, and whether any of
   `TODO/Performance.md`'s hand-unrolled optimizations can come back out now
-  that Eigen's gone~~ — done, see `TODO/Performance.md`'s fourth pass:
-  BLA's `CholeskyDecompose`/`CholeskySolve`/`dot()` inline completely
-  (Eigen's equivalent never did), but all three unrolling candidates
-  checked (symmetric `H = JᵀJ`, written-out skew products, the bicubic
-  basis-weight hoist) turned out to have independent algorithmic
-  justification and stay as-is, backed by measurement not assumption.
+  that Eigen's gone~~ — done, see `TODO/Performance.md`'s fourth pass and
+  later ones: BLA's `CholeskyDecompose`/`CholeskySolve`/`dot()` inline
+  completely (Eigen's equivalent never did). Of the three unrolling
+  candidates checked, the bicubic basis-weight hoist has independent
+  algorithmic justification and stays as-is; the symmetric `H = JᵀJ` one
+  turned out to be a pure inlining-level artifact of the project's `-O2`
+  and was reverted once the project moved to `-O3` project-wide (free at
+  that level); the written-out skew products are still in place — a
+  `-O3`-project-wide + scoped-`-ffinite-math-only` attempt to drop them was
+  measured to fall short of parity on the real build and was reverted.
 - **On-device verification.** Nothing here has run on real hardware. The
   host-native numeric checks (above) are strong evidence of correctness but
   are not a substitute for `pio test -e seeed_xiao_rp2040_test` actually
