@@ -38,14 +38,20 @@
 // array across frames.
 //
 // At P=45 this is 1,248 bytes -- the one structure here small enough to be an
-// ordinary stack local on this device (4 KB stack per core; see
-// SCHUR_SOLVER_DESIGN.md). FrameNormalEquations and SharedNormalEquations are
-// both larger than the entire stack and must be statically allocated.
+// ordinary stack local on this device (2,048 bytes reserved per core; see
+// bundle_solver.h). FrameNormalEquations and SharedNormalEquations are both
+// larger than the whole stack and must be statically allocated.
 template <int P>
 struct FramePoseBlock {
     Eigen::Matrix<float, 6, 6> H_pp = Eigen::Matrix<float, 6, 6>::Zero();
     Eigen::Matrix<float, P, 6> H_sp = Eigen::Matrix<float, P, 6>::Zero();
     Eigen::Matrix<float, 6, 1> rhs_p = Eigen::Matrix<float, 6, 1>::Zero();
+
+    // In place. `*this = FramePoseBlock<P>()` would be the obvious way to
+    // reset one of these and costs a full-size temporary on the stack -- 9.5 KB
+    // for FrameNormalEquations below, against a 2 KB stack. Measured with
+    // -Wstack-usage; see verify_arm.sh, which now fails the build over it.
+    void setZero() { H_pp.setZero(); H_sp.setZero(); rhs_p.setZero(); }
 
     // Folds one sensor's already-sigma-scaled 3-row contribution in. Call
     // once per sensor (3x per frame). J_shared_scaled is the sensor's full
@@ -59,9 +65,14 @@ struct FramePoseBlock {
         const Eigen::Matrix<float, 3, 6>& J_pose_scaled,
         const Eigen::Matrix<float, 3, P>& J_shared_scaled
     ) {
-        H_pp += J_pose_scaled.transpose() * J_pose_scaled;
-        H_sp += J_shared_scaled.transpose() * J_pose_scaled;
-        rhs_p -= J_pose_scaled.transpose() * residual_scaled;
+        // noalias() throughout: without it Eigen materializes each product
+        // into a temporary before accumulating, and J_shared^T * J_shared is
+        // P x P -- 8.1 KB on the stack at P=45, four times the whole stack.
+        // The operands are distinct from the targets, so the temporary buys
+        // nothing. Measured with -Wstack-usage; verify_arm.sh gates on it.
+        H_pp.noalias() += J_pose_scaled.transpose() * J_pose_scaled;
+        H_sp.noalias() += J_shared_scaled.transpose() * J_pose_scaled;
+        rhs_p.noalias() -= J_pose_scaled.transpose() * residual_scaled;
     }
 };
 
@@ -76,7 +87,7 @@ struct FramePoseBlock {
 // SCHUR_SOLVER_DESIGN.md for why pass 2 rebuilds rather than storing pass
 // 1's instances.
 //
-// MUST NOT be an ordinary local: 9,528 bytes at P=45 against a 4 KB per-core
+// MUST NOT be an ordinary local: 9,536 bytes at P=45 against a 2 KB reserved
 // stack. Statically allocate it (file scope, or a member of a long-lived
 // solver object). Same applies to SharedNormalEquations below at 8,280 bytes.
 // "One frame at a time" is about how many exist, not about where they live.
@@ -85,6 +96,8 @@ struct FrameNormalEquations {
     FramePoseBlock<P> pose;
     Eigen::Matrix<float, P, P> H_ss = Eigen::Matrix<float, P, P>::Zero();
     Eigen::Matrix<float, P, 1> rhs_s = Eigen::Matrix<float, P, 1>::Zero();
+
+    void setZero() { pose.setZero(); H_ss.setZero(); rhs_s.setZero(); }
 
     // Same contract as FramePoseBlock::add_sensor -- forwards to it for the
     // three pose-row terms rather than restating them, then adds the two
@@ -95,8 +108,8 @@ struct FrameNormalEquations {
         const Eigen::Matrix<float, 3, P>& J_shared_scaled
     ) {
         pose.add_sensor(residual_scaled, J_pose_scaled, J_shared_scaled);
-        H_ss += J_shared_scaled.transpose() * J_shared_scaled;
-        rhs_s -= J_shared_scaled.transpose() * residual_scaled;
+        H_ss.noalias() += J_shared_scaled.transpose() * J_shared_scaled;
+        rhs_s.noalias() -= J_shared_scaled.transpose() * residual_scaled;
     }
 };
 
@@ -107,6 +120,14 @@ template <int P>
 struct SharedNormalEquations {
     Eigen::Matrix<float, P, P> H = Eigen::Matrix<float, P, P>::Zero();
     Eigen::Matrix<float, P, 1> rhs = Eigen::Matrix<float, P, 1>::Zero();
+
+    // Held as members, not created per call. Eigen's LDLT owns a P x P matrix,
+    // so `H.ldlt().solve(rhs)` puts 8.1 KB on the stack at P=45 -- four times
+    // the whole stack. Same for absorb_frame's 6 x P intermediate. Both are
+    // fine as static storage and fatal as locals.
+    Eigen::LDLT<Eigen::Matrix<float, P, P>> factorization;
+    Eigen::Matrix<float, 6, P> Hpp_inv_HspT;
+    Eigen::Matrix<float, 6, 1> Hpp_inv_rhsp;
 
     void reset() { H.setZero(); rhs.setZero(); }
 
@@ -143,15 +164,30 @@ struct SharedNormalEquations {
     // no new linear-algebra primitive, just reused here for a different
     // purpose (eliminating a block, not solving the whole frame's pose).
     void absorb_frame(const FrameNormalEquations<P>& f) {
-        auto ldlt = f.pose.H_pp.ldlt();
-        const Eigen::Matrix<float, 6, P> Hpp_inv_HspT = ldlt.solve(f.pose.H_sp.transpose());
-        const Eigen::Matrix<float, 6, 1> Hpp_inv_rhsp = ldlt.solve(f.pose.rhs_p);
-        H += f.H_ss - f.pose.H_sp * Hpp_inv_HspT;
-        rhs += f.rhs_s - f.pose.H_sp * Hpp_inv_rhsp;
+        // solveInPlace into the members, rather than assigning from a solve()
+        // expression: the expression form makes Eigen materialize the 6 x P
+        // right-hand side as a temporary, which is 1,080 bytes at P=45 and was
+        // most of this function's 2,640-byte frame.
+        const auto ldlt = f.pose.H_pp.ldlt();          // 6x6, ~200 bytes, fine
+        Hpp_inv_HspT = f.pose.H_sp.transpose();
+        ldlt.solveInPlace(Hpp_inv_HspT);
+        Hpp_inv_rhsp = f.pose.rhs_p;
+        ldlt.solveInPlace(Hpp_inv_rhsp);
+        H.noalias() -= f.pose.H_sp * Hpp_inv_HspT;
+        H += f.H_ss;
+        rhs.noalias() -= f.pose.H_sp * Hpp_inv_rhsp;
+        rhs += f.rhs_s;
     }
 
-    Eigen::Matrix<float, P, 1> solve() const {
-        return H.ldlt().solve(rhs);
+    // Writes into the caller's vector rather than returning one, and uses
+    // solveInPlace: `return factorization.solve(rhs)` builds the result as a
+    // temporary and then copies it out, and Eigen's triangular solver's own
+    // frame stacks on top of this one. On a 2 KB stack every nested frame is
+    // load-bearing.
+    void solve_into(Eigen::Matrix<float, P, 1>& dx) {
+        factorization.compute(H);
+        dx = rhs;
+        factorization.solveInPlace(dx);
     }
 };
 

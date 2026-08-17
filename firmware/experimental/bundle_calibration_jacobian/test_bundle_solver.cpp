@@ -39,7 +39,7 @@ static Mat3 test_exp_so3(const Vec3& w) {
 }
 
 // Statically allocated, not a local: sizeof is ~18 KB of accumulator plus the
-// frames, against this device's 4 KB per-core stack. The host would tolerate
+// frames, against this device's 2 KB reserved stack. The host would tolerate
 // it on the stack; the target would not, and the test should model the usage
 // the target requires. See bundle_solver.h's memory note.
 static BundleSolver<N_FRAMES> solver;

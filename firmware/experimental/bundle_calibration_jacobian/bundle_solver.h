@@ -22,14 +22,35 @@
 // ACCUMULATION sparse, which is where the real cost is. Structure for
 // accumulation, dense solve.
 //
-// --- Memory: nothing here is a stack local -------------------------------
+// --- Memory: the stack is the binding constraint, and it is small ---------
 //
-// At P=45 SharedNormalEquations is 8,280 bytes and FrameNormalEquations 9,528,
-// against a 4 KB per-core stack on this device (memmap_default.ld). Both live
-// in BundleSolver, which callers must therefore give static storage duration
-// -- a long-lived object or file scope, never an automatic. sizeof(BundleSolver)
-// is ~18 KB, so `BundleSolver solver;` inside a function is a stack smash on a
-// core with no MPU to catch it.
+// Measured, because an earlier version of this comment got all three numbers
+// wrong. memmap_default.ld gives core0 a stack at the top of SCRATCH_Y:
+// PICO_STACK_SIZE = 0x800, so 2,048 bytes RESERVED (__StackTop 0x20042000 down
+// to __StackBottom 0x20041800). SCRATCH_Y is 4 KB and .scratch_y measures 0
+// bytes in the real firmware, so ~4 KB is reachable in practice -- below that
+// is __StackOneTop, core1's stack. RP2040 does have an MPU (__MPU_PRESENT 1);
+// what it does not have is stack guards, since PICO_USE_STACK_GUARDS defaults
+// to 0 and the Arduino core does not enable it. So overflow is unguarded, and
+// it corrupts core1's stack rather than faulting.
+//
+// sizeof(BundleSolver<30>) is ~22.7 KB, so it MUST have static storage
+// duration -- a local is a 22,712-byte frame, confirmed by disassembly.
+//
+// But that is the easy half, and saying only that was the mistake. Frames NEST,
+// and this code's own internals were far over budget while every caller was
+// doing the documented thing: build_frame at 19,256 bytes (resetting an
+// accumulator via `*this = T()` builds a full-size temporary) and solve at
+// 12,536 (Eigen materializing P x P products; H.ldlt() putting an 8.1 KB
+// factorization on the stack). Both now fixed -- see the setZero()/noalias()/
+// solveInPlace notes in schur_normal_equations.h -- but the general point is
+// that this cannot be maintained by comment. verify_arm.sh gates on
+// -Wstack-usage; run it after touching anything here.
+//
+// Remaining peak is roughly 3.7-4 KB along the deepest path (absorb_frame plus
+// Eigen's blocked GEMM/triangular kernels beneath it), which fits the 4 KB
+// region only because core1 is idle and .scratch_y is empty. That is not
+// margin, and TODO/on-device-calibration.md tracks it as open.
 
 #include "math3D.h"
 #include "bundle_param_layout.h"
@@ -93,6 +114,14 @@ struct BundleSolver {
     Eigen::Matrix<float, N_SHARED_PARAMS, 1> dx_shared;
     FrameNormalEquations<N_SHARED_PARAMS> frame_system;   // pass 1, reused
     FramePoseBlock<N_SHARED_PARAMS> pose_system;          // pass 2, reused
+    // Trial state, also members rather than locals in solve(): at 30 frames
+    // these are 2.5 KB and 720 bytes, and the stack is 2 KB total.
+    BundleFrame trial_frames[N_FRAMES];
+    Eigen::Matrix<float, 6, 1> dx_pose[N_FRAMES];
+    Eigen::Matrix<float, N_SHARED_PARAMS, 1> x_trial;
+    SharedRow shared_row;                          // one sensor's assembled row
+    Mat3 delta_R;
+    Eigen::Matrix<float, 3, 6> scaled_pose_jacobian;
 
     // Per-magnet trial state, rebuilt once per iteration from x. This is the
     // OUTER loop of the two-level structure bundle_shared_jacobian.h describes:
@@ -162,7 +191,7 @@ struct BundleSolver {
     // per-sensor assembly.
     template <typename FrameSystem>
     void build_frame(FrameSystem& out, const BundleFrame& f) {
-        out = FrameSystem();
+        out.setZero();
         const float inv_sigma = 1.0f / observation_sigma;
         for (int i = 0; i < N_SENSORS; ++i) {
             VirtualSensor sensor(geometry.sensor_pos[i]);
@@ -170,16 +199,20 @@ struct BundleSolver {
             Vec3 B; Eigen::Matrix<float, 3, 6> J_pose; SharedJacobianBlock J_shared;
             evaluate_bundle_jacobian(sensor, magnet, f.t, f.R, B, J_pose, J_shared);
 
-            SharedRow row = SharedRow::Zero();
-            add_magnet_columns(row, i, gains[i], geometry.magnet_nominal_strength_mT,
+            shared_row.setZero();
+            add_magnet_columns(shared_row, i, gains[i], geometry.magnet_nominal_strength_mT,
                                 J_shared, chart[i]);   // PAIRED_ONLY
-            add_sensor_columns(row, i, B);
+            add_sensor_columns(shared_row, i, B);
+            shared_row *= inv_sigma;   // in place; `row * inv_sigma` as an
+                                        // argument is another 3 x P temporary
 
             const Vec3 residual = (gains[i] * B + offsets[i] - f.measured[i]) * inv_sigma;
             // The pose Jacobian is pre-gain for the same reason the magnet
             // columns are -- the prediction is G*B, so the pose block carries
             // a factor of G too (Math.md 4.E).
-            out.add_sensor(residual, gains[i] * J_pose * inv_sigma, row * inv_sigma);
+            scaled_pose_jacobian.noalias() = gains[i] * J_pose;
+            scaled_pose_jacobian *= inv_sigma;
+            out.add_sensor(residual, scaled_pose_jacobian, shared_row);
         }
     }
 
@@ -210,26 +243,25 @@ struct BundleSolver {
                 normal_equations.H(j, j) *= (1.0f + lambda);
             }
 
-            dx_shared = normal_equations.solve();
+            normal_equations.solve_into(dx_shared);
             if (!dx_shared.allFinite()) { lambda *= opt.lambda_up; continue; }
 
             // --- pass 2: back-substitute each frame's own pose update ------
             // Rebuilt, not stored: see SCHUR_SOLVER_DESIGN.md. Must linearize
             // at the SAME point pass 1 did, which is why nothing below is
             // applied to x or to any frame until every frame is done.
-            Eigen::Matrix<float, 6, 1> dx_pose[N_FRAMES];
             for (int k = 0; k < N_FRAMES; ++k) {
                 build_frame(pose_system, frames[k]);
                 dx_pose[k] = solve_frame_pose_update(pose_system, dx_shared);
             }
 
             // --- trial step -----------------------------------------------
-            Eigen::Matrix<float, N_SHARED_PARAMS, 1> x_trial = x + dx_shared;
-            BundleFrame trial_frames[N_FRAMES];
+            x_trial = x + dx_shared;
             for (int k = 0; k < N_FRAMES; ++k) {
                 trial_frames[k] = frames[k];
                 trial_frames[k].t += dx_pose[k].template head<3>();
-                trial_frames[k].R = exp_so3_solver(dx_pose[k].template tail<3>()) * frames[k].R;
+                delta_R = exp_so3_solver(dx_pose[k].template tail<3>());
+                trial_frames[k].R.noalias() = delta_R * frames[k].R;
             }
 
             rebuild_from_params(x_trial);

@@ -135,14 +135,22 @@ during pass 1 (`FrameNormalEquations<P>`, P² + 7P + 6 floats), 1,248 bytes
 during pass 2 (`FramePoseBlock<P>`, 7P + 42 floats). Independent of N in
 both passes.
 
-**These cannot be stack locals on this device, and an earlier version of
-this document said they were.** The RP2040's stack is 4 KB *per core* --
-`memmap_default.ld` puts core0's in SCRATCH_Y and core1's in SCRATCH_X, both
-`LENGTH = 4k` -- so a `FrameNormalEquations<45>` at 9,528 bytes overflows it
-2.3x over and `SharedNormalEquations<45>` at 8,280 bytes 2x over. Declaring
-either as an ordinary local would smash the stack on the first call, and
-with no MPU on a Cortex-M0+ it would corrupt whatever sits below rather than
-fault cleanly at the point of the bug.
+**These cannot be stack locals on this device.** Measured: core0's stack is
+`PICO_STACK_SIZE = 0x800`, so **2,048 bytes reserved** at the top of SCRATCH_Y,
+with the rest of that 4 KB region reachable in practice (`.scratch_y` links to
+0 bytes) before running into core1's stack at `__StackOneTop`. RP2040 does
+have an MPU, but `PICO_USE_STACK_GUARDS` defaults to 0 and the Arduino core
+does not enable it, so overflow is unguarded and corrupts core1's stack rather
+than faulting.
+
+**Static allocation is necessary and nowhere near sufficient**, which two
+earlier versions of this section got wrong. Frames nest, and the code's own
+internals were far over budget with every caller doing the documented thing --
+`build_frame` at 19,256 bytes and `solve` at 12,536, from accumulator resets
+via `*this = T()` and from Eigen materializing P x P products and an 8.1 KB
+LDLT on the stack. `verify_arm.sh` now gates on `-Wstack-usage`; peak is still
+~3.7-4 KB along the deepest path, which is inside the region only because
+core1 is idle.
 
 Both therefore have to be statically allocated (file-scope, or members of a
 long-lived solver object) rather than automatic. That does not change the

@@ -96,7 +96,8 @@ void test_schur_matches_dense_reference(void) {
         }
         shared_eq.absorb_frame(frame);
     }
-    Eigen::Matrix<float, P, 1> dx_shared = shared_eq.solve();
+    Eigen::Matrix<float, P, 1> dx_shared;
+    shared_eq.solve_into(dx_shared);
 
     // Pass 2 rebuilds each frame's row from the same per-sensor data (here a
     // stand-in for re-running evaluate_bundle_jacobian at the UNCHANGED

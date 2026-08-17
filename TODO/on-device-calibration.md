@@ -319,17 +319,39 @@ magnitude are not in doubt.
   none of it is under `test_dir`. Promoting it there is the step that would
   make it testable on hardware at all, and it is deliberately not taken yet.
 
-## The stack is the binding constraint, not total RAM
+## The stack is the binding constraint, and it is still open
 
-Worth stating separately because it was got wrong once already. The RP2040
-gives each core a **4 KB** stack (`memmap_default.ld`: core0 in SCRATCH_Y,
-core1 in SCRATCH_X, both `LENGTH = 4k`). At P=45 the solver's two big
-structures are 9,528 and 8,280 bytes — each larger than the whole stack — so
-they have to be statically allocated, not automatic. An earlier version of
-`SCHUR_SOLVER_DESIGN.md` described them as stack locals, which would have
-smashed the stack on the first call and, with no MPU on a Cortex-M0+,
-corrupted memory below rather than faulting at the bug.
+Measured from `memmap_default.ld` and the linked firmware, after two earlier
+versions of this section stated it wrongly:
 
-This is also the clearest example of what on-device testing would catch that
-the host builds cannot: the host has an 8 MB stack and would run the same
-code without complaint forever.
+- core0's stack is **2,048 bytes reserved** (`PICO_STACK_SIZE = 0x800`), at the
+  top of SCRATCH_Y — `__StackTop` 0x20042000 down to `__StackBottom` 0x20041800
+- SCRATCH_Y is 4 KB and `.scratch_y` links to **0 bytes**, so ~4 KB is
+  reachable in practice before the stack runs into core1's at `__StackOneTop`
+- RP2040 **does** have an MPU (`__MPU_PRESENT 1`). What it lacks is stack
+  guards: `PICO_USE_STACK_GUARDS` defaults to 0 and the Arduino core does not
+  enable it. So overflow is unguarded and corrupts core1's stack
+
+**Static allocation is necessary and nowhere near sufficient.** That was the
+substance of the earlier error — not the stack size, but the belief that
+telling callers to use `static` was the whole fix. Frames nest, and the
+solver's own internals were far over budget with every caller doing the
+documented thing: `build_frame` at 19,256 bytes (an accumulator reset via
+`*this = T()` builds a full-size temporary) and `solve` at 12,536 (Eigen
+materializing P×P products, and `H.ldlt()` putting an 8.1 KB factorization on
+the stack). Fixed with in-place `setZero()`, `noalias()` throughout,
+`solveInPlace`, and hoisting the LDLT and per-frame trial state into members.
+
+`verify_arm.sh` now gates on `-Wstack-usage` and prints the deepest frames,
+so this is caught by the build rather than by comment discipline.
+
+**Still open:** peak is ~3.7–4 KB along the deepest path — `absorb_frame` at
+2,528 plus Eigen's blocked GEMM (1,200) and triangular-solve kernels beneath
+it. That fits the region only because core1 is idle and `.scratch_y` is empty,
+which is not margin and directly conflicts with `multicore.md`. Closing it
+means either getting Eigen's kernels off the stack for these shapes, or
+relocating the stack with a custom linker script.
+
+This is also the clearest example of what on-device work catches that host
+builds cannot: the host has an 8 MB stack and ran all of this without
+complaint.
