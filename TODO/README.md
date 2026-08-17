@@ -82,11 +82,13 @@ too, not just the file.
   ~50Hz to ~80Hz, plus a fourth pass confirming BLA (post eigen-to-bla
   migration) inlines its own glue code far better than Eigen did. At the
   project's actual `-O2` none of the hand-unrolled optimizations are safe to
-  revert (measured, not assumed); at `-O3` the `H = JᵀJ` one becomes free
-  (untested whether scoping `-O3` to just that function is worth doing) but
-  the skew-matrix one still isn't. Iteration-count telemetry and an on-device
-  wall-clock re-measurement of the
-  combined changes are still open.
+  revert (measured, not assumed); at `-O3` the `H = JᵀJ` one becomes free but
+  the skew-matrix one only closes with `-O3 -ffinite-math-only` together,
+  which risks the solver's NaN safety net — tested scoping that combination
+  to just one function/file via `__attribute__((optimize(...)))` and
+  `#pragma GCC optimize`, and it doesn't reach parity (caps at 51 calls vs.
+  the target 33), so nothing was applied. Iteration-count telemetry and an
+  on-device wall-clock re-measurement of the combined changes are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual

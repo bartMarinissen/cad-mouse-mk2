@@ -645,10 +645,15 @@ document's earlier passes — **+14,688 B flash, +6,576 B RAM** — with RAM
 called out there as the binding constraint (the bicubic table has to stay
 resident). Getting either win for free requires *building at `-O3`*, which
 is not currently how this project builds and has its own real tradeoff
-already evaluated and left off by default. A narrower option not yet
-tried: `-O3` scoped to just `solve_pose.cpp`/`virtual_sensor.cpp` via
-`__attribute__((optimize(...)))` or `#pragma GCC optimize`, to get these
-wins without paying `-O3`'s cost project-wide — untested, and would need
+already evaluated and left off by default. A narrower option: `-O3` scoped
+to just `solve_pose.cpp`/`virtual_sensor.cpp` via
+`__attribute__((optimize(...)))` or `#pragma GCC optimize`. For the
+skew-matrix case this has now been tested — see the section below — and it
+does **not** reach parity, capping at 51 calls instead of 33, because
+per-function/per-region scoping doesn't reliably combine `-O3` with
+`-ffinite-math-only` the way real command-line flags do. Still untested for
+`H = JᵀJ` specifically, which only needs `-O3` itself (no `-f` flag to
+combine it with), so it may not hit the same limitation — and would need
 the same numerical-equivalence verification (`test_jacobian.cpp`, the
 solver convergence check) any of this document's other changes get before
 landing.
@@ -713,6 +718,70 @@ only NaN/Inf detection to get there, which is a correctness decision, not
 a performance one, and isn't this document's call to make unilaterally.
 Flagging it here with the numbers rather than either applying it or
 dropping it silently.
+
+### Scoping the flag instead of applying it everywhere: mechanically safe, but doesn't reach parity
+
+Asked directly whether the fold above can be had without the flag
+"everywhere" — scoped to just the function that needs it, leaving
+`solve_pose.cpp`'s `all_finite(dx)` check (and everything else) at the
+project's normal flags. Two separate questions:
+
+1. **Does scoping avoid the safety-net risk?** Yes, for a boring reason:
+   `virtual_sensor.cpp` and `solve_pose.cpp` are separate translation units
+   and this project doesn't build with LTO, so nothing in
+   `virtual_sensor.cpp` — flagged or not — can change what GCC assumes when
+   it compiles `solve_pose.cpp`'s `all_finite()` check. `virtual_sensor.cpp`
+   also has no NaN/Inf-sensitive logic of its own to worry about (checked
+   directly — no `isnan`/`isinf`/`all_finite` in that file). The only
+   residual risk is local to values computed *inside* the flagged function
+   itself, exactly as the previous section already noted.
+
+2. **Does scoping actually reach the 33-call parity found above?** Tested
+   both mechanisms GCC offers — `__attribute__((optimize(...)))` on the
+   function, and `#pragma GCC push_options` / `optimize(...)` /
+   `pop_options` around it — against an isolated copy of the clean
+   `skew_matrix()`-based rewrite, compiled with the project's real `-O2`
+   base flags otherwise unchanged:
+
+   | scoping mechanism | flags requested | result |
+   |---|---|---|
+   | *(whole-TU, for reference)* | `-O2` | 57 calls |
+   | `__attribute__((optimize("finite-math-only")))` | finite-math only | **54 calls — exact parity with the whole-TU `-O2 -ffinite-math-only` measurement above** |
+   | *(whole-TU, for reference)* | `-O3` alone | 51 calls |
+   | `__attribute__((optimize("O3,finite-math-only")))` | O3 + finite-math | 51 calls — **matches `-O3` alone; the finite-math fold contributes nothing extra** |
+   | `__attribute__((optimize("finite-math-only,O3")))` (order reversed) | same | 51 calls — same result |
+   | `#pragma GCC optimize("O3")` then a second `optimize("finite-math-only")` (stacked) | same | 51 calls — same |
+   | `#pragma GCC optimize("O3,finite-math-only")` (one line) | same | 51 calls — same |
+   | two stacked `__attribute__((optimize(...)))` on one function | O3 then finite-math | anomalous — collapsed to a 6-call *looped* result, evidence the optimization level itself regressed rather than combined; not a usable path |
+   | *(whole-TU, for reference)* | `-O3 -ffinite-math-only` | 33 calls — full parity |
+
+   **Scoping an `-O` level change together with `-ffinite-math-only`,
+   through every mechanism GCC offers, consistently reproduces `-O3`
+   alone's number (51) — never the whole-TU combination's 33.** Scoping
+   *just* `-ffinite-math-only` at the project's real `-O2` works exactly as
+   well as the whole-TU flag would (54, matching parity) — the mechanism
+   itself isn't broken for a single flag. It's specifically the
+   *combination* of an optimization-level bump with an individual `-f` flag
+   that doesn't survive the per-function `optimize` attribute/pragma path,
+   even though the identical combination works as real command-line flags.
+   This reads as a genuine GCC limitation rather than anything about this
+   codebase — the `optimize` attribute has documented gaps versus the same
+   flags on the command line, and this is a concrete instance of one.
+
+**Net effect: scoping doesn't reach the same place as the flag "everywhere."**
+The only measured way to the full 33-call parity is real
+`-O3 -ffinite-math-only` on the whole translation unit (or the whole
+project) — not a per-function override. A per-*file* flag override (a
+custom PlatformIO/SCons rule limited to `virtual_sensor.cpp`) would very
+likely reach 33, since that's the same whole-TU mechanism the 33-call
+measurement used, and it would leave `solve_pose.cpp` untouched — but
+that's a real build-system change, not a one-line attribute, for a result
+that only *matches* the hand-unrolled code's performance rather than
+beating it. The mechanism that's actually cheap to apply (a function
+attribute) tops out at 51 calls — 55% more than today's 33 — so it's a
+real loss, not a wash. Given that, **the hand-unrolled skew-matrix code
+stays.** Not applied; recorded here so the next person doesn't re-try
+attribute scoping expecting it to reach parity.
 
 **Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
 costs 18 soft-float calls per length-9 call rather than the achievable 17
