@@ -606,7 +606,59 @@ of how well the underlying library inlines, and on the real target the
 margins are larger than a first (host-x86-based) pass at this suggested:
 62% more soft-float calls for the `H = JᵀJ` revert, 73% more for the skew
 form. Measured on the actual RP2040 target, not assumed and not proxied
-through a host build: all three stay.
+through a host build: all three stay **at this project's actual `-O2`
+build**. That qualifier turns out to matter — see the `-O3` check below,
+which changes the answer for one of the two.
+
+### -O3: does more aggressive optimization change the answer? Yes for one, no for the other.
+
+Re-ran both isolated ARM comparisons above at `-O3` and `-O3 -funroll-loops`
+(same real project flags otherwise, same trip-count/unroll-tracing method
+— checked branch *direction* this time, not just presence, after an
+earlier miscount here read four short forward `bne.n` hops as loop
+back-edges when they weren't).
+
+- **`H = JᵀJ`: the gap closes completely.** At `-O3` both forms fully
+  unroll (zero backward branches, confirmed by address comparison), and
+  both land on **exactly 102 soft-float calls (54 `fmul` + 48 `fadd`)** —
+  identical. `~jacobian * jacobian`'s output is symmetric (`H(i,j)` and
+  `H(j,i)` are literally the same expression over the same inputs), and at
+  `-O3` GCC's value-numbering apparently recognizes that once the whole
+  36-entry computation is unrolled into straight-line code, and stops
+  redoing the duplicate half — the same saving the hand-written 21-dot
+  version gets by construction. **This is not the zero-multiply constant
+  fold the skew-matrix hypothesis was about** — `jacobian` has no zero
+  entries — it's cross-entry redundancy elimination on a symmetric result,
+  a different mechanism, and it only fires once the loop is fully unrolled
+  (still real at `-O2`, where the loop doesn't unroll and the gap is the
+  62% measured above).
+- **Skew-matrix products: the gap narrows but does not close.** Both forms
+  fully unroll at `-O3` too, and the "clean" form does improve — its 3
+  `memcpy` calls disappear entirely (56 bytes worth of temporary-matrix
+  copies, gone once nothing needs a separate object to copy from) and its
+  `fadd` count drops (18→12) — but its `fmul` count **stays at 27**,
+  unchanged from `-O2`. The structural-zero multiplies in
+  `M * skew_matrix(v)` are still being computed, not folded away, even
+  fully unrolled at `-O3`: **33 calls (current) vs. 51 (clean) — 55% more**,
+  down from 73% at `-O2` but still a real, substantial gap.
+  `-funroll-loops` on top of `-O3` changes nothing for either candidate
+  (both were already fully unrolled by `-O3` alone).
+
+**So: `-O3` would make dropping the `H = JᵀJ` hand-optimization free, but
+not the skew-matrix one.** Caveat that matters before acting on the first
+half of that: this was measured on isolated single-function objects, not
+a real build, and `-O3` project-wide has a documented cost from this same
+document's earlier passes — **+14,688 B flash, +6,576 B RAM** — with RAM
+called out there as the binding constraint (the bicubic table has to stay
+resident). Reverting `H = JᵀJ`'s hand-optimization for free requires
+*building at `-O3`*, which is not currently how this project builds and
+has its own real tradeoff already evaluated and left off by default. A
+narrower option not yet tried: `-O3` scoped to just `solve_pose.cpp` (or
+just `solve_knob_pose`) via `__attribute__((optimize("O3")))` or `#pragma
+GCC optimize`, to get this specific win without paying `-O3`'s cost
+project-wide — untested, and would need the same numerical-equivalence
+verification (`test_jacobian.cpp`, the solver convergence check) any of
+this document's other changes get before landing.
 
 **Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
 costs 18 soft-float calls per length-9 call rather than the achievable 17

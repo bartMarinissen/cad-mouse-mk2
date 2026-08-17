@@ -80,9 +80,12 @@ too, not just the file.
   profiling of `solve_knob_pose`; three completed optimization passes
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
   ~50Hz to ~80Hz, plus a fourth pass confirming BLA (post eigen-to-bla
-  migration) inlines its own glue code far better than Eigen did, with none
-  of the hand-unrolled optimizations safe to revert (measured, not assumed).
-  Iteration-count telemetry and an on-device wall-clock re-measurement of the
+  migration) inlines its own glue code far better than Eigen did. At the
+  project's actual `-O2` none of the hand-unrolled optimizations are safe to
+  revert (measured, not assumed); at `-O3` the `H = JᵀJ` one becomes free
+  (untested whether scoping `-O3` to just that function is worth doing) but
+  the skew-matrix one still isn't. Iteration-count telemetry and an on-device
+  wall-clock re-measurement of the
   combined changes are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
