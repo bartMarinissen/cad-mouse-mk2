@@ -472,11 +472,26 @@ the hand-unrolled code above — the symmetric `H = JᵀJ`, the written-out skew
 products, `BicubicField::evaluate`'s hoisted basis weights — now unnecessary?
 
 **Method**: real ARM disassembly (`arm-none-eabi-objdump -d -C` +
-`arm-none-eabi-gcc-nm -S`, same tools as the passes above) on the current
-vendored-BLA build for `nm`-confirmed inlining/call-count, plus host-native
-`valgrind --tool=callgrind` dynamic instruction counts for the two
-candidate reverts below — not just static counts, given the static-vs-dynamic
-trap this document already hit once on this exact `H = JᵀJ` change.
+`arm-none-eabi-gcc-nm -S`, same tools as the passes above, same compiler
+invocation `pio run -v` actually uses — same flags, same
+`arm-none-eabi-g++`, same target) on the current vendored-BLA build for
+`nm`-confirmed inlining/call-count. **First pass at the two candidate
+reverts below used host x86 `valgrind --tool=callgrind` counts instead —
+wrong target, caught in review, redone.** This target has no hardware FPU
+and no ARM emulator is available in this sandbox, so getting a true dynamic
+count without real hardware means tracing the actual ARM-compiled loop
+structure by hand: isolate the differing computation into a
+`__attribute__((noinline))` function compiled with the project's exact
+flags, identify each loop's real trip count from its address-stride/compare
+codegen (all loops in both candidates have compile-time-fixed trip counts —
+matrix dimensions, not data-dependent — so this gives an exact per-call
+dynamic count, not an estimate), and multiply out. Slower than running a
+host binary, but it's the number that's actually true on the RP2040, which
+a host x86 count is not: x86 has a hardware FPU and a different
+loop-unrolling cost model, so a host dynamic count reflects loop
+structure/vectorization decisions, not the soft-float call count that
+actually dominates cost on a target where every `float` op is a real
+subroutine call.
 
 ### Does BLA inline better? Yes, substantially — with one nuance.
 
@@ -515,36 +530,58 @@ trap this document already hit once on this exact `H = JᵀJ` change.
 ### Can any manual unrolling come back out? No — checked three candidates, all three cost real, measured work if reverted.
 
 **`H = JᵀJ` (`solve_pose.cpp`), 21 symmetric dot products vs.
-`~jacobian * jacobian`:** not revertible, and doesn't need a benchmark to
-show why — `jacobian` has no structural zeros for a compiler to fold away
-regardless of inlining quality. The symmetric form computes 21 length-9 dot
-products; the full product computes 36. That's an irreducible ~71% more
-soft-float multiply/add calls on a target where every one is a real
-subroutine call, not a difference inlining can close. (A host x86 dynamic
-count of the two forms actually came out *favoring* the full-multiply
-version — 460M vs. 472M total instructions over 200k calls — which is
-exactly the kind of host-proxy trap this document's own "measured, not
-estimated" section warned about: x86 has a hardware FPU and a very
-different loop-unrolling cost model, so its dynamic count reflects loop
-structure/vectorization, not the soft-float call count that actually
-dominates on this target. Not trusted as the answer here; the flop-count
-argument is definitive on its own.)
+`~jacobian * jacobian`:** not revertible. Traced exact loop trip counts on
+the real ARM-compiled object (`arm-none-eabi-g++`, real project flags):
+the current form's `dot()` helper (`math3D.h`) compiles to a 9-iteration
+loop of `fmul`+`fadd` pairs per call — 18 soft-float calls per dot product,
+not the theoretical-minimum 17, because `dot()` initializes its accumulator
+to `0.0f` and adds every term rather than special-casing the first one the
+way `BLA::operator*` itself does internally (a real, if minor, one-line
+inefficiency in `dot()`, noted separately below). 21 calls × 18 = **378
+soft-float calls, real ARM dynamic count, exact** (all loop trip counts
+here are compile-time-fixed matrix dimensions, not data-dependent, so this
+is an exact per-call count, not an estimate). The full-product form's
+`BLA::operator*` **does** special-case the first term (`ret(i,j) =
+matA(i,0)*matB(0,j)` once, then 8 more `fmul`+`fadd` pairs) — 17 soft-float
+calls per output entry, correctly optimal — but computes all 36 entries
+where only 21 are needed: 36 × 17 + 1 `memcpy` (copying the 6×6 result) =
+**613 total, real ARM dynamic count, exact**. **613 vs. 378 — the full
+form costs 62% more.** (An earlier pass at this used a host x86
+`valgrind --tool=callgrind` count instead, which came out *favoring* the
+full-multiply form — 460M vs. 472M instructions over 200k calls. That
+number was wrong for this target and has been replaced; see the method
+note above.)
 
 **Skew-matrix products (`virtual_sensor.cpp`), written-out entries vs.
 `M * skew_matrix(v) - skew_matrix(B_field_global)`, specifically checked
 because `skew_matrix()`'s zero entries are compile-time literals and this
 project already builds with `-fno-signed-zeros`/`-fassociative-math`,
-which make `x * 0.0f → 0.0f` a legal fold:** measured, not revertible.
-Isolated-TU ARM compile of both forms (identical flags to the real build)
-showed the "clean" form does reduce soft-float call counts somewhat (6
-`fmul`/4 `fadd`/10 `fsub` vs. the current form's 12/7/12) — the constant-fold
-hypothesis was partly right. But it also introduces 3 extra `memcpy` calls
-(6 vs. 3) from materializing `skew_matrix(v)` and `skew_matrix(B)` as real
-temporary `Mat3` objects, and a **host-native dynamic instruction count
-(`valgrind --tool=callgrind`, 200k calls, real varying poses) came out
-higher for the clean form: 6,609,641,000 vs. 6,573,240,986 — about +0.55%**.
-Net: the temporary-object overhead outweighs the softfloat-call reduction.
-Kept as-is.
+which make `x * 0.0f → 0.0f` a legal fold:** not revertible, and by a wider
+margin than first measured. Same trip-count-tracing method, real ARM
+object: the current hand-unrolled form is a 3-iteration loop of 9
+`fmul`/`fsub` calls each (matches the source's 6 multiplies + 3 subtracts
+per row) plus 6 more calls in a straight-line tail (the `−[B]ₓ` six-entry
+touch) — **33 soft-float calls, 0 `memcpy`, exact.** The "clean" form's
+`M * skew_matrix(v)` goes through `BLA::operator*`'s generic 3×3 loop,
+which turned out **not to be unrolled** at `-O2` in this context — it's a
+real nested loop (3 outer × 3 inner) computing a full, non-reduced
+3-term dot product for *every* output entry, including the ones landing on
+`skew_matrix()`'s zero literals. That's the actual reason the constant-fold
+hypothesis fails: folding `x * 0.0f → 0.0f` requires the compiler to see
+the literal at the specific multiply site, which only happens if the loop
+is unrolled enough to separate that site out — it isn't, so the zero
+never gets exploited at all. 9 entries × 5 ops (3 `fmul` + 2 `fadd`,
+un-reduced) = 45, plus the elementwise subtraction against
+`skew_matrix(B_field_global)` (9 more `fsub`, no equivalent zero-skip
+either) = 54 soft-float calls, plus 3 `memcpy` calls (108 bytes total) for
+materializing the temporaries and the final `Submatrix<3,3>` write — **57
+total, exact.** **57 vs. 33 — the clean form costs 73% more**, a
+substantially bigger gap than the host x86 number this document first
+reported (which had actually gotten the *direction* right — clean costs
+more — but by an order of magnitude less than the real target shows: the
+host build's own loop-unrolling decisions happened to differ enough from
+the ARM `-O2` build's that even the "which one has fewer soft-float calls"
+comparison it made isn't the number to cite here). Kept as-is.
 
 **`BicubicField::evaluate`'s hoisted-once basis weights vs. the original
 per-row `cubic()`/`cubic_deriv()` calls:** not a candidate at all, on
@@ -565,8 +602,19 @@ But none of the three hand-unrolled optimizations in this document were
 ever *purely* inlining workarounds — each has an independent algorithmic
 justification (fewer redundant entries computed, fewer structural-zero
 multiplies attempted, weights hoisted out of a loop) that holds regardless
-of how well the underlying library inlines. Measured, not assumed: all
-three stay.
+of how well the underlying library inlines, and on the real target the
+margins are larger than a first (host-x86-based) pass at this suggested:
+62% more soft-float calls for the `H = JᵀJ` revert, 73% more for the skew
+form. Measured on the actual RP2040 target, not assumed and not proxied
+through a host build: all three stay.
+
+**Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
+costs 18 soft-float calls per length-9 call rather than the achievable 17
+— it initializes its accumulator to `0.0f` and adds every term, instead of
+special-casing the first term the way `BLA::operator*` does internally.
+Real but marginal (1 extra `fadd` per call, 21 calls in the hot `H = JᵀJ`
+loop = 21 extra calls per LM iteration); worth a one-line fix sometime, not
+urgent enough to bundle into this pass.
 
 ## Open next steps (not yet acted on)
 
