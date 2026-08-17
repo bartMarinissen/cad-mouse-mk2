@@ -632,33 +632,87 @@ back-edges when they weren't).
   a different mechanism, and it only fires once the loop is fully unrolled
   (still real at `-O2`, where the loop doesn't unroll and the gap is the
   62% measured above).
-- **Skew-matrix products: the gap narrows but does not close.** Both forms
-  fully unroll at `-O3` too, and the "clean" form does improve — its 3
-  `memcpy` calls disappear entirely (56 bytes worth of temporary-matrix
-  copies, gone once nothing needs a separate object to copy from) and its
-  `fadd` count drops (18→12) — but its `fmul` count **stays at 27**,
-  unchanged from `-O2`. The structural-zero multiplies in
-  `M * skew_matrix(v)` are still being computed, not folded away, even
-  fully unrolled at `-O3`: **33 calls (current) vs. 51 (clean) — 55% more**,
-  down from 73% at `-O2` but still a real, substantial gap.
-  `-funroll-loops` on top of `-O3` changes nothing for either candidate
-  (both were already fully unrolled by `-O3` alone).
+- **Skew-matrix products: `-O3` alone narrows the gap but doesn't close
+  it — `-O3 -ffinite-math-only` together close it exactly.** See the
+  dedicated section right below; this was worth chasing further rather
+  than stopping at "doesn't close."
 
 **So: `-O3` would make dropping the `H = JᵀJ` hand-optimization free, but
-not the skew-matrix one.** Caveat that matters before acting on the first
-half of that: this was measured on isolated single-function objects, not
-a real build, and `-O3` project-wide has a documented cost from this same
+not the skew-matrix one on its own.** Caveat that matters before acting on
+either: this was measured on isolated single-function objects, not a real
+build, and `-O3` project-wide has a documented cost from this same
 document's earlier passes — **+14,688 B flash, +6,576 B RAM** — with RAM
 called out there as the binding constraint (the bicubic table has to stay
-resident). Reverting `H = JᵀJ`'s hand-optimization for free requires
-*building at `-O3`*, which is not currently how this project builds and
-has its own real tradeoff already evaluated and left off by default. A
-narrower option not yet tried: `-O3` scoped to just `solve_pose.cpp` (or
-just `solve_knob_pose`) via `__attribute__((optimize("O3")))` or `#pragma
-GCC optimize`, to get this specific win without paying `-O3`'s cost
-project-wide — untested, and would need the same numerical-equivalence
-verification (`test_jacobian.cpp`, the solver convergence check) any of
-this document's other changes get before landing.
+resident). Getting either win for free requires *building at `-O3`*, which
+is not currently how this project builds and has its own real tradeoff
+already evaluated and left off by default. A narrower option not yet
+tried: `-O3` scoped to just `solve_pose.cpp`/`virtual_sensor.cpp` via
+`__attribute__((optimize(...)))` or `#pragma GCC optimize`, to get these
+wins without paying `-O3`'s cost project-wide — untested, and would need
+the same numerical-equivalence verification (`test_jacobian.cpp`, the
+solver convergence check) any of this document's other changes get before
+landing.
+
+### Pushed further on the skew-matrix gap specifically: it closes exactly, with a real catch
+
+Asked directly to try harder on this one rather than accept "narrows but
+doesn't close." Swept the individual components of `-ffast-math` on top of
+`-O3` (full `-ffast-math` alone already produced an exact match — worth
+isolating *which piece* of it did that, since blanket `-ffast-math` is
+usually too broad a hammer to reach for on a physical-position solver):
+
+| flags (on top of `-O3` + this project's existing relaxed-math flags) | `clean_skew` result |
+|---|---|
+| (none — `-O3` alone) | 51 calls, +55% vs. current's 33 |
+| `-ffinite-math-only` | **33 calls — exact match** |
+| `-funsafe-math-optimizations` | 51 calls, no change |
+| `-fexcess-precision=fast` | 51 calls, no change |
+| full `-ffast-math` | 33 calls — exact match (subsumes the above) |
+
+**`-ffinite-math-only` is the specific, isolated piece that does it** — and
+it makes sense why: `x * 0.0f → 0.0f` is only a valid fold if `x` can't be
+NaN or Inf (`NaN * 0 = NaN`, `Inf * 0 = NaN`, not `0`). This project's
+existing relaxed-math flags (`-fno-signed-zeros`, `-fassociative-math`,
+etc.) waive IEEE *signed-zero* and *reassociation* guarantees, but none of
+them waive the NaN/Inf guarantee `-ffinite-math-only` waives — that was the
+actual missing piece the whole time, not a matter of trying harder on
+inlining. Confirmed it's specifically the `-O3`+`-ffinite-math-only`
+*combination* that's needed: `-ffinite-math-only` alone at this project's
+actual `-O2` gets partway (39 calls, +18%, the `memcpy`s survive and the
+subtraction against `skew_matrix(B)` stays unreduced) but not exactly —
+full parity needs both together.
+
+**The catch, and it's a real one, not a formality**: `-ffinite-math-only`
+doesn't just delete dead checks — it changes what gets *computed* when a
+NaN or Inf actually occurs, because folds like this one are only
+equivalence-preserving under the finite assumption. `solve_pose.cpp` has
+an explicit safety net built around exactly the case this flag assumes
+away:
+
+```cpp
+if (!all_finite(dx)) {
+    // Math collapsed (NaN or Inf). Reject update and abort solver.
+    ...
+}
+```
+
+If `-ffinite-math-only` were applied anywhere upstream of that check —
+even scoped to just `VirtualSensor::evaluate`, not the whole project — a
+genuine NaN arising from a numerically degenerate pose could get folded
+into something that *looks* finite by the time it reaches `all_finite()`,
+instead of propagating as the NaN that check exists to catch. That's not
+hypothetical: it's precisely the class of transformation this flag
+licenses. Scoping the flag narrowly (a `#pragma GCC optimize` /
+`__attribute__((optimize(...)))` bracket around just the skew computation,
+not the whole solve loop) would reduce the blast radius but doesn't remove
+this risk in principle for values that flow from there into `dx`.
+
+**Not applied.** This is a real, exact, verified way to drop the
+skew-matrix hand-optimization — but it trades away part of the solver's
+only NaN/Inf detection to get there, which is a correctness decision, not
+a performance one, and isn't this document's call to make unilaterally.
+Flagging it here with the numbers rather than either applying it or
+dropping it silently.
 
 **Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
 costs 18 soft-float calls per length-9 call rather than the achievable 17
