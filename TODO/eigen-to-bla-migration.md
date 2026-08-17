@@ -13,14 +13,51 @@ simplified further.
 ## Decided
 
 Eigen (`ArduinoEigenDense.h`) has been replaced with `tomstewart89/
-BasicLinearAlgebra` ("BLA"; MIT license, PlatformIO/Arduino registry name
-`BasicLinearAlgebra`, pinned to `^5.1`), as an ordinary (non-vendored)
-PlatformIO dependency, across every firmware file that touched Eigen types.
-`pio run -e seeed_xiao_rp2040`, `-e seeed_xiao_rp2040_unity`, and
+BasicLinearAlgebra` ("BLA"; MIT license), **vendored** into
+`firmware/lib/BasicLinearAlgebra` (the 5.1.0 release) and patched, across
+every firmware file that touched Eigen types. `pio run -e seeed_xiao_rp2040`,
+`-e seeed_xiao_rp2040_unity`, and
 `pio test -e seeed_xiao_rp2040_test --without-uploading --without-testing`
-all build clean. **Vendoring BLA and pursuing `constexpr` (for the bicubic
-table or anywhere else) remain deliberately out of scope** — real follow-on
-work, not bundled into this pass.
+all build clean. `constexpr` for the bicubic table remains out of scope —
+real follow-on work, not bundled into this pass, though vendoring (done here
+for the reason below) is a prerequisite for it and no longer blocks it.
+
+### Why vendored: the RAM/flash regression was `Printable`, not floats-vs-doubles
+
+The first pass (non-vendored, straight off the registry) shipped with a real
+regression: Flash +11.4% (304,048→338,776 B), RAM +27.6% (64,516→82,296 B).
+Root-caused, not guessed: `BLA::MatrixBase` inherits Arduino's `Printable`
+(`virtual size_t printTo(Print&) const = 0`, purely so `Serial.print(myMatrix)`
+works — nothing in this codebase actually calls it). **Any virtual function
+makes every instance of the class
+carry a hidden vtable pointer** — 4 bytes per `BLA::Matrix`, which Eigen's
+plain-aggregate types never had. Confirmed with `nm` on the ELF: every
+`BLA::Matrix<...,...,float>` specialization in use had its own emitted
+`vtable for BLA::Matrix<...>` symbol, and the 4,641-entry bicubic table
+(`BICUBIC_INTERPOLATION_TABLE`, `NZ*NR` `Vec2`s) measured 12 bytes/entry
+instead of the 8 (2 floats) it should be — **+18,564 bytes on that one
+array alone, bigger than the entire measured RAM regression.** Confirmed
+this wasn't fixable with flags: `--gc-sections` (already on, via the
+arduino-pico core's default linker flags) can't remove it because every
+constructor of a polymorphic type writes `&vtable` into the object — that's
+a real, live reference, not dead code. `-fno-rtti` (also already on) strips
+`typeinfo`, a different mechanism from vtables/virtual dispatch entirely.
+Neither flag, nor LTO/devirtualization, can shrink `sizeof(BLA::Matrix<...>)`,
+because the vtable pointer is a physical object member mandated by the
+Itanium C++ ABI the instant a class has any virtual function — that's a
+data-layout fact, not something an optimizer is allowed to remove.
+
+Fix: vendored BLA 5.1.0 into `firmware/lib/BasicLinearAlgebra` and dropped
+`: public Printable` from `MatrixBase` plus the now-illegal `final` on
+`printTo()` (`final` requires actually overriding a virtual, which no
+longer exists) in `BasicLinearAlgebra.h`. `printTo()` itself is kept as an
+ordinary non-virtual member — still callable directly, just not through
+`Printable`'s polymorphic interface. Nothing else touched. Re-measured:
+**Flash 298,976 B (−1.7% vs. the pre-migration Eigen baseline, not just vs.
+the buggy BLA build), RAM 63,348 B (−1.8% vs. baseline)** — confirmed via
+`nm` that zero `vtable for BLA::*` symbols remain, and the bicubic table is
+back to exactly 8 bytes/entry (37,128 B total). BLA now beats Eigen on both
+axes, which is the result the migration was originally trying to get.
 
 ### Verification actually performed
 
@@ -47,15 +84,10 @@ in `/tmp` (not committed — not a reusable harness, just what this pass used):
   actual convergence basin, which the real system never leaves because it's
   hot-started every frame. Flagging rather than asserting, since it wasn't
   cross-checked.
-- **Real ARM build size**, `-e seeed_xiao_rp2040`, both before and after,
-  clean rebuild: **Flash 304,048 → 338,776 B (+34,728 B, +11.4%), RAM
-  64,516 → 82,296 B (+17,780 B, +27.6%)**. This is a real regression, not
-  noise — measured, not estimated, per `TODO/Performance.md`'s own "prefer
-  measuring to estimating" rule. Not yet root-caused (candidates: BLA's
-  `operator*`/`Cholesky` codegen inlining worse than hoped on this target,
-  the migration's own small hand-written helpers, or something else) --
-  the disassembly-level investigation `TODO/Performance.md` used for its
-  own passes hasn't been repeated here. **Open**, see below.
+- **Real ARM build size**, `-e seeed_xiao_rp2040`, measured at each stage:
+  Eigen baseline 304,048 B flash / 64,516 B RAM → non-vendored BLA (bug)
+  338,776 B / 82,296 B → **vendored+patched BLA 298,976 B / 63,348 B**. See
+  "Why vendored" above — root-caused and resolved, not just re-measured.
 
 ### API surface actually available (discovered by reading the pinned
 ### 5.1 release, not just the README or upstream `master`)
@@ -137,12 +169,6 @@ actually ships. Corrections made during implementation:
 
 ## Open
 
-- **Root-cause the +11.4% flash / +27.6% RAM regression.** Not expected,
-  not yet investigated at the disassembly level the way
-  `TODO/Performance.md`'s own passes were. Worth checking whether BLA's
-  `CholeskyDecompose`/`CholeskySolve`/`operator*` inline better or worse
-  than Eigen did on this target before concluding anything about whether
-  the migration was a net win.
 - **On-device verification.** Nothing here has run on real hardware. The
   host-native numeric checks (above) are strong evidence of correctness but
   are not a substitute for `pio test -e seeed_xiao_rp2040_test` actually
@@ -151,10 +177,15 @@ actually ships. Corrections made during implementation:
   deliberate look (or an explicit "out of scope, hot-start-only" note)
   rather than leaving it as an incidental finding from an ad hoc check.
 - `constexpr` for the bicubic table (the thing that originally motivated
-  looking at alternatives to Eigen) is still not done. BLA's `Matrix`,
-  `RefMatrix`, and `MatrixTranspose` are all plain-array/reference-based
-  with no expression-template indirection, which should make this a much
-  smaller lift than it ever was against Eigen -- but that's an argument for
-  why it's tractable, not a statement that it's been attempted.
-- Vendoring BLA (to allow the `constexpr` work above) is still not done,
-  per this pass's explicit scope.
+  looking at alternatives to Eigen) is still not done. Vendoring -- now
+  done, above -- was the blocker for touching BLA's own source to attempt
+  it; `Matrix`, `RefMatrix`, and `MatrixTranspose` are all plain-array/
+  reference-based with no expression-template indirection, which should
+  make this a smaller lift than it ever was against Eigen, but that's an
+  argument for why it's tractable, not a statement that it's been attempted.
+- **Vendored code needs a way to stay in sync with upstream on purpose.**
+  There's no process yet for noticing if upstream BLA fixes a bug this copy
+  also has, or for re-applying the `Printable` patch if someone re-vendors
+  from a newer release. Worth at least a comment pointing back to this file
+  from `firmware/lib/BasicLinearAlgebra/BasicLinearAlgebra.h` (already
+  added) and, longer-term, a real process if this needs to move past 5.1.0.
