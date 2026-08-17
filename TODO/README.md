@@ -79,8 +79,11 @@ too, not just the file.
 - **[`Performance.md`](Performance.md)** — Assembly/instruction-level
   profiling of `solve_knob_pose`; three completed optimization passes
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
-  ~50Hz to ~80Hz. Iteration-count telemetry and an on-device wall-clock
-  re-measurement of the combined changes are still open.
+  ~50Hz to ~80Hz, plus a fourth pass confirming BLA (post eigen-to-bla
+  migration) inlines its own glue code far better than Eigen did, with none
+  of the hand-unrolled optimizations safe to revert (measured, not assumed).
+  Iteration-count telemetry and an on-device wall-clock re-measurement of the
+  combined changes are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual
@@ -94,8 +97,10 @@ too, not just the file.
   patched to drop an Arduino `Printable` base that was giving every
   `BLA::Matrix` a hidden vtable pointer (root cause of an earlier +11%/+28%
   flash/RAM regression, now resolved — BLA beats the Eigen baseline on both).
-  Builds clean, Jacobian test suite passes natively on host. `constexpr` for
-  the bicubic table is next; nothing verified on real hardware yet.
+  Builds clean, Jacobian test suite passes natively on host, and (see
+  `Performance.md`'s fourth pass) BLA's own glue code now inlines far
+  better than Eigen's did. `constexpr` for the bicubic table is next;
+  nothing verified on real hardware yet.
 - **[`cross-magnet-interference.md`](cross-magnet-interference.md)** —
   Cross-magnet field coupling (measured 1.7–4.5% of the signal) is
   quantified but not modelled in firmware; a Python-side fitting workaround

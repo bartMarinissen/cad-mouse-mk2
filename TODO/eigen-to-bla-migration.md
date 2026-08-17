@@ -169,6 +169,14 @@ actually ships. Corrections made during implementation:
 
 ## Open
 
+- ~~Whether BLA actually inlines better than Eigen did, and whether any of
+  `TODO/Performance.md`'s hand-unrolled optimizations can come back out now
+  that Eigen's gone~~ — done, see `TODO/Performance.md`'s fourth pass:
+  BLA's `CholeskyDecompose`/`CholeskySolve`/`dot()` inline completely
+  (Eigen's equivalent never did), but all three unrolling candidates
+  checked (symmetric `H = JᵀJ`, written-out skew products, the bicubic
+  basis-weight hoist) turned out to have independent algorithmic
+  justification and stay as-is, backed by measurement not assumption.
 - **On-device verification.** Nothing here has run on real hardware. The
   host-native numeric checks (above) are strong evidence of correctness but
   are not a substitute for `pio test -e seeed_xiao_rp2040_test` actually

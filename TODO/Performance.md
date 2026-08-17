@@ -1,13 +1,18 @@
 # solve_pose performance
 
-**Everything below was measured against the Eigen-based solver.**
-`TODO/eigen-to-bla-migration.md` has since replaced Eigen with
-`BasicLinearAlgebra`, and measured a real +11%/+28% flash/RAM regression
-doing so, not yet root-caused. The Eigen-specific findings here (the
+**Everything through the third pass below was measured against the
+Eigen-based solver.** `TODO/eigen-to-bla-migration.md` has since replaced
+Eigen with `BasicLinearAlgebra` — the RAM/flash regression mentioned
+below was root-caused and fixed (a `Printable` vtable pointer, not
+floats-vs-doubles or anything algebraic), and the fourth pass at the
+bottom of this document re-runs this document's own measurement
+methodology against BLA specifically: does it inline better than Eigen
+did (yes, substantially), and does that mean any of the hand-unrolling
+below can come back out (no — measured, not assumed, for all three
+candidates). The Eigen-specific findings in the first three passes (the
 non-inlining, the blocked-GEMM dispatch for `jacobian.transpose() *
-jacobian`) describe why that rewrite happened, not the current library --
-re-running this document's own measurement methodology against the new
-solver is exactly the open item that migration left behind.
+jacobian`) describe why those rewrites happened and remain accurate
+history; they're no longer a description of the current library.
 
 The whole loop runs at 50Hz, and `solve_knob_pose()` (`firmware/src/magnet_model/solve_pose.cpp`)
 currently eats a little under half that budget — call it 10ms. Goal is to get
@@ -456,6 +461,113 @@ and `magnet_z_pos_from_pivot` is 15 rather than 14, so the rest guess is
 matching the 6mm standoff. Note the numbers above (14, and 20 as the intended
 value) are the pre-fix ones and no longer describe the code.
 
+## Fourth pass: does BLA inline better than Eigen, and can the manual unrolling come back out?
+
+`TODO/eigen-to-bla-migration.md` replaced Eigen with a vendored, patched
+`BasicLinearAlgebra` (patched to drop an `Arduino::Printable` base that was
+adding a vtable pointer to every matrix instance). This pass asks the two
+follow-on questions that migration left open: does BLA's own arithmetic
+actually inline better than Eigen's did on this target, and if so, is any of
+the hand-unrolled code above — the symmetric `H = JᵀJ`, the written-out skew
+products, `BicubicField::evaluate`'s hoisted basis weights — now unnecessary?
+
+**Method**: real ARM disassembly (`arm-none-eabi-objdump -d -C` +
+`arm-none-eabi-gcc-nm -S`, same tools as the passes above) on the current
+vendored-BLA build for `nm`-confirmed inlining/call-count, plus host-native
+`valgrind --tool=callgrind` dynamic instruction counts for the two
+candidate reverts below — not just static counts, given the static-vs-dynamic
+trap this document already hit once on this exact `H = JᵀJ` change.
+
+### Does BLA inline better? Yes, substantially — with one nuance.
+
+- **`BLA::CholeskyDecompose`, `BLA::CholeskySolve`, and the hand-written
+  `dot()` helper (`math3D.h`) have zero standalone symbols anywhere in the
+  linked binary** — confirmed with `nm`. They're fully inlined at every call
+  site. This is the direct fix for the specific problem this document
+  documented against Eigen: `.ldlt().solve()` used to stay as real
+  out-of-line calls into `ldlt_inplace<1>::unblocked`/`assignCoeff`; under
+  BLA there is no separate function there at all to call.
+- **`BLA::operator*` for `Matrix<3,3,float> * Matrix<3,3,float>` inlines at
+  most call sites but not all.** `VirtualSensor::evaluate` fully inlines
+  both of its chained 3×3 products (`R * magnet.magnet_rotation`,
+  `R_total * J_local * R_total_T`) — no separate `operator*` call anywhere
+  in its disassembly. But `solve_pose.cpp`'s `orthonormalize_approx()` (two
+  more 3×3 products) and `exp_so3(dw) * R` call the *same* `operator*`
+  specialization out-of-line — confirmed via `nm`: exactly one
+  `BLA::operator*<Matrix<3,3,float>,...>` symbol exists in the binary, and
+  `solve_knob_pose`'s disassembly `bl`s into it twice. This is GCC's
+  per-call-site inlining heuristic (cost budget already spent inlining
+  other things in that function), not a BLA limitation — the same
+  operation inlines cleanly elsewhere. **Per explicit direction this pass
+  didn't chase where that leftover call lands** (RAM vs. flash placement is
+  a separately-easy fix, not what this investigation was scoped to judge
+  inlining by).
+- `ForwardModel::evaluate` (1 real call, to `VirtualSensor::evaluate`, same
+  structure this doc measured for Eigen post-optimization: "own call count
+  collapsed from 14 `bl`s to 1"), `MagnetModel::evaluate` (1 real call, to
+  `BicubicField::evaluate`, 202 instructions — comparable to the 175
+  post-rewrite Eigen figure above, not the 700+-instruction bloat pattern
+  poor inlining would produce), and `VirtualSensor::evaluate` (1 real call,
+  to `MagnetModel::evaluate`) all show exactly the call structure this
+  document's own tally expects — no unexpected out-of-line glue anywhere
+  in that chain.
+
+### Can any manual unrolling come back out? No — checked three candidates, all three cost real, measured work if reverted.
+
+**`H = JᵀJ` (`solve_pose.cpp`), 21 symmetric dot products vs.
+`~jacobian * jacobian`:** not revertible, and doesn't need a benchmark to
+show why — `jacobian` has no structural zeros for a compiler to fold away
+regardless of inlining quality. The symmetric form computes 21 length-9 dot
+products; the full product computes 36. That's an irreducible ~71% more
+soft-float multiply/add calls on a target where every one is a real
+subroutine call, not a difference inlining can close. (A host x86 dynamic
+count of the two forms actually came out *favoring* the full-multiply
+version — 460M vs. 472M total instructions over 200k calls — which is
+exactly the kind of host-proxy trap this document's own "measured, not
+estimated" section warned about: x86 has a hardware FPU and a very
+different loop-unrolling cost model, so its dynamic count reflects loop
+structure/vectorization, not the soft-float call count that actually
+dominates on this target. Not trusted as the answer here; the flop-count
+argument is definitive on its own.)
+
+**Skew-matrix products (`virtual_sensor.cpp`), written-out entries vs.
+`M * skew_matrix(v) - skew_matrix(B_field_global)`, specifically checked
+because `skew_matrix()`'s zero entries are compile-time literals and this
+project already builds with `-fno-signed-zeros`/`-fassociative-math`,
+which make `x * 0.0f → 0.0f` a legal fold:** measured, not revertible.
+Isolated-TU ARM compile of both forms (identical flags to the real build)
+showed the "clean" form does reduce soft-float call counts somewhat (6
+`fmul`/4 `fadd`/10 `fsub` vs. the current form's 12/7/12) — the constant-fold
+hypothesis was partly right. But it also introduces 3 extra `memcpy` calls
+(6 vs. 3) from materializing `skew_matrix(v)` and `skew_matrix(B)` as real
+temporary `Mat3` objects, and a **host-native dynamic instruction count
+(`valgrind --tool=callgrind`, 200k calls, real varying poses) came out
+higher for the clean form: 6,609,641,000 vs. 6,573,240,986 — about +0.55%**.
+Net: the temporary-object overhead outweighs the softfloat-call reduction.
+Kept as-is.
+
+**`BicubicField::evaluate`'s hoisted-once basis weights vs. the original
+per-row `cubic()`/`cubic_deriv()` calls:** not a candidate at all, on
+re-reading this document's own second-pass section above — it already
+concluded this was "an algebraic reassociation of a bilinear form... not a
+redundancy-elimination or call-graph optimization, so no inlining directive
+reaches it." That conclusion doesn't depend on which matrix library sits
+underneath (the basis-weight formulas are plain scalar `float` arithmetic,
+no `Mat3`/`Vec2` operations involved), and re-reading the current source
+confirms nothing changed there. Nothing to test.
+
+### Bottom line
+
+BLA inlines its own glue code dramatically better than Eigen did — the
+`ldlt_inplace`/`assignCoeff` problem this document spent two passes working
+around is gone outright for Cholesky and dot products, not just mitigated.
+But none of the three hand-unrolled optimizations in this document were
+ever *purely* inlining workarounds — each has an independent algorithmic
+justification (fewer redundant entries computed, fewer structural-zero
+multiplies attempted, weights hoisted out of a loop) that holds regardless
+of how well the underlying library inlines. Measured, not assumed: all
+three stay.
+
 ## Open next steps (not yet acted on)
 
 - Add iteration-count + per-phase (`micros()`) instrumentation to get real
@@ -464,10 +576,15 @@ value) are the pre-fix ones and no longer describe the code.
 - ~~Investigate whether Eigen's small fixed-size helpers can be coaxed into
   inlining even further~~ — done for `BicubicField::evaluate`, see above:
   no, inlining directives alone don't reach it, manual algebraic
-  reassociation was required. Worth checking whether the same applies to
-  `MagnetModel`/`VirtualSensor`/`ForwardModel`'s Eigen usage, or whether it's worth
-  dropping `__not_in_flash_func` from some of these functions given how much
-  of their work already ends up in flash-resident Eigen internals anyway.
+  reassociation was required. ~~Worth checking whether the same applies to
+  `MagnetModel`/`VirtualSensor`/`ForwardModel`'s Eigen usage~~ — moot, Eigen
+  is gone (`TODO/eigen-to-bla-migration.md`); see the fourth pass above for
+  the equivalent question against BLA. `CholeskyDecompose`/`CholeskySolve`/
+  `dot()` now inline completely (zero standalone symbols); one leftover
+  `BLA::operator*` call in `solve_pose.cpp` doesn't inline at two call
+  sites (it does elsewhere) — still worth a closer look at whether that's
+  RAM- or flash-resident, per the fourth pass's own note that this pass
+  deliberately didn't chase it.
 - Quasi-Newton Jacobian reuse (parked above) as a way to cut the iteration
   count's multiplier on the expensive Jacobian-assembly path specifically.
 - Re-run the operation tally above against the current binary once iteration
