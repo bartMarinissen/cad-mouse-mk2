@@ -350,33 +350,42 @@ so this is caught by the build rather than by comment discipline.
 it. That fits the region only because core1 is idle and `.scratch_y` is empty,
 which is not margin and conflicts with `multicore.md`.
 
-**The fix is to declare the stack rather than accept the default**, and 4 KB
-was never a hardware limit. `addressmap.h` shows why the default is what it
-is: 0x20000000–0x20040000 is `SRAM_STRIPED`, the 256 KB main region word-
+**Open. Nothing below is decided** — these are the options as understood,
+not a plan.
+
+4 KB was never a hardware limit. `addressmap.h` shows why the default is what
+it is: 0x20000000–0x20040000 is `SRAM_STRIPED`, the 256 KB main region word-
 striped across banks, while `SRAM4`/`SRAM5` (SCRATCH_X/Y) are two separate
 4 KB banks with their own arbiter ports. Putting each core's stack in its own
 non-striped bank keeps stack traffic from contending with main memory or the
-other core — a performance feature, taken by default, not a ceiling.
+other core — a performance feature taken by the default linker script, not a
+ceiling.
 
-So, in increasing order of blast radius:
+What actually created the pressure is worth naming: `-DEIGEN_NO_MALLOC` is
+there for determinism, but it forces fixed-size Eigen types, and fixed-size
+means *automatic* storage. Every temporary that would have been a heap
+allocation becomes a stack frame instead. The flag moved the problem rather
+than removing it — arguably the right trade, since stack overflow is
+detectable at compile time (`-Wstack-usage`) and a surprise malloc is not.
 
-1. **Keep data out of frames** — members, `noalias()`, `solveInPlace`. Done,
-   and `verify_arm.sh` gates on it.
-2. **Give core1 an explicit stack.** `multicore_launch_core1_with_stack(entry,
-   stack_bottom, stack_size_bytes)` takes a caller-provided buffer, so a
-   `static uint32_t calibration_stack[8192]` in `.bss` gives the solver 32 KB
-   with no allocator, no linker change, and no cost to core0's fast scratch
-   stack or the 20 Hz loop. This is the intended route, and it is the same
-   core `multicore.md` already wants the solve to run on.
-3. **Relocate `__StackTop` into main RAM** with a custom linker script. Affects
-   the whole firmware including the hot path; only if 1 and 2 do not suffice.
+Directions that have been raised, none evaluated in depth:
 
-Worth noting what actually created the pressure: `-DEIGEN_NO_MALLOC` is there
-for determinism, but it forces fixed-size Eigen types, and fixed-size means
-*automatic* storage. Every temporary that would have been a heap allocation
-becomes a stack frame instead. The flag moved the problem rather than removing
-it — arguably the right trade, since stack overflow is detectable at compile
-time (`-Wstack-usage`) and a surprise malloc is not.
+- Keep data out of frames — members, `noalias()`, `solveInPlace`. Already
+  done, and `verify_arm.sh` gates on it. Note the cost: scratch that is only
+  live inside one call is now permanently resident, which trades transient
+  stack for permanent `.bss`.
+- Relocate `__StackTop` into main RAM with a custom linker script. Affects the
+  whole firmware including the 20 Hz path, which is the objection.
+- A second, larger stack in main RAM used as a bump allocator with LIFO
+  discipline and RAII scoping — an arena whose free order is exactly reverse
+  of allocation order. Would give back the transient/permanent trade above.
+  The open question is whether Eigen's *internal* temporaries can be pointed
+  at it, since the 8 KB LDLT is created inside Eigen rather than by our code.
+- `multicore_launch_core1_with_stack()` takes a caller-provided buffer, so it
+  would work mechanically. Recorded only to note that it was considered and is
+  a poor fit: it uses a concurrency mechanism to solve a memory-layout
+  problem, for an operation that is not latency-sensitive, on the core
+  `multicore.md` wants for the pose solve.
 
 This is also the clearest example of what on-device work catches that host
 builds cannot: the host has an 8 MB stack and ran all of this without
