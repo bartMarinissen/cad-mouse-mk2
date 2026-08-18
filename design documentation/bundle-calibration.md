@@ -318,8 +318,23 @@ fifteen iterations doing nothing, and the iteration count is the only symptom.
 
 The tradeoff is real and should be stated: nothing in Gauss-Newton rejects a
 bad step, so an overshoot is kept. If that becomes a problem, a trust region is
-a better answer than multiplicative damping, and it is what the PC-side fit
-uses.
+a better answer than multiplicative damping.
+
+**Whatever the outer method, solve the reduced system directly.** Measured on
+one real run, 60 frames, 405 unknowns, against the same data:
+
+| inner solve | Jacobian evaluations | RMS | outcome |
+|---|---:|---:|---|
+| iterative (Krylov) | 393 | 0.0860 mT | hit its evaluation cap |
+| direct | 16 | 0.0860 mT | converged on `ftol` |
+| direct, Gauss-Newton, on-device | 9 | 0.0920 mT | converged |
+
+Same answer, an order of magnitude apart in iterations. An iterative inner
+solver cannot see the arrowhead structure — it only gets matrix-vector
+products — so every outer step receives a truncated, inexact direction and the
+outer loop has to make up the difference. Eliminating the pose blocks and
+factoring the reduced system gives an exact step instead, which is the whole
+reason §3.2's two passes are worth the arrangement.
 
 ### 3.5 Solving the reduced system
 
