@@ -50,6 +50,23 @@ Three of those counts are reductions, and the reasons matter:
   no isotropic component (8 traceless basis matrices), and `magnet_strength`
   owns absolute scale instead.
 
+**The installed magnet polarity is a term in its own right.** The magnets are
+mounted with the opposite polarity to the one the field table assumes, so the
+model must carry a factor of −1 on the magnet's contribution. Attributing it to
+the *magnet* rather than letting it hide inside sensor gain is what keeps
+fitted gain near +I and fitted strength near +1. Because strength scales the
+field linearly, the flip is carried simply by making the nominal strength
+negative — no separate term, and chain-rule factors pick up the right sign
+automatically.
+
+Omitting it is not subtle in effect but is very easy to miss in testing:
+against real captured data, a polarity-free model gives a seed residual of
+216 mT on ~20 mT readings with half the poses failing to solve; with the sign
+restored it is 0.64 mT with none failing. **No synthetic test can catch it** —
+generating measurements from the same polarity-free model the solver fits with
+makes the error cancel exactly. This is the strongest argument in this document
+for validating against a real capture before trusting anything.
+
 Strength is best carried as a **dimensionless multiplier** around 1, not an
 absolute mT offset. Both physical beliefs about it are relative — "magnets from
 one batch are graded to within a few percent of each other", "the absolute
@@ -250,8 +267,7 @@ Per solver iteration:
 **Pass 1 — accumulate.** For each frame: build its local system from its
 sensors' rows, then fold it into a persistent shared accumulator, eliminating
 that frame's pose block. Discard the frame's data. After every frame, add the
-ridge/prior terms and the LM damping, then solve the reduced shared system
-once.
+ridge/prior terms, then solve the reduced shared system once.
 
 **Pass 2 — back-substitute.** For each frame: rebuild its pose row and recover
 that frame's own pose update from the now-known shared update.
@@ -285,7 +301,27 @@ the passes would cost tens of kilobytes for data needed microseconds later.
 Rebuilding costs a second forward-model pass over the frames, which is a good
 trade for a once-per-unit operation that is not latency-sensitive.
 
-### 3.4 Solving the reduced system
+### 3.4 Gauss-Newton is enough; damping is not obviously worth it
+
+Plain Gauss-Newton — take every step, no damping, no trial evaluation — is a
+reasonable default here, because the ridge prior already sits on the diagonal
+and is what keeps the system invertible. Levenberg-Marquardt's damping term is
+largely redundant on top of it.
+
+The saving is not just simplicity. LM needs a trial evaluation per iteration to
+decide acceptance, which is a full forward pass over every frame, and a damping
+schedule is easy to get wrong in ways that are invisible from a summary. A
+multiplicative schedule that decays without a floor will drive the damping
+parameter far below the point where it has any effect, and then spend one
+iteration per order of magnitude climbing back — measured, that was nine of
+fifteen iterations doing nothing, and the iteration count is the only symptom.
+
+The tradeoff is real and should be stated: nothing in Gauss-Newton rejects a
+bad step, so an overshoot is kept. If that becomes a problem, a trust region is
+a better answer than multiplicative damping, and it is what the PC-side fit
+uses.
+
+### 3.5 Solving the reduced system
 
 A plain dense factorization of the reduced shared system is adequate. The
 shared block has exploitable structure of its own — sensor-local parameters
@@ -347,6 +383,12 @@ Four things that cost real time to discover, all worth knowing in advance:
   changes nothing, and differencing two large near-equal floats to extract a
   zero is where central differences are worst. Test it as a direct invariance
   instead: rotate by real, finite angles and compare outputs.
+- **Validate against a real capture, not just synthetic data.** Synthetic
+  frames generated from the model make the solver fit its own predictions: no
+  sensor noise, no model mismatch, no unmodelled cross-magnet term, and any
+  error shared between the generator and the fit cancels exactly. The magnet
+  polarity term in §1 was invisible to a full synthetic suite and obvious on
+  the first real frame.
 - **Check synthetic test data for rank.** Generating "arbitrary" matrices as
   `sin()` of a linear combination of indices produces matrices that all live in
   a 2-D subspace regardless of size, which makes every synthetic system

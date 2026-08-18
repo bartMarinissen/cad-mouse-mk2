@@ -8,114 +8,105 @@
 // It exists to answer the one question host builds cannot: how long does a
 // calibration actually take on a soft-float M0+, and where does the time go.
 //
-// It prints a breakdown rather than a single number, because the interesting
-// question is which term dominates. Per the cost model, one LM iteration is
-// roughly 1.2M multiply-accumulates: ~547k accumulating H_ss, ~450k in the
-// Schur folds, ~96k in pass 2, ~30k in the P x P solve, plus ~270 forward
-// model evaluations. If that model is right, H_ss and the folds should be most
-// of the wall time and the forward model should be a minority -- which would
-// mean sparsity work matters more than making evaluate() faster. If it is
-// wrong, better to find out from the device than to keep reasoning from
-// instruction counts.
+// Frames are REAL captured readings, embedded by generate_calibration_frames.py
+// from magnet_field_model/calibration_runs/. An earlier version generated them
+// from the forward model at a synthetic truth vector, which makes the solver
+// fit its own predictions -- no sensor noise, no model mismatch, no unmodelled
+// cross-magnet term, and a data residual that can reach exactly zero. Timing
+// was representative; convergence behaviour was not.
 //
-// Caveat worth knowing before trusting the total: peak stack depth is close to
-// the 4 KB this core has, so a hang or a garbled reading is as likely to be a
-// stack overflow as a slow solve. See design documentation/bundle-calibration.md.
+// The whole flow is timed, because all of it is work a real calibration does:
+//
+//   1. seed each frame's pose with solve_knob_pose against nominal geometry
+//      (what calibration_algorithm.py does before its joint solve)
+//   2. bundle-adjust the shared parameters and all poses jointly
+//
+// With real data there is no ground truth to compare parameters against, so
+// what is reported is the residual before and after, which is the number that
+// actually says whether the fit helped.
 
 #include <Arduino.h>
 
 #include "magnet_model/BicubicField.h"
 #include "magnet_model/positions.h"
+#include "magnet_model/forward_model.h"
+#include "magnet_model/solve_pose.h"
 #include "bundle_solver.h"
+#include "calibration_frames_data.h"
 
-static constexpr int N_FRAMES = 30;
+static constexpr int N_FRAMES = CALIBRATION_RUN_FRAMES;
 
-// Statically allocated: ~22.7 KB, far past what the stack could hold.
+// Statically allocated: tens of KB, far past what the stack could hold.
 static BundleSolver<N_FRAMES> solver;
 
-// Deterministic and tiny -- std::mt19937 would carry 2.5 KB of state for no
-// benefit here. Any repeatable spread of poses does the job.
-static uint32_t rng_state = 0x1234567u;
-static float next_uniform(float lo, float hi) {
-    rng_state ^= rng_state << 13;
-    rng_state ^= rng_state >> 17;
-    rng_state ^= rng_state << 5;
-    return lo + (hi - lo) * (float)(rng_state >> 8) * (1.0f / 16777216.0f);
-}
-
-static Mat3 exp_so3_local(const Vec3& w) {
-    const float theta = w.norm();
-    const Mat3 K = skew_matrix(w);
-    if (theta < 1.0e-8f) return Mat3::Identity() + K + 0.5f * (K * K);
-    const float s = std::sin(theta) / theta;
-    const float c = (1.0f - std::cos(theta)) / (theta * theta);
-    return Mat3::Identity() + s * K + c * (K * K);
-}
-
-static void build_problem() {
+static void set_nominal_geometry() {
     solver.geometry.sensor_pos[0] = Positions::sensor_1_world;
     solver.geometry.sensor_pos[1] = Positions::sensor_2_world;
     solver.geometry.sensor_pos[2] = Positions::sensor_3_world;
     solver.geometry.magnet_nominal_pos[0] = Positions::Magnet_1_knob;
     solver.geometry.magnet_nominal_pos[1] = Positions::Magnet_2_knob;
     solver.geometry.magnet_nominal_pos[2] = Positions::Magnet_3_knob;
-    for (int m = 0; m < N_MAGNETS; ++m) solver.geometry.magnet_nominal_rot[m] = Mat3::Identity();
-    solver.geometry.magnet_nominal_strength_mT = BICUBIC_FIELD_REFERENCE_MT;
-
-    // Poses centred on the real rest pose. Off-table poses put the bicubic in
-    // its extrapolation region, where the field is nonsense and the solver
-    // stalls -- which would make this measure the wrong thing entirely.
-    for (int k = 0; k < N_FRAMES; ++k) {
-        solver.frames[k].t = Positions::approx_rest_pos
-            + Vec3(next_uniform(-2.5f, 2.5f), next_uniform(-2.5f, 2.5f),
-                    next_uniform(-3.0f, 2.0f));
-        solver.frames[k].R = exp_so3_local(Vec3(next_uniform(-0.1f, 0.1f),
-                                                 next_uniform(-0.1f, 0.1f),
-                                                 next_uniform(-0.1f, 0.1f)));
-    }
-
-    // Synthetic truth, then measurements generated through the same forward
-    // path the solver fits with.
-    Eigen::Matrix<float, N_SHARED_PARAMS, 1> truth;
-    truth.setZero();
-    truth.segment<3>(COL_MAGNET_POS) << 0.08f, -0.05f, 0.06f;
-    truth[COL_STRENGTH_MEAN] = 0.06f;
-    truth.segment<2>(COL_STRENGTH_DIFF) << 0.03f, -0.02f;
     for (int m = 0; m < N_MAGNETS; ++m) {
-        truth[COL_MAGNET_TILT + 2 * m]     = 0.015f * (m + 1);
-        truth[COL_MAGNET_TILT + 2 * m + 1] = -0.012f * (m + 1);
+        solver.geometry.magnet_nominal_rot[m] = Mat3::Identity();
     }
-    for (int i = 0; i < N_SENSORS; ++i) {
-        const int base = unit_block_start(i);
-        truth.segment<3>(base + UNIT_OFFSET_SENSOR_OFFSET) << 0.3f, -0.2f, 0.25f;
-        for (int k = 0; k < 8; ++k) truth[base + UNIT_OFFSET_GAIN + k] = 0.004f * (k - 3);
-    }
-
-    solver.rebuild_from_params(truth);
-    for (int k = 0; k < N_FRAMES; ++k) {
-        for (int i = 0; i < N_SENSORS; ++i) {
-            VirtualSensor sensor(solver.geometry.sensor_pos[i]);
-            MagnetModel magnet = build_magnet_model(CALCULATED_BICUBIC_FIELD, solver.magnets[i]);
-            Vec3 B; Eigen::Matrix<float, 3, 6> J_pose;
-            sensor.evaluate(magnet, solver.frames[k].t, solver.frames[k].R, B, J_pose);
-            solver.frames[k].measured[i] = solver.gains[i] * B + solver.offsets[i];
-        }
-    }
-
-    solver.x.setZero();
-    solver.prior_sigma = nominal_prior_sigma();
-    solver.observation_sigma = 1.0f;
+    // Signed: see MAGNET_POLARITY in bundle_param_layout.h.
+    solver.geometry.magnet_nominal_strength_mT =
+        MAGNET_POLARITY * BICUBIC_FIELD_REFERENCE_MT;
 }
 
-// --- component timings ---------------------------------------------------
-// Repeated and averaged: micros() has ~1us granularity and these are fast
-// enough that a single call would be mostly quantisation noise.
+static void load_measurements() {
+    for (int k = 0; k < N_FRAMES; ++k) {
+        for (int i = 0; i < N_SENSORS; ++i) {
+            solver.frames[k].measured[i] = Vec3(CALIBRATION_RUN_READINGS[k][3 * i + 0],
+                                                 CALIBRATION_RUN_READINGS[k][3 * i + 1],
+                                                 CALIBRATION_RUN_READINGS[k][3 * i + 2]);
+        }
+    }
+}
+
+// Nominal forward model, for seeding. Static because ForwardModel owns three
+// VirtualSensors and three MagnetModels by value.
+static VirtualSensor nominal_sensors[3] = {
+    VirtualSensor(Positions::sensor_1_world),
+    VirtualSensor(Positions::sensor_2_world),
+    VirtualSensor(Positions::sensor_3_world),
+};
+
+// Seeds every frame's pose against nominal geometry, and reports how long that
+// costs and how well nominal alone explains the data. That second number is
+// the baseline the bundle fit has to beat.
+static uint32_t seed_poses(float& rms_out, int& failed_out) {
+    solver.x.setZero();
+    solver.rebuild_from_params(solver.x);
+
+    static MagnetModel nominal_magnets[3] = {
+        build_magnet_model(CALCULATED_BICUBIC_FIELD, solver.magnets[0]),
+        build_magnet_model(CALCULATED_BICUBIC_FIELD, solver.magnets[1]),
+        build_magnet_model(CALCULATED_BICUBIC_FIELD, solver.magnets[2]),
+    };
+    static ForwardModel nominal_model(nominal_sensors, nominal_magnets);
+
+    float sum_sq = 0.0f;
+    int failed = 0;
+    const uint32_t t0 = millis();
+    for (int k = 0; k < N_FRAMES; ++k) {
+        solver.frames[k].t = Positions::approx_rest_pos;
+        solver.frames[k].R = Mat3::Identity();
+        const float residual = solve_knob_pose(solver.frames[k].t, solver.frames[k].R,
+                                                nominal_model, solver.frames[k].measured);
+        if (!isfinite(residual) || residual > 50.0f) ++failed;
+        sum_sq += residual * residual;
+    }
+    const uint32_t elapsed = millis() - t0;
+    rms_out = sqrtf(sum_sq / (N_FRAMES * N_SENSORS * 3));
+    failed_out = failed;
+    return elapsed;
+}
 
 static void time_components() {
     solver.rebuild_from_params(solver.x);
     const BundleFrame& frame0 = solver.frames[0];
-
-    constexpr int REPS = 200;
+    constexpr int REPS = 100;
     uint32_t t0;
 
     t0 = micros();
@@ -124,7 +115,7 @@ static void time_components() {
         MagnetModel magnet = build_magnet_model(CALCULATED_BICUBIC_FIELD, solver.magnets[0]);
         Vec3 B; Eigen::Matrix<float, 3, 6> J_pose;
         sensor.evaluate(magnet, frame0.t, frame0.R, B, J_pose);
-        asm volatile("" :: "r"(B.data()) : "memory");   // don't optimise it away
+        asm volatile("" :: "r"(B.data()) : "memory");
     }
     const float us_forward = (float)(micros() - t0) / REPS;
 
@@ -161,7 +152,10 @@ static void time_components() {
         solver.normal_equations.solve_into(solver.dx_shared);
         asm volatile("" :: "r"(solver.dx_shared.data()) : "memory");
     }
-    const float us_solve45 = (float)(micros() - t0) / 20.0f;
+    const float us_solve = (float)(micros() - t0) / 20.0f;
+
+    const float per_iter_ms =
+        (N_FRAMES * (us_build_full + us_absorb + us_build_pose) + us_solve) / 1000.0f;
 
     Serial.println();
     Serial.println("--- component timings (us, averaged) ---");
@@ -169,13 +163,12 @@ static void time_components() {
     Serial.printf("  build_frame, pass 1 (3 sensors)      %9.1f\n", us_build_full);
     Serial.printf("  build_frame, pass 2 (3 sensors)      %9.1f\n", us_build_pose);
     Serial.printf("  absorb_frame (Schur fold)            %9.1f\n", us_absorb);
-    Serial.printf("  45x45 LDLT solve                     %9.1f\n", us_solve45);
+    Serial.printf("  %dx%d LDLT solve                      %9.1f\n",
+                  N_SHARED_PARAMS, N_SHARED_PARAMS, us_solve);
     Serial.println();
-    Serial.printf("  projected per LM iteration:          %9.1f ms\n",
-                  (N_FRAMES * (us_build_full + us_absorb + us_build_pose) + us_solve45) / 1000.0f);
+    Serial.printf("  projected per LM iteration:          %9.1f ms\n", per_iter_ms);
     Serial.printf("  of which forward model:              %9.1f %%\n",
-                  100.0f * (N_FRAMES * 6 * us_forward)
-                      / (N_FRAMES * (us_build_full + us_absorb + us_build_pose) + us_solve45));
+                  100.0f * (N_FRAMES * 6 * us_forward) / (per_iter_ms * 1000.0f));
 }
 
 void setup() {
@@ -186,13 +179,29 @@ void setup() {
 
     Serial.println();
     Serial.println("=== bundle calibration timing harness ===");
+    Serial.println("frames: REAL capture, see calibration_frames_data.h");
     Serial.printf("frames %d, shared parameters %d, sizeof(solver) %u bytes\n",
                   N_FRAMES, N_SHARED_PARAMS, (unsigned)sizeof(solver));
 
-    build_problem();
+    set_nominal_geometry();
+    load_measurements();
+    solver.prior_sigma = nominal_prior_sigma();
+    solver.observation_sigma = 1.0f;   // mT; sensor noise is not characterised here
+
+    // --- stage 1: seed poses against nominal geometry --------------------
+    float seed_rms = 0.0f;
+    int seed_failed = 0;
+    const uint32_t seed_ms = seed_poses(seed_rms, seed_failed);
+    Serial.println();
+    Serial.println("--- pose seeding (nominal geometry) ---");
+    Serial.printf("  wall time            %lu ms  (%.1f ms/frame)\n",
+                  (unsigned long)seed_ms, (float)seed_ms / N_FRAMES);
+    Serial.printf("  RMS residual         %.4f mT   <-- baseline to beat\n", seed_rms);
+    Serial.printf("  frames not solved    %d\n", seed_failed);
+
     time_components();
 
-    // --- the whole fit -------------------------------------------------
+    // --- stage 2: the joint fit ------------------------------------------
     solver.x.setZero();
     BundleSolverOptions opt;
     opt.max_iterations = 60;
@@ -203,18 +212,38 @@ void setup() {
     BundleSolverReport report = solver.solve(opt);
     const uint32_t elapsed_ms = millis() - t0;
 
+    const float rms = sqrtf(report.final_cost / (N_FRAMES * N_SENSORS * 3));
     Serial.printf("  wall time            %lu ms\n", (unsigned long)elapsed_ms);
-    Serial.printf("  iterations           %d (%d accepted)\n",
-                  report.iterations, report.accepted_steps);
+    Serial.printf("  iterations           %d  (Gauss-Newton; every step taken)\n",
+                  report.iterations);
     Serial.printf("  per iteration        %.1f ms\n",
                   (float)elapsed_ms / (report.iterations > 0 ? report.iterations : 1));
     Serial.printf("  cost                 %.6e -> %.6e\n",
                   report.initial_cost, report.final_cost);
-    Serial.printf("  RMS residual         %.5f mT\n",
-                  sqrtf(report.final_cost / (N_FRAMES * N_SENSORS * 3)));
+    Serial.printf("  RMS residual         %.4f mT  (from %.4f, %.2fx better)\n",
+                  rms, seed_rms, seed_rms / (rms > 0.0f ? rms : 1.0f));
     Serial.printf("  converged            %s\n", report.converged ? "yes" : "no (hit a limit)");
-    Serial.printf("  strength_mean        %+.4f (relative; truth was +0.0600)\n",
+
+    Serial.println();
+    Serial.println("--- fitted shared parameters (offsets from nominal) ---");
+    Serial.printf("  magnet_pos      %+.4f %+.4f %+.4f  mm-ish (gauge basis)\n",
+                  solver.x[COL_MAGNET_POS + 0], solver.x[COL_MAGNET_POS + 1],
+                  solver.x[COL_MAGNET_POS + 2]);
+    Serial.printf("  strength_mean   %+.4f  (relative; unregularized)\n",
                   solver.x[COL_STRENGTH_MEAN]);
+    Serial.printf("  strength_diff   %+.4f %+.4f\n",
+                  solver.x[COL_STRENGTH_DIFF + 0], solver.x[COL_STRENGTH_DIFF + 1]);
+    for (int m = 0; m < N_MAGNETS; ++m) {
+        Serial.printf("  magnet_tilt[%d]  %+.4f %+.4f\n", m,
+                      solver.x[COL_MAGNET_TILT + 2 * m], solver.x[COL_MAGNET_TILT + 2 * m + 1]);
+    }
+    for (int i = 0; i < N_SENSORS; ++i) {
+        const int b = unit_block_start(i);
+        Serial.printf("  sensor[%d] offset %+.3f %+.3f %+.3f mT\n", i,
+                      solver.x[b + UNIT_OFFSET_SENSOR_OFFSET + 0],
+                      solver.x[b + UNIT_OFFSET_SENSOR_OFFSET + 1],
+                      solver.x[b + UNIT_OFFSET_SENSOR_OFFSET + 2]);
+    }
     Serial.println();
     Serial.println("done.");
 }

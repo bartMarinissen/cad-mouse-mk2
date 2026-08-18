@@ -77,24 +77,14 @@ struct BundleGeometry {
 
 struct BundleSolverOptions {
     int max_iterations = 30;
-    float initial_lambda = 1.0e-3f;
-    float lambda_up = 10.0f;
-    float lambda_down = 0.1f;
-    // Converged when a successful step moves the shared parameters by less
-    // than this, in the parameters' own (mixed) units.
+    // Converged when a step moves the shared parameters by less than this, in
+    // the parameters' own (mixed) units. Every step is taken, so this is the
+    // only stopping rule besides the iteration cap.
     float shared_step_tolerance = 1.0e-5f;
-    // ...or when an accepted step improves the cost by less than this
-    // FRACTION of it. Needed as well as the step test, not instead: once the
-    // fit is essentially exact, further steps stop being accepted at all, so
-    // a step-size-only criterion never fires and the loop instead terminates
-    // by damping itself to a standstill -- reporting "did not converge" about
-    // a fit that had already reached 2e-4 mT RMS.
-    float cost_tolerance = 1.0e-6f;
 };
 
 struct BundleSolverReport {
     int iterations = 0;
-    int accepted_steps = 0;
     float initial_cost = 0.0f;
     float final_cost = 0.0f;
     bool converged = false;
@@ -117,11 +107,9 @@ struct BundleSolver {
     Eigen::Matrix<float, N_SHARED_PARAMS, 1> dx_shared;
     FrameNormalEquations<N_SHARED_PARAMS> frame_system;   // pass 1, reused
     FramePoseBlock<N_SHARED_PARAMS> pose_system;          // pass 2, reused
-    // Trial state, also members rather than locals in solve(): at 30 frames
-    // these are 2.5 KB and 720 bytes, and the stack is 2 KB total.
-    BundleFrame trial_frames[N_FRAMES];
+    // Members rather than locals in solve(), because the stack cannot hold
+    // them. Gauss-Newton needs no trial copy of the frames or of x.
     Eigen::Matrix<float, 6, 1> dx_pose[N_FRAMES];
-    Eigen::Matrix<float, N_SHARED_PARAMS, 1> x_trial;
     SharedRow shared_row;                          // one sensor's assembled row
     Mat3 delta_R;
     Eigen::Matrix<float, 3, 6> scaled_pose_jacobian;
@@ -219,13 +207,23 @@ struct BundleSolver {
         }
     }
 
+    // Plain Gauss-Newton: every step is taken, no damping, no trial evaluation.
+    //
+    // The ridge prior on the diagonal is what keeps H invertible, so the
+    // damping term LM would add is largely redundant here. Dropping it removes
+    // the whole lambda schedule along with its failure mode -- lambda decaying
+    // with no floor until multiplicative damping does nothing, then costing one
+    // iteration per decade to climb back -- and removes the per-iteration trial
+    // cost() evaluation, which was a full forward pass over every frame.
+    //
+    // The tradeoff is honest: nothing here rejects a bad step, so a step that
+    // overshoots is kept. The step-norm test and the cost reported at the end
+    // are what make that visible.
     BundleSolverReport solve(const BundleSolverOptions& opt = {}) {
         BundleSolverReport report;
-        float lambda = opt.initial_lambda;
 
         rebuild_from_params(x);
-        float current_cost = cost(frames);
-        report.initial_cost = current_cost;
+        report.initial_cost = cost(frames);
 
         for (int iter = 0; iter < opt.max_iterations; ++iter) {
             report.iterations = iter + 1;
@@ -239,69 +237,35 @@ struct BundleSolver {
             }
             normal_equations.add_prior(x, prior_sigma);
 
-            // LM damping on the reduced system. Applied after the frames are
-            // folded in, so this damps the shared parameters only; each
-            // frame's pose block was already inverted during elimination.
-            for (int j = 0; j < N_SHARED_PARAMS; ++j) {
-                normal_equations.H(j, j) *= (1.0f + lambda);
-            }
-
             normal_equations.solve_into(dx_shared);
-            if (!dx_shared.allFinite()) { lambda *= opt.lambda_up; continue; }
+            if (!dx_shared.allFinite()) break;
 
             // --- pass 2: back-substitute each frame's own pose update ------
-            // Rebuilt, not stored: see SCHUR_SOLVER_DESIGN.md. Must linearize
-            // at the SAME point pass 1 did, which is why nothing below is
-            // applied to x or to any frame until every frame is done.
+            // Rebuilt, not stored. MUST linearize at the same point pass 1
+            // did, which is why nothing is applied to x or to any frame until
+            // every frame has been back-substituted.
             for (int k = 0; k < N_FRAMES; ++k) {
                 build_frame(pose_system, frames[k]);
                 dx_pose[k] = solve_frame_pose_update(pose_system, dx_shared);
             }
 
-            // --- trial step -----------------------------------------------
-            x_trial = x + dx_shared;
+            // --- apply, now that every frame is done ----------------------
+            x += dx_shared;
             for (int k = 0; k < N_FRAMES; ++k) {
-                trial_frames[k] = frames[k];
-                trial_frames[k].t += dx_pose[k].template head<3>();
+                frames[k].t += dx_pose[k].template head<3>();
                 delta_R = exp_so3_solver(dx_pose[k].template tail<3>());
-                trial_frames[k].R.noalias() = delta_R * frames[k].R;
+                frames[k].R = delta_R * frames[k].R;
             }
 
-            rebuild_from_params(x_trial);
-            const float trial_cost = cost(trial_frames);
-
-            // Per-iteration trace, compiled out unless BUNDLE_SOLVER_TRACE is
-            // defined. Kept because reading it is what explained an otherwise
-            // baffling accept ratio: lambda decays x0.1 per accepted step with
-            // no floor, so five good steps drop it to 1e-8 -- and multiplicative
-            // damping does nothing until lambda approaches 1 (|dx| is identical
-            // to four digits from 1e-8 through 1e-5). The loop then spends one
-            // iteration per decade climbing back. A gentler decay (0.33) cuts
-            // 15 iterations to 11 with an identical answer, so this is wasted
-            // work rather than a wrong result -- but it is invisible from the
-            // outside, and the summary report cannot show it.
 #ifdef BUNDLE_SOLVER_TRACE
-            std::printf("  iter %2d  lambda %10.3e  cost %12.6e  trial %12.6e  |dx| %10.3e  %s\n",
-                        iter, (double)lambda, (double)current_cost, (double)trial_cost,
-                        (double)dx_shared.norm(),
-                        trial_cost < current_cost ? "ACCEPT" : "reject");
+            rebuild_from_params(x);
+            std::printf("  iter %2d  |dx_shared| %10.3e  cost %12.6e\n",
+                        iter, (double)dx_shared.norm(), (double)cost(frames));
 #endif
-            if (trial_cost < current_cost) {
-                const float relative_gain =
-                    (current_cost - trial_cost) / (current_cost > 0.0f ? current_cost : 1.0f);
-                x = x_trial;
-                for (int k = 0; k < N_FRAMES; ++k) frames[k] = trial_frames[k];
-                current_cost = trial_cost;
-                lambda *= opt.lambda_down;
-                report.accepted_steps++;
-                if (dx_shared.norm() < opt.shared_step_tolerance
-                    || relative_gain < opt.cost_tolerance) {
-                    report.converged = true;
-                    break;
-                }
-            } else {
-                lambda *= opt.lambda_up;
-                if (lambda > 1.0e8f) break;   // damped to a standstill
+
+            if (dx_shared.norm() < opt.shared_step_tolerance) {
+                report.converged = true;
+                break;
             }
         }
 

@@ -61,6 +61,24 @@
 static constexpr int N_MAGNETS = 3;
 static constexpr int N_SENSORS = 3;
 
+// The magnets are installed with the opposite polarity to the one the bicubic
+// table assumes (local_field.py's polarization is -600 mT, the table's +z is
+// the polarization axis). bundle_geometry.py carries the same constant for the
+// same reason -- attributing the flip to the magnet keeps fitted gain near +I
+// and fitted strength near +1, instead of hiding a sign inside the gain.
+//
+// This matters more than it looks. Strength scales the field linearly, so the
+// flip is carried simply by giving BundleGeometry a NEGATIVE nominal strength
+// -- no separate term, and the chain-rule factor in add_magnet_columns picks
+// up the right sign automatically. Omit it and the model predicts the field
+// inverted: against real captured data the seed residual was 216 mT on ~20 mT
+// readings with half the poses failing to solve, and with the sign restored
+// it is 0.64 mT with none failing.
+//
+// Synthetic tests cannot catch this. Generating measurements from the same
+// polarity-free model the solver fits with makes the error cancel exactly.
+static constexpr float MAGNET_POLARITY = -1.0f;
+
 // Border: the columns every sensor's rows touch.
 static constexpr int COL_MAGNET_POS      = 0;   // 3
 static constexpr int COL_STRENGTH_MEAN   = 3;   // 1

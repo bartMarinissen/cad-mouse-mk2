@@ -136,12 +136,12 @@ void test_solver_fits_synthetic_data(void) {
 
     char msg[256];
     snprintf(msg, sizeof(msg),
-             "iterations %d, accepted %d, cost %.6e -> %.6e, converged %d",
-             report.iterations, report.accepted_steps,
+             "iterations %d, cost %.6e -> %.6e, converged %d",
+             report.iterations,
              report.initial_cost, report.final_cost, (int)report.converged);
     TEST_MESSAGE(msg);
 
-    TEST_ASSERT_TRUE_MESSAGE(report.accepted_steps > 0, "no step was ever accepted");
+    TEST_ASSERT_TRUE_MESSAGE(report.iterations > 0, "solver did not iterate");
 
     // Noise-free data from the same model: the residual has an exact zero to
     // find, so anything but a large drop means the step is wrong, not that the
@@ -304,15 +304,15 @@ void test_unregularized_strength_mean_stays_well_posed(void) {
     BundleSolverReport report = solver.solve(opt);
 
     snprintf(msg, sizeof(msg),
-             "with nominal priors: accepted %d/%d, cost %.4e -> %.4e, strength_mean %+.4f (rel)",
-             report.accepted_steps, report.iterations,
+             "with nominal priors: %d iterations, cost %.4e -> %.4e, strength_mean %+.4f (rel)",
+             report.iterations,
              report.initial_cost, report.final_cost, solver.x[COL_STRENGTH_MEAN]);
     TEST_MESSAGE(msg);
 
     TEST_ASSERT_TRUE_MESSAGE(solver.x.allFinite(), "fit produced non-finite parameters");
-    TEST_ASSERT_TRUE_MESSAGE(report.accepted_steps > 0,
-                              "no step accepted -- H may be singular along the "
-                              "unregularized strength direction");
+    TEST_ASSERT_TRUE_MESSAGE(report.iterations > 0,
+                              "solver did not iterate -- H may be singular along "
+                              "the unregularized strength direction");
     TEST_ASSERT_TRUE_MESSAGE(report.final_cost < report.initial_cost * 0.01f,
                               "fit did not make substantial progress under nominal priors");
 
