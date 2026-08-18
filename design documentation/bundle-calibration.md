@@ -320,21 +320,34 @@ The tradeoff is real and should be stated: nothing in Gauss-Newton rejects a
 bad step, so an overshoot is kept. If that becomes a problem, a trust region is
 a better answer than multiplicative damping.
 
-**Whatever the outer method, solve the reduced system directly.** Measured on
-one real run, 60 frames, 405 unknowns, against the same data:
+**Set the convergence tolerance to what the model can actually resolve**, and
+prefer a direct inner solve. These interact, and getting it wrong is expensive
+in a way that looks like the problem being hard. Measured on one real run,
+60 frames, 405 unknowns, same data throughout:
 
-| inner solve | Jacobian evaluations | RMS | outcome |
-|---|---:|---:|---|
-| iterative (Krylov) | 393 | 0.0860 mT | hit its evaluation cap |
-| direct | 16 | 0.0860 mT | converged on `ftol` |
-| direct, Gauss-Newton, on-device | 9 | 0.0920 mT | converged |
+| inner solve | tolerance | Jacobian evals | RMS | outcome |
+|---|---:|---:|---:|---|
+| iterative (Krylov) | 1e-8 | **393** | 0.0860 mT | hit its evaluation cap |
+| iterative | 1e-6 | 23 | 0.0860 mT | converged |
+| iterative | 1e-4 | 21 | 0.0860 mT | converged |
+| direct | 1e-8 | 16 | 0.0860 mT | converged |
+| iterative, started *at* the optimum | 1e-8 | 2 | 0.0860 mT | converged |
+| direct, Gauss-Newton, on-device | — | 9 | 0.0920 mT | converged |
 
-Same answer, an order of magnitude apart in iterations. An iterative inner
-solver cannot see the arrowhead structure — it only gets matrix-vector
-products — so every outer step receives a truncated, inexact direction and the
-outer loop has to make up the difference. Eliminating the pose blocks and
-factoring the reduced system gives an exact step instead, which is the whole
-reason §3.2's two passes are worth the arrangement.
+Every one of these reaches the same residual. The tolerance is what costs 370
+iterations, not the inner solver — which is worth only about five (23 against
+16) once the tolerance is sane.
+
+The mechanism is the interaction. An iterative inner solve returns a
+*truncated* step, so the agreement between predicted and actual reduction
+bottoms out around 1e-6; a tolerance below that is simply unreachable for it,
+and the outer loop grinds until its evaluation budget runs out. A direct solve
+returns an exact step and can satisfy 1e-8.
+
+So: pick the tolerance from what the model can resolve. With ~2% systematic
+model error, anything below ~1e-6 relative is chasing noise — and the last row
+shows the seeding is not the issue, since starting at the answer terminates
+immediately.
 
 ### 3.5 Solving the reduced system
 
