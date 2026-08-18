@@ -169,9 +169,9 @@ void SensorController::read_mT(float out[9]) {
   for (int i = 0; i < 3; i++) {
     Vec3 corrected = sensor_gain_[i] * Vec3(uncorrected[i * 3 + 0], uncorrected[i * 3 + 1], uncorrected[i * 3 + 2])
                       - sensor_offset_mT_[i];
-    out[i * 3 + 0] = corrected[0];
-    out[i * 3 + 1] = corrected[1];
-    out[i * 3 + 2] = corrected[2];
+    out[i * 3 + 0] = corrected(0);
+    out[i * 3 + 1] = corrected(1);
+    out[i * 3 + 2] = corrected(2);
   }
 }
 
@@ -183,8 +183,8 @@ void SensorController::beginCalibration() {
   for (int i = 0; i < 9; i++) {
     calibrationSum_[i] = 0.0;
   }
-  calibration_pos = Vec3::Zero();
-  calibration_rot = Vec3::Zero();
+  calibration_pos = BLA::Zeros<3, 1, float>();
+  calibration_rot = BLA::Zeros<3, 1, float>();
 }
 
 // Note, this should be folded into MotionController.
@@ -210,7 +210,7 @@ void SensorController::updateCalibration() {
   // Deliberately a local identity rather than the controller's hot-start state:
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.
-  Mat3 R = Mat3::Identity();
+  Mat3 R = identity3();
   float res = motionController().read_pose(raw, pos, R);
   Vec3 rot = extract_angles_robust(R);
   calibration_pos += pos;
@@ -226,11 +226,14 @@ void SensorController::updateCalibration() {
   }
   // END OF Calibration RUN, return results
 
-  calibration_pos /= Config::ZERO_SAMPLES;
-  calibration_rot /= Config::ZERO_SAMPLES;
+  // BLA's scalar operators deduce DType from both operands (see
+  // TODO/eigen-to-bla-migration.md), so the scalar must be exactly float,
+  // not Config::ZERO_SAMPLES's int.
+  calibration_pos /= static_cast<float>(Config::ZERO_SAMPLES);
+  calibration_rot /= static_cast<float>(Config::ZERO_SAMPLES);
   if (Config::ENABLE_TELEMETRY) {
     Serial.printf("\ncalibrated pose : t= %f %f %f r= %f %f %f ",
-      calibration_pos[0], calibration_pos[1], calibration_pos[2], calibration_rot[0], calibration_rot[1], calibration_rot[2]
+      calibration_pos(0), calibration_pos(1), calibration_pos(2), calibration_rot(0), calibration_rot(1), calibration_rot(2)
     );
   }
   motionController().set_base_pose(calibration_pos, calibration_rot);

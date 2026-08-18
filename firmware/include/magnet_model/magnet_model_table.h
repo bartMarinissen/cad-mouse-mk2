@@ -4,7 +4,6 @@
 
 struct Point { float r; float z; };
 
-using Vec2 = Eigen::Vector2f;
 constexpr int NR = 51;
 constexpr int NZ = 91;
 

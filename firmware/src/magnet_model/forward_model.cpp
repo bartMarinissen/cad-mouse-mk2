@@ -28,8 +28,8 @@ ForwardModel::ForwardModel(const CalibrationParams& cal)
 
 void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t_world,
                             const Mat3& R,
-                            Eigen::Matrix<float, 9, 1> &B_field,
-                            Eigen::Matrix<float, 9, 6> &J) const {
+                            Vector9f &B_field,
+                            Matrix9x6f &J) const {
 
     // Place each magnet in the world once, ahead of the sensor loop. Every
     // sensor sees every magnet, so these three would otherwise be rebuilt
@@ -43,7 +43,7 @@ void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t_world,
     for (int i = 0; i < 3; ++i) {
         // Place for out values
         Vec3 B_sensor_magnet_world;
-        Eigen::Matrix<float, 3, 6> J_sensor_magnet;
+        Matrix3x6f J_sensor_magnet;
 
         // Sensor i sits under magnet i; the other two are the cross terms.
         // Fixed by the knob's layout, so it is an index relationship rather
@@ -55,7 +55,7 @@ void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t_world,
                              t_world, B_sensor_magnet_world, J_sensor_magnet);
 
         // Copy blocks into the flat 9x6 world Jacobian and the expected field
-        J.block<3, 6>(i * 3, 0) = J_sensor_magnet;
-        B_field.block<3, 1>(i * 3, 0) = B_sensor_magnet_world;
+        J.Submatrix<3, 6>(i * 3, 0) = J_sensor_magnet;
+        B_field.Submatrix<3, 1>(i * 3, 0) = B_sensor_magnet_world;
     }
 }

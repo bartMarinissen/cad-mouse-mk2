@@ -15,6 +15,7 @@
 //  FD_STEP_LINEAR down accordingly (see comment at declaration).
 // ---------------------------------------------------------------------
 
+#include <cstdio>
 #include <unity.h>
 #include "math3D.h"
 #include "magnet_model/BicubicField.h"
@@ -99,20 +100,20 @@ static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 
 // Max relative error over a matrix, column by column (as Vec3s), generic size.
 template <int ROWS, int COLS>
-static float max_rel_error_mat(const Eigen::Matrix<float, ROWS, COLS>& A,
-                                const Eigen::Matrix<float, ROWS, COLS>& N,
+static float max_rel_error_mat(const BLA::Matrix<ROWS, COLS, float>& A,
+                                const BLA::Matrix<ROWS, COLS, float>& N,
                                 float floor_ = 1.0e-5f) {
     // || J_analytic - J_numeric ||_F
-    float error_norm = (A - N).norm();
-    
+    float error_norm = BLA::Norm(A - N);
+
     // || J_analytic ||_F
-    float numeric_norm = N.norm();
+    float numeric_norm = BLA::Norm(N);
 
     // Prevent division by zero if the target matrix is exactly zero
     if (numeric_norm < 1e-8f) {
         return error_norm; // Fallback to absolute error
     }
-    
+
     return error_norm / numeric_norm;
 }
 
@@ -121,23 +122,14 @@ static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f)
     return max_rel_error_mat<3, 1>(a, n);
 }
 
-// Exact SO(3) exponential map (Rodrigues' formula), used to perturb R.
-// This matters: R_new = exp([w]_x) R_old is the actual definition used
-// to derive J_rot, so the FD test must use the exact exponential, not
-// the first-order approximation (I + [w]_x) R, or the FD estimate picks
-// up an O(h) contamination from the approximation itself (rather than
-// being a clean O(h^2) central-difference estimate).
-static Mat3 exp_so3(const Vec3& w) {
-    float theta = w.norm();
-    Mat3 K = skew_matrix(w);
-    if (theta < 1.0e-8f) {
-        // Small-angle fallback (also avoids 0/0); accurate to O(theta^2).
-        return Mat3::Identity() + K + 0.5f * (K * K);
-    }
-    float s = std::sin(theta) / theta;
-    float c = (1.0f - std::cos(theta)) / (theta * theta);
-    return Mat3::Identity() + s * K + c * (K * K);
-}
+// exp_so3() (exact SO(3) exponential map / Rodrigues' formula, used to
+// perturb R below) now lives in math3D.h as the one shared implementation
+// -- see TODO/eigen-to-bla-migration.md. It matters here specifically
+// because R_new = exp([w]_x) R_old is the actual definition used to derive
+// J_rot, so this FD test must use the exact exponential, not the
+// first-order approximation (I + [w]_x) R, or the FD estimate would pick up
+// an O(h) contamination from the approximation itself (rather than being a
+// clean O(h^2) central-difference estimate).
 
 // ======================================================================
 // 1. BicubicField: check d_dr / d_dz against central differences of
@@ -149,8 +141,8 @@ static Mat3 exp_so3(const Vec3& w) {
 static void check_bicubic_point(float r0, float z0) {
     Mat2 jac0;
     CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, jac0);
-    const Vec2 ddr0 = jac0.col(0);
-    const Vec2 ddz0 = jac0.col(1);
+    const Vec2 ddr0 = jac0.Column(0);
+    const Vec2 ddz0 = jac0.Column(1);
 
     Mat2 dummy_jac;
     Vec2 val_rp = CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, dummy_jac);
@@ -188,13 +180,13 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 
     Mat3 J_numeric;
     for (int i = 0; i < 3; ++i) {
-        Vec3 dv = Vec3::Zero();
-        dv[i] = FD_STEP_LINEAR;
+        Vec3 dv = BLA::Zeros<3, 1, float>();
+        dv(i) = FD_STEP_LINEAR;
 
         Mat3 J_dummy;
         Vec3 Bp = model.evaluate(v_l + dv, J_dummy);
         Vec3 Bm = model.evaluate(v_l - dv, J_dummy);
-        J_numeric.col(i) = (Bp - Bm) / (2.0f * FD_STEP_LINEAR);
+        J_numeric.Column(i) = (Bp - Bm) / (2.0f * FD_STEP_LINEAR);
     }
 
     // Assuming you switched to norm_rel_error, otherwise use max_rel_error_mat
@@ -224,7 +216,7 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 }
 
 void test_magnet_model_jacobian_generic(void) {
-    MagnetModel model(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+    MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
     // z_l must stay in [-12,-0.5] (z=0 is NOT valid - it's the boundary
     // BICUBIC_FAR sits at -0.5, i.e. sensor plane is below the magnet).
@@ -241,7 +233,7 @@ void test_magnet_model_jacobian_at_origin(void) {
     // through the singularity), so central differences are well-defined
     // even though the *base* point requires the L'Hopital limit.
     // z_l chosen well away from the z=-0.5 domain edge for margin.
-    MagnetModel model(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+    MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     check_magnet_model_at(model, Vec3(0.0f, 0.0f, -1.0f));
     check_magnet_model_at(model, Vec3(0.0f, 0.0f, -6.0f));
 }
@@ -266,7 +258,7 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
         Vec3( 0.0f,  0.0f, -6.0f),   // the r = 0 branch
     };
 
-    MagnetModel unit(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+    MagnetModel unit(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     char msg[192];
 
     for (const Vec3& p : probes) {
@@ -274,17 +266,17 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
         const Vec3 B_unit = unit.evaluate(p, J_unit);
 
         for (float ratio : ratios) {
-            MagnetModel scaled(CALCULATED_BICUBIC_FIELD, Vec3::Zero(), Mat3::Identity(),
+            MagnetModel scaled(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>(), identity3(),
                                 ratio * BICUBIC_FIELD_REFERENCE_MT);
             Mat3 J_s;
             const Vec3 B_s = scaled.evaluate(p, J_s);
 
-            const float eB = max_rel_error_mat<3, 1>(B_s, (ratio * B_unit).eval());
-            const float eJ = max_rel_error_mat<3, 3>(J_s, (ratio * J_unit).eval());
+            const float eB = max_rel_error_mat<3, 1>(B_s, ratio * B_unit);
+            const float eJ = max_rel_error_mat<3, 3>(J_s, ratio * J_unit);
 
             snprintf(msg, sizeof(msg),
                      "strength ratio %.2f (%.0f mT) at p=(%.2f, %.2f, %.2f): B err %.2e, J err %.2e",
-                     ratio, ratio * BICUBIC_FIELD_REFERENCE_MT, p[0], p[1], p[2], eB, eJ);
+                     ratio, ratio * BICUBIC_FIELD_REFERENCE_MT, p(0), p(1), p(2), eB, eJ);
             TEST_ASSERT_TRUE_MESSAGE(eB < 1e-5f && eJ < 1e-5f, msg);
         }
     }
@@ -325,19 +317,19 @@ static void check_dipole_at(const Vec3& m, const Vec3& r) {
     // Column j is dB/dr_j by central difference.
     Mat3 J_numeric;
     for (int j = 0; j < 3; ++j) {
-        Vec3 dr = Vec3::Zero();
-        dr[j] = FD_STEP_LINEAR;
+        Vec3 dr = BLA::Zeros<3, 1, float>();
+        dr(j) = FD_STEP_LINEAR;
         Mat3 dummy;
-        const Vec3 B_plus  = dipole_field(m, (r + dr).eval(), dummy);
-        const Vec3 B_minus = dipole_field(m, (r - dr).eval(), dummy);
-        J_numeric.col(j) = (B_plus - B_minus) / (2.0f * FD_STEP_LINEAR);
+        const Vec3 B_plus  = dipole_field(m, r + dr, dummy);
+        const Vec3 B_minus = dipole_field(m, r - dr, dummy);
+        J_numeric.Column(j) = (B_plus - B_minus) / (2.0f * FD_STEP_LINEAR);
     }
 
     char msg[192];
     const float e = max_rel_error_mat<3, 3>(J_analytic, J_numeric);
     snprintf(msg, sizeof(msg),
              "dipole J mismatch at r=(%.2f, %.2f, %.2f), |r|=%.2f (rel err %.5f)",
-             r[0], r[1], r[2], r.norm(), e);
+             r(0), r(1), r(2), BLA::Norm(r), e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
 
     // Symmetry is not incidental: the implementation computes six entries and
@@ -345,10 +337,10 @@ static void check_dipole_at(const Vec3& m, const Vec3& r) {
     // is therefore minus the Hessian of a scalar potential. Asserted so that
     // an asymmetric edit fails here rather than producing a plausible-looking
     // solver that drifts.
-    const float asym = (J_analytic - J_analytic.transpose()).norm() / J_analytic.norm();
+    const float asym = BLA::Norm(J_analytic - ~J_analytic) / BLA::Norm(J_analytic);
     snprintf(msg, sizeof(msg),
              "dipole J not symmetric at r=(%.2f, %.2f, %.2f): rel asymmetry %.3e",
-             r[0], r[1], r[2], asym);
+             r(0), r(1), r(2), asym);
     TEST_ASSERT_TRUE_MESSAGE(asym < 1e-6f, msg);
 }
 
@@ -374,7 +366,7 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     // units-and-placement check, not a precision one. A wrong 1/mu0 factor
     // would show up here as a factor of ~8e5, and the bottom-face-vs-centre
     // error as tens of percent.
-    MagnetModel magnet(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+    MagnetModel magnet(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
 
     // On the magnet's axis, at the bottom of the table's z range. Far enough
     // out for the dipole limit to be close, still inside the interpolated
@@ -397,8 +389,8 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     const float e = max_rel_error_mat<3, 1>(B_dipole, B_table);
     snprintf(msg, sizeof(msg),
              "dipole vs table at z=%.1f: table (%.4f, %.4f, %.4f), dipole (%.4f, %.4f, %.4f), rel err %.4f",
-             v_l[2], B_table[0], B_table[1], B_table[2],
-             B_dipole[0], B_dipole[1], B_dipole[2], e);
+             v_l(2), B_table(0), B_table(1), B_table(2),
+             B_dipole(0), B_dipole(1), B_dipole(2), e);
     TEST_ASSERT_TRUE_MESSAGE(e < 0.05f, msg);
 }
 
@@ -426,7 +418,7 @@ void test_cross_magnet_terms_are_actually_present(void) {
     };
     ForwardModel fm(sensors, magnets);
 
-    const Mat3 R = Mat3::Identity();
+    const Mat3 R = identity3();
     char msg[224];
 
     // Across the knob's heave range: the share grows with lift, because the
@@ -437,8 +429,8 @@ void test_cross_magnet_terms_are_actually_present(void) {
     for (float standoff : standoffs) {
         const Vec3 t(0.0f, 0.0f, Positions::magnet_z_pos_from_pivot + standoff);
 
-        Eigen::Matrix<float, 9, 1> B_all;
-        Eigen::Matrix<float, 9, 6> J_unused;
+        Vector9f B_all;
+        Matrix9x6f J_unused;
         fm.evaluate(t, R, B_all, J_unused);
 
         // The same sensors, with the cross magnets present but inert.
@@ -446,19 +438,19 @@ void test_cross_magnet_terms_are_actually_present(void) {
             magnets[0].place(t, R), magnets[1].place(t, R), magnets[2].place(t, R),
         };
         MagnetPlacement inert[3] = { placements[0], placements[1], placements[2] };
-        for (int j = 0; j < 3; ++j) inert[j].moment_world = Vec3::Zero();
+        for (int j = 0; j < 3; ++j) inert[j].moment_world = BLA::Zeros<3, 1, float>();
 
-        Eigen::Matrix<float, 9, 1> B_paired;
+        Vector9f B_paired;
         for (int i = 0; i < 3; ++i) {
             Vec3 B_i;
-            Eigen::Matrix<float, 3, 6> J_i;
+            Matrix3x6f J_i;
             sensors[i].evaluate(placements[i],
                                 inert[(i + 1) % 3], inert[(i + 2) % 3],
                                 t, B_i, J_i);
-            B_paired.block<3, 1>(i * 3, 0) = B_i;
+            B_paired.Submatrix<3, 1>(i * 3, 0) = B_i;
         }
 
-        const float share = (B_all - B_paired).norm() / B_paired.norm();
+        const float share = BLA::Norm(B_all - B_paired) / BLA::Norm(B_paired);
         snprintf(msg, sizeof(msg),
                  "cross-magnet share at standoff %.1fmm is %.2f%%, expected roughly 1-5%%",
                  standoff, 100.0f * share);
@@ -480,8 +472,8 @@ static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
         const Mat3 magnet_rotations[3],
         const float magnet_strengths[3],
-        Eigen::Matrix<float, 9, 6>& J_analytic,
-        Eigen::Matrix<float, 9, 6>& J_numeric) {
+        Matrix9x6f& J_analytic,
+        Matrix9x6f& J_numeric) {
 
     MagnetModel magnets[3] = {
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0], magnet_strengths[0]),
@@ -496,38 +488,38 @@ static void compute_forward_model_jacobians(
     };
     ForwardModel fm(sensors, magnets);
 
-    Eigen::Matrix<float, 9, 1> residual0;
+    Vector9f residual0;
     fm.evaluate(t, R, residual0, J_analytic);
 
-    J_numeric = Eigen::Matrix<float, 9, 6>::Zero();
+    J_numeric = BLA::Zeros<9, 6, float>();
 
     // Translation columns (0..2)
     for (int i = 0; i < 3; ++i) {
-        Vec3 dt = Vec3::Zero();
-        dt[i] = FD_STEP_LINEAR;
+        Vec3 dt = BLA::Zeros<3, 1, float>();
+        dt(i) = FD_STEP_LINEAR;
 
-        Eigen::Matrix<float, 9, 1> res_p, res_m;
-        Eigen::Matrix<float, 9, 6> J_dummy;
+        Vector9f res_p, res_m;
+        Matrix9x6f J_dummy;
         fm.evaluate(t + dt, R, res_p, J_dummy);
         fm.evaluate(t - dt, R, res_m, J_dummy);
 
-        J_numeric.col(i) = (res_p - res_m) / (2.0f * FD_STEP_LINEAR);
+        J_numeric.Column(i) = (res_p - res_m) / (2.0f * FD_STEP_LINEAR);
     }
 
     // Rotation columns (3..5)
     for (int i = 0; i < 3; ++i) {
-        Vec3 dw = Vec3::Zero();
-        dw[i] = FD_STEP_ANGULAR;
+        Vec3 dw = BLA::Zeros<3, 1, float>();
+        dw(i) = FD_STEP_ANGULAR;
 
         Mat3 R_p = exp_so3(dw) * R;
         Mat3 R_m = exp_so3(-dw) * R;
 
-        Eigen::Matrix<float, 9, 1> res_p, res_m;
-        Eigen::Matrix<float, 9, 6> J_dummy;
+        Vector9f res_p, res_m;
+        Matrix9x6f J_dummy;
         fm.evaluate(t, R_p, res_p, J_dummy);
         fm.evaluate(t, R_m, res_m, J_dummy);
 
-        J_numeric.col(3 + i) = (res_p - res_m) / (2.0f * FD_STEP_ANGULAR);
+        J_numeric.Column(3 + i) = (res_p - res_m) / (2.0f * FD_STEP_ANGULAR);
     }
 }
 
@@ -537,7 +529,7 @@ void test_forward_model_jacobian_grid(void) {
     // Sensor gain/skew is no longer modeled here - see the comment on
     // compute_forward_model_jacobians(). Only magnet tilt/orientation varies.
     // Scenario A: Perfect Hardware
-    Mat3 tilts_perfect[3] = { Mat3::Identity(), Mat3::Identity(), Mat3::Identity() };
+    Mat3 tilts_perfect[3] = { identity3(), identity3(), identity3() };
 
     float strengths_perfect[3] = {
         BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT
@@ -599,14 +591,14 @@ void test_forward_model_jacobian_grid(void) {
                         Vec3 t(tx, ty, tz);
                         Mat3 R = exp_so3(r_vec);
                         
-                        Eigen::Matrix<float, 9, 6> J_analytic, J_numeric;
+                        Matrix9x6f J_analytic, J_numeric;
                         compute_forward_model_jacobians(t, R, hw.tilts, hw.strengths, J_analytic, J_numeric);
 
                         float e = max_rel_error_mat<9, 6>(J_analytic, J_numeric);
-                        
-                        snprintf(msg, sizeof(msg), 
-                                 "[%s] J mismatch at t=(%.2f, %.2f, %.2f). r=(%.2f, %.2f, %.2f) Max rel err: %.5f", 
-                                 hw.name, tx, ty, tz, r_vec[0], r_vec[1], r_vec[2], e);
+
+                        snprintf(msg, sizeof(msg),
+                                 "[%s] J mismatch at t=(%.2f, %.2f, %.2f). r=(%.2f, %.2f, %.2f) Max rel err: %.5f",
+                                 hw.name, tx, ty, tz, r_vec(0), r_vec(1), r_vec(2), e);
                         
                         TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg); // slightly looser tolerance for highly skewed combos
                         

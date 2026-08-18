@@ -79,8 +79,26 @@ too, not just the file.
 - **[`Performance.md`](Performance.md)** — Assembly/instruction-level
   profiling of `solve_knob_pose`; three completed optimization passes
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
-  ~50Hz to ~80Hz. Iteration-count telemetry and an on-device wall-clock
-  re-measurement of the combined changes are still open.
+  ~50Hz to ~80Hz, a fourth pass confirmed BLA inlines better than Eigen did
+  and put all three hand-unrolled forms back to clean BLA (two free, one
+  ~7.5% costlier but kept), and a fifth pass re-verified all of that plus a
+  brand-new hand-unrolled site (`dipole_field`'s Jacobian) after
+  `origin/experimental`'s cross-magnet forward-model refactor — three of
+  four candidates free-or-better, `BicubicField` still ~7.3-7.5% costlier
+  and still kept. Real build: Flash 328,208 B / RAM 70,888 B. Iteration-count
+  telemetry and an on-device wall-clock re-measurement (including the
+  cross-magnet refactor's own unverified cost) are still open.
+- **[`eigen-to-bla-migration.md`](eigen-to-bla-migration.md)** — Eigen
+  replaced with `BasicLinearAlgebra`, vendored and patched (dropped a
+  `Printable` base that was giving every matrix a hidden vtable pointer —
+  BLA now beats the Eigen baseline on both flash and RAM). Extended to cover
+  `origin/experimental`'s cross-magnet refactor, ported onto BLA rather than
+  merged as Eigen: new `MagnetPlacement`/`dipole_field` abstractions, a
+  `Mat2` alias and an `outer()` helper added to the shared BLA surface, and
+  `.x()`/`.y()`/`.z()` accessors added to the vendored copy itself (this
+  pass brought in enough more Eigen-idiom source that closing that gap once
+  beat hand-translating every call site). `constexpr` for the bicubic table
+  and on-device verification are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual
@@ -98,10 +116,10 @@ too, not just the file.
   boot-time averaging needs to become a proper "tare" step with sanity
   checks (rest position, polarization, residual) and a reject/retry path.
   Still a design sketch — no implementation decisions made yet.
-- **[`telemetry-rework.md`](telemetry-rework.md)** — Four bundled issues:
-  drop the hardcoded `rcond` stub, flatten `TelemetryController::publish()`'s
-  growing parameter list, add solver convergence telemetry, and add a
-  lightweight profiling API. None implemented yet.
+- **[`telemetry-rework.md`](telemetry-rework.md)** — Four bundled issues; the
+  hardcoded `rcond` stub is now gone (dropped upstream, ported as dropped).
+  Still open: flatten `TelemetryController::publish()`'s growing parameter
+  list, add solver convergence telemetry, and add a lightweight profiling API.
 
 ## Index — resolved (`resolved/`)
 
