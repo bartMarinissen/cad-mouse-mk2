@@ -17,8 +17,6 @@ static constexpr int ifloor(float x) noexcept {
     return (x < float(xi)) ? xi - 1 : xi;
 }
 
-
-
 // The 4-point cubic stencil spans [i0-1, i0+2]. Clamping i0 to
 // [1, NR-3] and j0 to [1, NZ-3] would keep the stencil entirely inside
 // the real grid with no ghost nodes and no per-fetch bounds checking -
@@ -47,7 +45,7 @@ static_assert(BICUBIC_ORIGIN.r == 0.0f,
 
 
 // Value and gradient (d/dr, d/dz, each a Vec2) at (r, z).
-void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, Vec2& d_dr, Vec2& d_dz) const noexcept {
+Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobian) const noexcept {
     /** This function works on the basis formulation of catmul-rom splines.
      * 
      * We interpolate based on 4 points: f0 f1 f2 f3
@@ -198,12 +196,14 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
     }
 
     // --- contract in z -------------------------------------------
-    value = row[0] * b0 + row[1] * b1 + row[2] * b2 + row[3] * b3;
+    Vec2 value = row[0] * b0 + row[1] * b1 + row[2] * b2 + row[3] * b3;
 
-    d_dr  = (row_deriv[0] * b0 + row_deriv[1] * b1 + row_deriv[2] * b2 + row_deriv[3] * b3) 
-            * dr_reciprocal_;
+    jacobian.col(0)  = ((row_deriv[0] * b0 + row_deriv[1] * b1 + row_deriv[2] * b2 + row_deriv[3] * b3)
+            * dr_reciprocal_);
 
     // row[] is independent of z, so the z-derivative weights apply directly
-    d_dz  = (row[0] * db0_du + row[1] * db1_du + row[2] * db2_du + row[3] * db3_du)
-            * dz_reciprocal_;
+    jacobian.col(1)  = ((row[0] * db0_du + row[1] * db1_du + row[2] * db2_du + row[3] * db3_du)
+            * dz_reciprocal_);
+    
+    return value;
 }

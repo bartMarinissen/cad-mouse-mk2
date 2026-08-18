@@ -89,11 +89,6 @@ too, not just the file.
   bundle calibration is now PC-initiated via `CAL_START`, closing the old
   accidental-entry bug. A knob-side exit gesture and `BundleState.cpp`'s
   `takeActivity()`-instead-of-`buttonBits()` bug are still open.
-- **[`cross-magnet-interference.md`](cross-magnet-interference.md)** —
-  Cross-magnet field coupling (measured 1.7–4.5% of the signal) is
-  quantified but not modelled in firmware; a Python-side fitting workaround
-  avoids the pose-residual cost at the price of physically meaningful fitted
-  parameters. A cheap dipole-correction fix is proposed, not implemented.
 - **[`multicore.md`](multicore.md)** — Proposed design: core1 runs the pose
   solve continuously, with sensor readings and poses crossing the core
   boundary as double buffers gated by a spinlocked counter held across the
@@ -118,6 +113,12 @@ archived file's own header has the detail.
   owner (`1883bc2`/`20f5f4d`); the remaining "circular coupling" was settled
   by deciding the accessor pattern *is* the rule — see `ARCHITECTURE.md` →
   "Controllers".
+- **[`resolved/cross-magnet-interference.md`](resolved/cross-magnet-interference.md)** —
+  Cross-magnet coupling (1.7–4.5% of the signal) was quantified but not
+  modelled, forcing the Python fit into a workaround that cost the absolute
+  field scale. Now modelled: every sensor sees every magnet, the non-paired
+  two as point dipoles. Live description is `design documentation/Math.md`
+  §3.6/§4.E. Not yet verified on hardware, including its cost.
 - **[`resolved/sensor-gain-calibration.md`](resolved/sensor-gain-calibration.md)** —
   Moving sensor gain/skew out of the solver. Now applied in
   `SensorController::read_mT()` from `CalibrationParams`; the last gap

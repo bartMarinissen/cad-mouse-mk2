@@ -117,14 +117,13 @@ Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
 
 // Return residual and other quality reports
 float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R){
-  const Vec3 measured[3] = {
-    Vec3(raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z]),
-    Vec3(raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z]),
-    Vec3(raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]),
-  };
+  const Vector9f measured = Vector9f(
+    raw[RAW_MAG1_X], raw[RAW_MAG1_Y], raw[RAW_MAG1_Z], 
+    raw[RAW_MAG2_X], raw[RAW_MAG2_Y], raw[RAW_MAG2_Z],
+    raw[RAW_MAG3_X], raw[RAW_MAG3_Y], raw[RAW_MAG3_Z]
+  );
 
   Vector9f *residual_vec_ptr = Config::statistics ? &statistics.last_residual : nullptr;
-  Matrix9x6f *jacobian_ptr   = Config::statistics ? &statistics.last_jacobian : nullptr;
 
   // Both `position` and `R` arrive carrying the caller's starting guess -- for
   // the live path that is the previous frame's pose -- and the solver refines
@@ -133,7 +132,7 @@ float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R){
   // solve_knob_pose also re-orthonormalizes R before returning, since it's now
   // long-lived state rather than rebuilt from scratch each call.
   const uint32_t before = micros();
-  float residual_magnitude = solve_knob_pose(position, R, forward_model_, measured, residual_vec_ptr, jacobian_ptr);
+  float residual_magnitude = solve_knob_pose(position, R, forward_model_, measured, residual_vec_ptr);
   const uint32_t after = micros();
   if (Config::statistics)
     statistics.update(after - before);
@@ -212,7 +211,6 @@ void Statistics::reset(){
   avg_residual = Vector9f::Zero();
   avg_residual_sq= Vector9f::Zero();
   last_residual = Vector9f::Zero();
-  last_jacobian= Matrix9x6f::Zero();
   time_tot = 0;
   n_time = 0;
 }

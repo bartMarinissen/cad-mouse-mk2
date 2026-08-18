@@ -3,37 +3,31 @@
 #include <magnet_model/forward_model.h>
 #include "math3D.h"
 
-using Vector6f = Eigen::Matrix<float, 6, 1>;
-using Vector9f = Eigen::Matrix<float, 9, 1>;
-using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
-using Matrix6x6f = Eigen::Matrix<float, 6, 6>;
 
 float __not_in_flash_func(solve_knob_pose)(
     Eigen::Vector3f& t,                // In/Out: Current translation guess
     Eigen::Matrix3f& R,                // In/Out: Current rotation matrix guess
     const ForwardModel& model,         // Your evaluated forward model
-    const Eigen::Vector3f measured_fields[3], // The 9x1 vector of Hall sensor readings
-    Vector9f *residual_out,
-    Matrix9x6f *Jacobian_out
+    const Vector9f &measured_fields, // The 9x1 vector of Hall sensor readings
+    Vector9f *residual_out
 ) {
     const int MAX_ITER = 10;
     const float TOLERANCE = 3e-3f; // Stop if the update step is smaller than this
+    // We run a weak version of LM where we always damp a fixed amount. This is
+    // the factor by which we damp. This is not a well-chosen constant. We should
+    // look at this better.
+    const float LM_FIXED_DAMPING = 0.02f;  
     
-    // Work directly in the caller's buffers whenever it supplied them. With
-    // Config::statistics enabled MotionController passes both on every call, so
-    // the copy that used to happen at the end of this function was live -- 63
-    // floats per solve -- rather than the exception.
-    Vector9f   residual_local;
-    Matrix9x6f jacobian_local;
-    Vector9f   &residual = (residual_out != nullptr) ? *residual_out : residual_local;
-    Matrix9x6f &jacobian = (Jacobian_out != nullptr) ? *Jacobian_out : jacobian_local;
+    Matrix9x6f jacobian;
+    // Work directly in the caller's buffer for the residual whenever it supplied them.
+    Vector9f residual_local;
+    Vector9f &residual = (residual_out != nullptr) ? *residual_out : residual_local;
 
     for (int iter = 0; iter < MAX_ITER; ++iter) {
-        // 1. Evaluate forward model (assuming it populates predicted fields)
+        // 1. Evaluate forward model 
         model.evaluate(t, R, residual, jacobian);
-        residual.block<3, 1>(0, 0) -= measured_fields[0];
-        residual.block<3, 1>(3, 0) -= measured_fields[1];
-        residual.block<3, 1>(6, 0) -= measured_fields[2];
+        // Calculate the residual
+        residual -= measured_fields;
 
         // 2. Construct Damped Normal Equations (Levenberg-Marquardt).
         // H = J^T J is symmetric, so only its lower triangle is worth computing:
@@ -49,12 +43,11 @@ float __not_in_flash_func(solve_knob_pose)(
                 H(j, i) = h;
             }
         }
-        const float LAMBDA = 0.02f;
-        H.diagonal().array() += LAMBDA;
+        H.diagonal().array() += LM_FIXED_DAMPING;
         Vector6f g = -jacobian.transpose() * residual;
-
-        auto ldlt = H.ldlt();
+        
         // 3. Solve the 6x6 linear system
+        auto ldlt = H.ldlt();
         Vector6f dx = ldlt.solve(g);
 
         if (!dx.allFinite()) {
@@ -86,10 +79,6 @@ float __not_in_flash_func(solve_knob_pose)(
             R = (dR * R).eval();
         }
     }
-    // No copy-out needed: when the caller supplied buffers, the loop above has
-    // been writing straight into them.
-    // TODO check jacobian well-formedness
-    // TODO deal with residual
 
     // R is now caller-persisted state, hot-started back in on the next call
     // rather than reset to identity every time -- so unlike a value that's

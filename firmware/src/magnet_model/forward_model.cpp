@@ -26,21 +26,36 @@ ForwardModel::ForwardModel(const CalibrationParams& cal)
           }
     {}
 
-void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t,  
-                            const Mat3& R, 
-                            Eigen::Matrix<float, 9, 1> &B_field, 
+void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t_world,
+                            const Mat3& R,
+                            Eigen::Matrix<float, 9, 1> &B_field,
                             Eigen::Matrix<float, 9, 6> &J) const {
 
-    for (int i = 0; i < 3; ++i) {
+    // Place each magnet in the world once, ahead of the sensor loop. Every
+    // sensor sees every magnet, so these three would otherwise be rebuilt
+    // three times each -- and R * magnet_rotation alone is a full 3x3 product.
+    const MagnetPlacement placements[3] = {
+        magnets_[0].place(t_world, R),
+        magnets_[1].place(t_world, R),
+        magnets_[2].place(t_world, R),
+    };
 
-        // 4. Rotate field back to global frame to get the field as measured by the sensors
-        Vec3 B_sensor_magnet_global;
+    for (int i = 0; i < 3; ++i) {
+        // Place for out values
+        Vec3 B_sensor_magnet_world;
         Eigen::Matrix<float, 3, 6> J_sensor_magnet;
 
-        sensors_[i].evaluate(magnets_[i], t, R, B_sensor_magnet_global, J_sensor_magnet);
+        // Sensor i sits under magnet i; the other two are the cross terms.
+        // Fixed by the knob's layout, so it is an index relationship rather
+        // than anything measured per call.
+        const int cross_a = (i + 1) % 3;
+        const int cross_b = (i + 2) % 3;
+        sensors_[i].evaluate(placements[i],
+                             placements[cross_a], placements[cross_b],
+                             t_world, B_sensor_magnet_world, J_sensor_magnet);
 
-        // 7. Copy blocks into the flat 9x6 global Jacobian and the expected field
+        // Copy blocks into the flat 9x6 world Jacobian and the expected field
         J.block<3, 6>(i * 3, 0) = J_sensor_magnet;
-        B_field.block<3, 1>(i * 3, 0) = B_sensor_magnet_global;
+        B_field.block<3, 1>(i * 3, 0) = B_sensor_magnet_world;
     }
 }

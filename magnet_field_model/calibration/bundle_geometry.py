@@ -83,38 +83,39 @@ NOMINAL_GAIN_SIGN = +1.0
 # (N_SENSORS, N_MAGNETS) weights, applied to the per-(sensor, magnet) local
 # field and its gradient at the one point they enter the model.
 #
-# PAIRED_ONLY mirrors the firmware exactly: ForwardModel::evaluate() in
-# firmware/src/magnet_model/forward_model.cpp evaluates sensors_[i] against
-# magnets_[i] and nothing else. ALL_MAGNETS is the physically complete model,
-# where every sensor also picks up the other two magnets ~28.58mm away.
+# ALL_MAGNETS is both the physically complete model and the one the firmware
+# runs: ForwardModel::evaluate() evaluates every sensor against every magnet,
+# its own through the bicubic table and the other two (~28.58mm away) through
+# dipole_field(). PAIRED_ONLY is what the firmware used to do, kept because
+# tests use it to isolate one magnet's contribution.
 #
 # The two differ by 1.7-4.5% of the field on the captured runs, growing with
 # knob-to-sensor distance: the paired magnet's field falls off fast while the
 # far ones barely change, so their share grows as the knob lifts.
 #
-# Fitting under ALL_MAGNETS and then handing the result to the firmware's
-# single-magnet model leaves precisely that term uncompensated - measured on
-# hardware as a pose-residual regression from ~1% to ~3%. The fitted gain,
-# offset and strength are the values that make a *three*-magnet model match
-# the data; the firmware runs a one-magnet model, so the term they were
-# quietly absorbing simply vanishes.
+# This was PAIRED_ONLY for a while, deliberately matching a firmware that
+# could not model cross-talk. That cost the absolute field scale: cross-talk
+# is what separates magnet *strength* from magnet *distance* (a strength
+# change scales the near and far contributions equally, a z-shift changes them
+# at very different rates), so without it the two are near-degenerate over the
+# ~3mm of heave the hardware gives. See
+# test_absolute_strength_needs_cross_magnet_coupling. With the firmware
+# modelling the term, the fit no longer has to absorb it into
+# gain/offset/strength, and the fitted numbers mean what they say again.
 #
-# So this deliberately matches the firmware rather than physics. The
-# consequence is worth stating plainly: under PAIRED_ONLY the fitted values
-# are *effective* parameters for the model that actually runs, not true
-# magnet geometry - they absorb cross-magnet field into gain/offset/strength,
-# exactly as the old hand-tuned Config constants did. The fit's own reported
-# residual gets worse (the model really is less complete), while the pose
-# residual on device gets better. That trade is the whole point.
-#
-# To restore the physically-complete fit once the firmware models cross-magnet
-# interference (TODO/cross-magnet-interference.md), set SENSOR_MAGNET_COUPLING
-# to ALL_MAGNETS. That is the entire change - every prediction and derivative
-# below is linear in the masked quantities, so nothing else needs touching.
+# The two models are not identical even under ALL_MAGNETS, and it is worth
+# knowing which way: this computes the cross terms with the same exact
+# magpylib cylinder solution it uses for the paired magnet, while the firmware
+# approximates them as point dipoles to keep them cheap. That approximation is
+# 0.14-0.40% of the cross term at the geometry it is used at, i.e. under 0.02%
+# of the total field - far below the ~0.3% residual either model achieves, so
+# it is not a discrepancy the fit can see. Do not "fix" it by approximating
+# here too: the exact solution is free on a PC and this is the reference the
+# firmware's approximation gets judged against.
 PAIRED_ONLY: NDArray[np.float64] = np.eye(N_SENSORS, N_MAGNETS)
 ALL_MAGNETS: NDArray[np.float64] = np.ones((N_SENSORS, N_MAGNETS))
 
-SENSOR_MAGNET_COUPLING: NDArray[np.float64] = PAIRED_ONLY
+SENSOR_MAGNET_COUPLING: NDArray[np.float64] = ALL_MAGNETS
 
 
 def _skew(v: NDArray[np.float64]) -> NDArray[np.float64]:

@@ -1,3 +1,35 @@
+> **RESOLVED — implemented, archived for the reasoning.**
+>
+> The firmware models cross-magnet interference. `ForwardModel::evaluate()`
+> now evaluates every sensor against every magnet: its own through the
+> bicubic near field, the other two through `dipole_field()`, a closed-form
+> point dipole — the approach this file proposed. `SENSOR_MAGNET_COUPLING` in
+> `calibration/bundle_geometry.py` is back to `ALL_MAGNETS`, so the fit and
+> the firmware describe the same physics again.
+>
+> The live description is **`design documentation/Math.md` §3.6 and §4.E**
+> for the model and its Jacobian, and **`ARCHITECTURE.md`** for where it sits
+> in the pipeline. This file is kept for the measurements and for why the
+> workaround existed.
+>
+> On the open questions at the bottom: the moment comes from the same
+> polarization and volume the bicubic table is generated at, scaled by the
+> same per-magnet strength ratio, so the two models cannot describe magnets
+> of different strength (`DIPOLE_MOMENT_AT_REFERENCE_MT_MM3`). It went on
+> `MagnetModel` as a free function plus two precomputed members rather than a
+> separate class. There is no handoff discontinuity to worry about: the
+> paired magnet and the cross magnets occupy ranges that never overlap, so
+> the two models are never both in play at one distance.
+>
+> **Not verified on hardware.** The numbers below were measured on captured
+> data and the firmware reproduces them (1.54/2.76/4.83% across the standoff
+> range), but nothing here has run on a board, and the cost question this
+> file did not ask — whether nine pairs still fits the solver's timing budget
+> — is open. Static estimates suggest ~+40%; `TODO/Performance.md` is
+> explicit that those are not a substitute for a `micros()` reading.
+
+---
+
 # Model cross-magnet interference
 
 **Measured: 1.7–4.5% of the field, growing with knob-to-sensor distance.**

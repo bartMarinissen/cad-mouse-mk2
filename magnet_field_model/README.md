@@ -106,7 +106,7 @@ magnet strength, holding everything else at nominal").
 describe the same thing from opposite ends: a sensor reading 5% high and its
 magnet being 5% strong differ only through cross-talk, which is a small
 fraction of the signal and comparable to the model error
-(`../TODO/cross-magnet-interference.md` owns that measurement). An earlier
+(`../TODO/resolved/cross-magnet-interference.md` owns that measurement). An earlier
 version fixed this with a runtime pass — freeing an isotropic `gain_iso`
 parameter and then transferring it into strength via a final `det(G)=1`
 renormalization stage. That machinery is gone: `GAIN_BASIS`

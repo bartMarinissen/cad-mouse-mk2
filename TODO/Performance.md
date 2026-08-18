@@ -157,7 +157,7 @@ What changed:
   "Eigen isn't inlining" finding above on its own.
 - Sensor gain moved out of the solver's hot path: `VirtualSensor` no longer carries
   a `sensor_gain` member, and `VirtualSensor::evaluate` (`virtual_sensor.cpp`) dropped the
-  three gain multiplies (`B_field_global = sensor_gain * ...`, two
+  three gain multiplies (`B_field_world = sensor_gain * ...`, two
   `J.block<3,3>(...) = sensor_gain * ...`) it used to do on every call — i.e.
   every sensor, every LM iteration. Gain correction now happens once per raw
   sensor read, in the new `SensorController::read_mT()`

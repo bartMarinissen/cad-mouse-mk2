@@ -5,9 +5,12 @@
 using Vec3 = Eigen::Vector3f;
 using Vec2 = Eigen::Vector2f;
 using Mat3 = Eigen::Matrix3f;
+using Mat2 = Eigen::Matrix2f;
 
+using Vector6f = Eigen::Matrix<float, 6, 1>;
 using Vector9f = Eigen::Matrix<float, 9, 1>;
 using Matrix9x6f = Eigen::Matrix<float, 9, 6>;
+using Matrix6x6f = Eigen::Matrix<float, 6, 6>;
 
 inline Mat3 skew_matrix(const Vec3& v) {
     Mat3 m;

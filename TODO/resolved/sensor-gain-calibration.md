@@ -60,7 +60,7 @@ being owned/reachable anywhere either).
   LittleFS read gets added behind.
 - ~~Does `Sensor::sensor_gain` become redundant once `SensorController`
   pre-corrects readings?~~ **Moot.** `Sensor` no longer has that field at all —
-  it holds only `sensor_pos_global`. Gain lives solely in `SensorController`,
+  it holds only `sensor_pos_world`. Gain lives solely in `SensorController`,
   and the solver never sees an uncorrected reading, so there is no half-active
   second path. The "Current state" section above is stale on this point.
 - ~~Where does per-magnet strength live?~~ **Answered.** `MagnetModel` owns a
@@ -69,7 +69,7 @@ being owned/reachable anywhere either).
   `magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT`. Sensor-side correction
   would have been numerically identical while `ForwardModel` pairs sensor *i*
   with magnet *i* one-to-one, but that stops holding once cross-magnet
-  interference is modelled (`TODO/cross-magnet-interference.md`), and strength
+  interference is modelled (`TODO/resolved/cross-magnet-interference.md`), and strength
   is a property of the magnet. Note gain and strength are one degree of freedom
   split by the fit's `det(G)=1` gauge — neither is meaningful without the
   other.

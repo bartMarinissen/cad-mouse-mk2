@@ -23,7 +23,6 @@ struct Statistics {
 
   // Latest values
   Vector9f last_residual = {};
-  Matrix9x6f last_jacobian = {};
 
   void update(uint32_t time = 0);
   void reset();

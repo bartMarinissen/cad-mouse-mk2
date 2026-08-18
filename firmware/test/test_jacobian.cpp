@@ -147,17 +147,18 @@ static Mat3 exp_so3(const Vec3& w) {
 // ======================================================================
 
 static void check_bicubic_point(float r0, float z0) {
-    Vec2 val0, ddr0, ddz0;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, val0, ddr0, ddz0);
+    Mat2 jac0;
+    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, jac0);
+    const Vec2 ddr0 = jac0.col(0);
+    const Vec2 ddz0 = jac0.col(1);
 
-    Vec2 val_rp, val_rm, dummy_a, dummy_b;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, val_rp, dummy_a, dummy_b);
-    CALCULATED_BICUBIC_FIELD.evaluate(r0 - FD_STEP_LINEAR, z0, val_rm, dummy_a, dummy_b);
+    Mat2 dummy_jac;
+    Vec2 val_rp = CALCULATED_BICUBIC_FIELD.evaluate(r0 + FD_STEP_LINEAR, z0, dummy_jac);
+    Vec2 val_rm = CALCULATED_BICUBIC_FIELD.evaluate(r0 - FD_STEP_LINEAR, z0, dummy_jac);
     Vec2 ddr_num = (val_rp - val_rm) / (2.0f * FD_STEP_LINEAR);
 
-    Vec2 val_zp, val_zm;
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 + FD_STEP_LINEAR, val_zp, dummy_a, dummy_b);
-    CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 - FD_STEP_LINEAR, val_zm, dummy_a, dummy_b);
+    Vec2 val_zp = CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 + FD_STEP_LINEAR, dummy_jac);
+    Vec2 val_zm = CALCULATED_BICUBIC_FIELD.evaluate(r0, z0 - FD_STEP_LINEAR, dummy_jac);
     Vec2 ddz_num = (val_zp - val_zm) / (2.0f * FD_STEP_LINEAR);
 
     char msg[128];
@@ -290,7 +291,184 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
 }
 
 // ======================================================================
-// 3. ForwardModel: Grid Sweep & Calibration State Validation
+// 3. dipole_field: the far-field model used for the two magnets a sensor
+//    is NOT paired with. Same finite-difference treatment as the
+//    interpolated path -- it is a hand-derived Jacobian like every other
+//    link in the chain, and fails just as silently.
+// ======================================================================
+
+// Displacements at the geometry this model is actually used at: magnets sit a
+// triangle side apart (Positions::triangle_sidelength_mm = 28.58), a few mm to
+// a couple of cm above the sensor plane. Deliberately NOT probed near the
+// source -- dipole_field has no r->0 branch because nothing ever calls it
+// there, and probing close would test an approximation the design never
+// relies on.
+static const Vec3 DIPOLE_TEST_POINTS[] = {
+    Vec3( 28.58f,   0.0f,  -6.0f),
+    Vec3( 28.58f,   0.0f,  -9.0f),
+    Vec3( 20.0f,   20.6f, -15.0f),   // generic azimuth, no zero component
+    Vec3(  0.0f,   28.58f, -26.0f),
+    Vec3(-15.0f,   24.3f,  -3.0f),   // asymmetric
+};
+
+// A moment that is not axis-aligned, so a term that happens to vanish for
+// m = (0, 0, -M) cannot hide. The real caller passes the magnet's own axis,
+// but the formula is general and the test should exercise it as such.
+static const Vec3 DIPOLE_TEST_MOMENT(0.21f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3,
+                                     -0.34f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3,
+                                     -0.91f * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3);
+
+static void check_dipole_at(const Vec3& m, const Vec3& r) {
+    Mat3 J_analytic;
+    dipole_field(m, r, J_analytic);
+
+    // Column j is dB/dr_j by central difference.
+    Mat3 J_numeric;
+    for (int j = 0; j < 3; ++j) {
+        Vec3 dr = Vec3::Zero();
+        dr[j] = FD_STEP_LINEAR;
+        Mat3 dummy;
+        const Vec3 B_plus  = dipole_field(m, (r + dr).eval(), dummy);
+        const Vec3 B_minus = dipole_field(m, (r - dr).eval(), dummy);
+        J_numeric.col(j) = (B_plus - B_minus) / (2.0f * FD_STEP_LINEAR);
+    }
+
+    char msg[192];
+    const float e = max_rel_error_mat<3, 3>(J_analytic, J_numeric);
+    snprintf(msg, sizeof(msg),
+             "dipole J mismatch at r=(%.2f, %.2f, %.2f), |r|=%.2f (rel err %.5f)",
+             r[0], r[1], r[2], r.norm(), e);
+    TEST_ASSERT_TRUE_MESSAGE(e < 0.01f, msg);
+
+    // Symmetry is not incidental: the implementation computes six entries and
+    // mirrors three, which is only valid because the field is curl-free and J
+    // is therefore minus the Hessian of a scalar potential. Asserted so that
+    // an asymmetric edit fails here rather than producing a plausible-looking
+    // solver that drifts.
+    const float asym = (J_analytic - J_analytic.transpose()).norm() / J_analytic.norm();
+    snprintf(msg, sizeof(msg),
+             "dipole J not symmetric at r=(%.2f, %.2f, %.2f): rel asymmetry %.3e",
+             r[0], r[1], r[2], asym);
+    TEST_ASSERT_TRUE_MESSAGE(asym < 1e-6f, msg);
+}
+
+void test_dipole_field_jacobian(void) {
+    for (const Vec3& r : DIPOLE_TEST_POINTS) {
+        check_dipole_at(DIPOLE_TEST_MOMENT, r);
+    }
+}
+
+void test_dipole_matches_the_magnet_the_table_models(void) {
+    // The two models have to describe the SAME magnet: the table is generated
+    // from a 6x6mm cylinder at BICUBIC_FIELD_REFERENCE_MT, and the dipole is
+    // supposed to be that cylinder's far-field limit. Nothing else in the
+    // suite would notice a moment that is off by a constant factor, or a
+    // dipole placed at the magnet's bottom face instead of its centre -- both
+    // produce a smooth, self-consistent, finite-difference-clean field that is
+    // simply the wrong size.
+    //
+    // The check is against MagnetModel::evaluate at the far edge of the
+    // table's domain, where both models are valid at once. Agreement there is
+    // limited by the dipole approximation itself (the cylinder is not a point
+    // at 10mm), so the tolerance is percent-scale on purpose -- this is a
+    // units-and-placement check, not a precision one. A wrong 1/mu0 factor
+    // would show up here as a factor of ~8e5, and the bottom-face-vs-centre
+    // error as tens of percent.
+    MagnetModel magnet(CALCULATED_BICUBIC_FIELD, Vec3::Zero());
+
+    // On the magnet's axis, at the bottom of the table's z range. Far enough
+    // out for the dipole limit to be close, still inside the interpolated
+    // domain. Local frame: origin at the bottom face, +z along polarization.
+    const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.z);
+
+    Mat3 J_table;
+    const Vec3 B_table = magnet.evaluate(v_l, J_table);
+
+    // Polarization is along local -z, so the moment vector is -|m| * z_hat.
+    const Vec3 m(0.0f, 0.0f, -magnet.moment_mT_mm3);
+    // Displacement from the DIPOLE (at the centre) to the field point, which
+    // is what makes MAGNET_HALF_HEIGHT_MM load-bearing here.
+    const Vec3 r = v_l - Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM);
+
+    Mat3 J_dipole;
+    const Vec3 B_dipole = dipole_field(m, r, J_dipole);
+
+    char msg[224];
+    const float e = max_rel_error_mat<3, 1>(B_dipole, B_table);
+    snprintf(msg, sizeof(msg),
+             "dipole vs table at z=%.1f: table (%.4f, %.4f, %.4f), dipole (%.4f, %.4f, %.4f), rel err %.4f",
+             v_l[2], B_table[0], B_table[1], B_table[2],
+             B_dipole[0], B_dipole[1], B_dipole[2], e);
+    TEST_ASSERT_TRUE_MESSAGE(e < 0.05f, msg);
+}
+
+void test_cross_magnet_terms_are_actually_present(void) {
+    // Everything else here is a self-consistency check: the finite-difference
+    // tests compare the model against its own derivative, so they would pass
+    // just as happily if the cross-magnet contribution were silently zero.
+    // TODO/resolved/cross-magnet-interference.md measured that contribution at
+    // 1.7-4.5% of the field on captured data, so this asserts it is present
+    // and of that order.
+    //
+    // Paired-only is obtained by zeroing the cross magnets' moments rather
+    // than by a second code path: dipole_field returns zero field and zero
+    // gradient for m = 0, so this is the same arithmetic with the term
+    // switched off, not an independent reimplementation to disagree with.
+    MagnetModel magnets[3] = {
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2]),
+    };
+    VirtualSensor sensors[3] = {
+        VirtualSensor(SENSOR_POS[0]),
+        VirtualSensor(SENSOR_POS[1]),
+        VirtualSensor(SENSOR_POS[2]),
+    };
+    ForwardModel fm(sensors, magnets);
+
+    const Mat3 R = Mat3::Identity();
+    char msg[224];
+
+    // Across the knob's heave range: the share grows with lift, because the
+    // paired magnet's field falls off fast while the cross magnets, a fixed
+    // triangle side away, barely change.
+    const float standoffs[] = { 4.3f, 6.0f, 8.0f };
+
+    for (float standoff : standoffs) {
+        const Vec3 t(0.0f, 0.0f, Positions::magnet_z_pos_from_pivot + standoff);
+
+        Eigen::Matrix<float, 9, 1> B_all;
+        Eigen::Matrix<float, 9, 6> J_unused;
+        fm.evaluate(t, R, B_all, J_unused);
+
+        // The same sensors, with the cross magnets present but inert.
+        MagnetPlacement placements[3] = {
+            magnets[0].place(t, R), magnets[1].place(t, R), magnets[2].place(t, R),
+        };
+        MagnetPlacement inert[3] = { placements[0], placements[1], placements[2] };
+        for (int j = 0; j < 3; ++j) inert[j].moment_world = Vec3::Zero();
+
+        Eigen::Matrix<float, 9, 1> B_paired;
+        for (int i = 0; i < 3; ++i) {
+            Vec3 B_i;
+            Eigen::Matrix<float, 3, 6> J_i;
+            sensors[i].evaluate(placements[i],
+                                inert[(i + 1) % 3], inert[(i + 2) % 3],
+                                t, B_i, J_i);
+            B_paired.block<3, 1>(i * 3, 0) = B_i;
+        }
+
+        const float share = (B_all - B_paired).norm() / B_paired.norm();
+        snprintf(msg, sizeof(msg),
+                 "cross-magnet share at standoff %.1fmm is %.2f%%, expected roughly 1-5%%",
+                 standoff, 100.0f * share);
+        TEST_ASSERT_TRUE_MESSAGE(share > 0.005f && share < 0.10f, msg);
+        TEST_MESSAGE(msg);
+    }
+}
+
+// ======================================================================
+// 4. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
 // Updated to accept hardware calibration states.
@@ -452,15 +630,41 @@ void test_forward_model_jacobian_grid(void) {
 void setUp(void) {}
 void tearDown(void) {}
 
-void setup() {
-    delay(2000); // let serial monitor attach
+// The suite itself, kept in one place because there are two entry points into
+// it: the board runs setup()/loop(), the host runs main(). Adding a test to
+// one and not the other is exactly the kind of divergence that would make the
+// two environments quietly disagree about what "passing" means.
+// Returns UNITY_END()'s failure count.
+static int run_all_tests() {
     UNITY_BEGIN();
     RUN_TEST(test_bicubic_field_derivatives);
     RUN_TEST(test_magnet_model_jacobian_generic);
     RUN_TEST(test_magnet_model_jacobian_at_origin);
     RUN_TEST(test_magnet_strength_scales_field_and_jacobian);
+    RUN_TEST(test_dipole_field_jacobian);
+    RUN_TEST(test_dipole_matches_the_magnet_the_table_models);
+    RUN_TEST(test_cross_magnet_terms_are_actually_present);
     RUN_TEST(test_forward_model_jacobian_grid);
-    UNITY_END();
+    return UNITY_END();
+}
+
+#ifdef ARDUINO
+
+void setup() {
+    delay(2000); // let serial monitor attach
+    run_all_tests();
 }
 
 void loop() {}
+
+#else
+
+// env:native_test (platformio.ini) builds without a framework, so there is no
+// setup()/loop() for anything to call -- the host runner starts at main(), and
+// the failure count has to come back as the exit status for `pio test` to
+// notice a failure at all.
+int main() {
+    return run_all_tests();
+}
+
+#endif

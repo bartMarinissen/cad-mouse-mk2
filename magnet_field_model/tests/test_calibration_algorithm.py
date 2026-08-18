@@ -238,11 +238,24 @@ def test_magnet_strength_is_weakly_identified_at_realistic_z_travel():
     )
 
 
-def test_tight_differential_prior_makes_magnets_equal():
+def test_tight_differential_prior_pulls_magnets_together():
     """The default differential prior is ~15x tighter than the common-mode one,
     which is a deliberate statement that magnets from one batch are near
-    identical. Check it actually binds: the fitted strengths should come out
-    the same to well under a percent even when the truth says otherwise."""
+    identical. Check it actually binds: a 10% injected spread should come back
+    shrunk several-fold.
+
+    It does NOT come back flattened, and that is the interesting part. Under
+    SENSOR_MAGNET_COUPLING = PAIRED_ONLY this landed at ~0.003 - the data
+    carried almost no information about individual magnet strengths, so the
+    posterior was very nearly the prior. Cross-magnet coupling is what makes
+    them separately identifiable (a strength change scales the near and far
+    contributions equally, a z-shift does not), so the fit now has something
+    real to weigh the prior against and settles at a compromise, ~0.02.
+
+    So the number moving up is the identifiability improving, not the prior
+    weakening. The companion test below is what pins that reading: loosen the
+    prior and the spread grows further still.
+    """
     rng = np.random.default_rng(25)
     truth = np.zeros(N_SHARED_PARAMS)
     set_strength_vector(truth, [0.06, -0.04, 0.02])
@@ -251,11 +264,19 @@ def test_tight_differential_prior_makes_magnets_equal():
         _synthetic_datasets(BundleGeometry.from_shared(truth), rng), n_frames=60, verbose=False
     )
     strengths = result.geometry.magnet_strength
-    assert np.ptp(strengths) < 0.01, f"magnets not pulled together: {strengths}"
+    assert np.ptp(strengths) < 0.03, f"magnets not pulled together: {strengths}"
 
 
 def test_loosening_the_differential_prior_lets_magnets_differ():
-    """The companion: the constraint is the prior, not the parameterization."""
+    """The companion: the constraint is the prior, not the parameterization.
+
+    The gap between this and the test above is narrower than it used to be
+    (~0.037 against ~0.021, where under PAIRED_ONLY it was ~0.035 against
+    ~0.003). Same cause: with cross-magnet coupling the data constrains the
+    individual strengths itself, so relaxing the prior has less left to
+    release. Both thresholds sit either side of 0.03 deliberately - that
+    boundary is where the two regimes now separate.
+    """
     from calibration.bundle_params import RegularizationSigmas
 
     rng = np.random.default_rng(26)
@@ -419,9 +440,25 @@ def test_real_run_residual_improves():
 
 @pytest.mark.skipif(len(_real_runs()) < 2, reason="need at least two runs")
 def test_real_runs_agree_with_each_other():
-    """Three captures of the same hardware must produce the same parameters,
-    well inside the priors. This is the check that would have caught the old
-    calibrator immediately."""
+    """Three captures must produce the same parameters, well inside the priors.
+    This is the check that would have caught the old calibrator immediately.
+
+    Read the assertions narrowly: the three captures are NOT the same physical
+    configuration. Magnets went in and out of the harness between them and may
+    have been swapped (see calibration_runs/README.md); only the sensors and
+    PCB are common. What this pins is therefore the *sensor* parameters, plus
+    the two magnet quantities that survive the difference:
+
+    - in-plane magnet shape, which really is stable to ~0.03mm, and
+    - everything else only against its own prior width, which for magnet
+      strength is wide enough to swallow the ~19% the reseating produces.
+
+    In particular this does not, and cannot, pin magnet seating depth:
+    MAGNET_POS_BASIS gauge-fixes out-of-plane motion entirely, so a z reseat
+    projects to exactly zero and is absorbed into the per-frame poses. If a
+    future capture reseats magnets hard enough to fail this test, suspect the
+    tilt and strength terms, not the positions.
+    """
     results = []
     for path in _real_runs():
         raw = json.loads(path.read_text())
