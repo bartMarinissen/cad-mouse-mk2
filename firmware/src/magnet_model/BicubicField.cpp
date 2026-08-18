@@ -130,33 +130,29 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
     const float t2 = t * t, t3 = t2 * t;
     const float u2 = u * u, u3 = u2 * u;
 
-    // Because BLA::Matrix can't be constexpr either (TODO/eigen-to-bla-migration.md
-    // left that explicitly out of scope), these are left repeated and not simplified
+    // The basis matrix from this function's own header comment above,
+    // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1). Still not
+    // constexpr -- BLA::Matrix has no constexpr constructor
+    // (TODO/eigen-to-bla-migration.md left that out of scope) -- so this is
+    // a normal local, built fresh each call the same as the weights it
+    // produces; the "compute once per evaluate(), not once per row" hoisting
+    // is unchanged; only how a0..b3 are computed changed, not when
+    // (TODO/Performance.md).
+    using Mat4 = BLA::Matrix<4, 4, float>;
+    using Vec4 = BLA::Matrix<4, 1, float>;
+    const Mat4 basis(0.0f, -1.0f,  2.0f, -1.0f,
+                      2.0f,  0.0f, -5.0f,  3.0f,
+                      0.0f,  1.0f,  4.0f, -3.0f,
+                      0.0f,  0.0f, -1.0f,  1.0f);
 
-    // The standard Catmull-ROM basis weights for t
-    float a0 =      -0.5f * t  +        t2 - 0.5f * t3;
-    float a1 = 1.0f            - 2.5f * t2 + 1.5f * t3;
-    float a2 =       0.5f * t  + 2.0f * t2 - 1.5f * t3;
-    float a3 =                 - 0.5f * t2 + 0.5f * t3;
+    // The standard Catmull-Rom basis weights for t, and their derivatives.
+    // a4 = [a0,a1,a2,a3], da4_dt = [da0_dt,da1_dt,da2_dt,da3_dt].
+    Vec4 a4    = 0.5f * (basis * Vec4(1.0f, t, t2, t3));
+    const Vec4 da4_dt = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * t, 3.0f * t2));
 
-    // The standard Catmull-ROM basis weights for u
-    float b0 =      -0.5f * u  +        u2 - 0.5f * u3;
-    float b1 = 1.0f            - 2.5f * u2 + 1.5f * u3;
-    float b2 =       0.5f * u  + 2.0f * u2 - 1.5f * u3;
-    float b3 =                 - 0.5f * u2 + 0.5f * u3;
-
-    // The derivatives of the basis weights for t
-    const float da0_dt = -0.5f + 2.0f * t - 1.5f * t2;
-    const float da1_dt =        -5.0f * t + 4.5f * t2;
-    const float da2_dt =  0.5f + 4.0f * t - 4.5f * t2;
-    const float da3_dt =        -1.0f * t + 1.5f * t2;
-
-    // The derivatives of the basis weights for u
-    const float db0_du = -0.5f + 2.0f * u - 1.5f * u2;
-    const float db1_du =        -5.0f * u + 4.5f * u2;
-    const float db2_du =  0.5f + 4.0f * u - 4.5f * u2;
-    const float db3_du =        -1.0f * u + 1.5f * u2;
-
+    // Same, for u.
+    Vec4 b4    = 0.5f * (basis * Vec4(1.0f, u, u2, u3));
+    const Vec4 db4_du = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * u, 3.0f * u2));
 
     // --- Linear extension outside of the grid ---------------------
     // If there is overshoot (i.e. if t_overshoot or u_overshoot aren't zero) then here we let that
@@ -164,8 +160,8 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
     // Note that since our function f(t) is computed as \sum_i a_i(t) * p_i
     // that df(t)/dt = \sum_i da_i(t)/dt * pi
     // (is this worth the extra float multiplications and additions?)
-    a0 += t_overshoot * da0_dt;  a1 += t_overshoot * da1_dt;  a2 += t_overshoot * da2_dt;  a3 += t_overshoot * da3_dt;
-    b0 += u_overshoot * db0_du;  b1 += u_overshoot * db1_du;  b2 += u_overshoot * db2_du;  b3 += u_overshoot * db3_du;
+    a4 += t_overshoot * da4_dt;
+    b4 += u_overshoot * db4_du;
 
     // --- contract in r, for each of the 4 rows in z ---------------
     Vec2 row[4], row_deriv[4];
@@ -178,8 +174,8 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
             const Vec2 p1 = grid_[jj][i0    ];
             const Vec2 p2 = grid_[jj][i0 + 1];
             const Vec2 p3 = grid_[jj][i0 + 2];
-            row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
-            row_deriv[k] = p0 * da0_dt + p1 * da1_dt + p2 * da2_dt + p3 * da3_dt;
+            row[k]       = p0 * a4(0) + p1 * a4(1) + p2 * a4(2) + p3 * a4(3);
+            row_deriv[k] = p0 * da4_dt(0) + p1 * da4_dt(1) + p2 * da4_dt(2) + p3 * da4_dt(3);
         }
     } else {
         // On-axis patch (r in [0, dr)): the stencil needs a virtual
@@ -193,18 +189,18 @@ void __not_in_flash_func(BicubicField::evaluate)(float r, float z, Vec2& value, 
             const Vec2 p2 = grid_[jj][1];
             const Vec2 p0(-p2(0), p2(1));
             const Vec2 p3 = grid_[jj][2];
-            row[k]       = p0 * a0 + p1 * a1 + p2 * a2 + p3 * a3;
-            row_deriv[k] = p0 * da0_dt + p1 * da1_dt + p2 * da2_dt + p3 * da3_dt;
+            row[k]       = p0 * a4(0) + p1 * a4(1) + p2 * a4(2) + p3 * a4(3);
+            row_deriv[k] = p0 * da4_dt(0) + p1 * da4_dt(1) + p2 * da4_dt(2) + p3 * da4_dt(3);
         }
     }
 
     // --- contract in z -------------------------------------------
-    value = row[0] * b0 + row[1] * b1 + row[2] * b2 + row[3] * b3;
+    value = row[0] * b4(0) + row[1] * b4(1) + row[2] * b4(2) + row[3] * b4(3);
 
-    d_dr  = (row_deriv[0] * b0 + row_deriv[1] * b1 + row_deriv[2] * b2 + row_deriv[3] * b3) 
+    d_dr  = (row_deriv[0] * b4(0) + row_deriv[1] * b4(1) + row_deriv[2] * b4(2) + row_deriv[3] * b4(3))
             * dr_reciprocal_;
 
     // row[] is independent of z, so the z-derivative weights apply directly
-    d_dz  = (row[0] * db0_du + row[1] * db1_du + row[2] * db2_du + row[3] * db3_du)
+    d_dz  = (row[0] * db4_du(0) + row[1] * db4_du(1) + row[2] * db4_du(2) + row[3] * db4_du(3))
             * dz_reciprocal_;
 }

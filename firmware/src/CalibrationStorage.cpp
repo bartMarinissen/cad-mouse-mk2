@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "Config.h"
+#include "math3D.h"
 
 namespace CalibrationStorage {
 namespace {
@@ -128,16 +129,17 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
 }
 
 bool isPlausible(const CalibrationParams& params) {
-  // Finiteness first, over the whole struct at once. This used to be a bit
-  // test during unpacking; plain isfinite() is fine here, because the flag
-  // that would break it is -ffinite-math-only and this build does not set it
-  // (see build_flags in platformio.ini -- associative, reciprocal, no-errno,
-  // no-trapping, no-rounding, no-signed-zeros, none of which license the
-  // compiler to assume finiteness). It is also what rejects erased flash,
-  // where every byte reads 0xFF and every float comes out NaN.
+  // Finiteness first, over the whole struct at once. This is what rejects
+  // erased flash, where every byte reads 0xFF and every float comes out NaN.
+  // Back to a bit test (math3D.h's is_finite_bits()) rather than plain
+  // isfinite(): this build now sets -ffinite-math-only (platformio.ini),
+  // which licenses the compiler to assume no float is ever NaN/Inf and fold
+  // isfinite()-style checks into a constant on that assumption. A bit-level
+  // read of the raw IEEE-754 pattern isn't a floating-point operation in the
+  // sense that flag governs, so it stays reliable regardless.
   const float* values = &params.sensor_gain[0][0][0];
   for (size_t i = 0; i < kPayloadSize / sizeof(float); i++) {
-    if (!isfinite(values[i])) {
+    if (!is_finite_bits(values[i])) {
       return false;
     }
   }

@@ -712,12 +712,12 @@ licenses. Scoping the flag narrowly (a `#pragma GCC optimize` /
 not the whole solve loop) would reduce the blast radius but doesn't remove
 this risk in principle for values that flow from there into `dx`.
 
-**Not applied.** This is a real, exact, verified way to drop the
-skew-matrix hand-optimization — but it trades away part of the solver's
-only NaN/Inf detection to get there, which is a correctness decision, not
-a performance one, and isn't this document's call to make unilaterally.
-Flagging it here with the numbers rather than either applying it or
-dropping it silently.
+**Superseded**: at the time this was written, not this document's call to
+make unilaterally — flagged with the numbers rather than applied. The user
+subsequently decided to accept this tradeoff and go project-wide; see "All
+hand-unrolling removed" below for what was actually applied, including the
+bit-level check that mitigates (but does not eliminate) the safety-net
+risk described here.
 
 ### Scoping the flag instead of applying it everywhere: mechanically safe, but doesn't reach parity
 
@@ -822,12 +822,167 @@ parity was reached — the file no longer carries the pragma. `-O3`
 project-wide and the `H = JᵀJ` revert stand on their own regardless of how
 the skew question resolves.
 
-**Still open**: a genuine per-*file* build-flag override (a PlatformIO/SCons
-rule that puts `-ffinite-math-only` on `virtual_sensor.cpp`'s actual compile
-command, not a pragma) is the one mechanism not yet tried that matches how
-the original 33-call measurement was actually obtained (real command-line
-flags on the whole TU, not attribute/pragma reconstruction) — untested
-whether it reaches 33 in the real build the way the pragma didn't.
+**Superseded by the next section**: the "still open" per-file build-flag
+override this section originally proposed as the untried next step was not
+needed — the project went `-ffinite-math-only` project-wide instead (see
+below), which is the same real-command-line-flags mechanism and reaches the
+same 33-call parity without a custom SCons rule.
+
+### All hand-unrolling removed: `-ffinite-math-only` project-wide, with a bit-level finiteness check to protect the safety net
+
+Decided to go all the way: `-ffinite-math-only` project-wide (a real
+command-line flag — the only mechanism actually measured to reach 33-call
+parity, since every scoping attempt above topped out at 51), and fix the
+resulting NaN/Inf safety-net risk at its root with a check immune to the
+flag, rather than trying to contain the flag's scope.
+
+**Why a bit-level check closes the check-folding risk (but not the
+upstream-fold risk).** `-ffinite-math-only` licenses two distinct things:
+(a) folds like `x * 0.0f -> 0.0f` even when `x` is actually NaN/Inf at
+runtime — the mechanism this whole investigation has been exploiting — and
+(b) treating `isnan`/`isinf`/`std::isfinite`-style checks as always coming
+out "finite," since the compiler assumes the other branch is unreachable,
+which can fold the check itself into a constant `true`. A check that reads
+the raw IEEE-754 bit pattern via `memcpy` and tests the exponent field with
+plain integer ops isn't a floating-point *operation* in the sense this flag
+governs, so it can't be folded the same way — `math3D.h` now has:
+
+```cpp
+inline bool is_finite_bits(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7F800000u) != 0x7F800000u;
+}
+```
+
+(a float is NaN or Inf iff its exponent bits are all one), and `all_finite()`
+calls it instead of `std::isfinite()`. This closes risk (b) completely. It
+does **not** close risk (a) for values computed *upstream* of the check —
+if a NaN feeding into `M * skew_matrix(v)` lined up with one of
+`skew_matrix()`'s literal-zero entries, the fold could still discard that
+NaN before it ever reaches a downstream check. That residual risk is
+inherent to the flag, not something any check design can close; recorded
+honestly rather than claimed away.
+
+**Two sites needed the fix, a third didn't.** Grepped the whole tree for
+`isnan`/`isinf`/`isfinite`/`all_finite`:
+- `math3D.h`'s `all_finite()` (`solve_pose.cpp`'s `if (!all_finite(dx))`,
+  the solver's core safety net) — fixed, as above.
+- `CalibrationStorage.cpp`'s `isPlausible()` (rejects corrupted/erased
+  flash — every byte reads `0xFF`, every float decodes to NaN) — also
+  fixed, same `is_finite_bits()`. Its old comment plainly stated this build
+  didn't set `-ffinite-math-only`; that's now false, so the comment was
+  rewritten. (It also used to note "this used to be a bit test during
+  unpacking" — this change is a return to a pattern the file already used
+  once, not a new one.)
+- BLA's `CholeskyDecompose` (`firmware/lib/BasicLinearAlgebra/impl/NotSoBasicLinearAlgebra.h`,
+  the `if (sum <= 0.0)` positive-definite check) — **left alone.** Read the
+  implementation: `sum -= A(i,k) * A(j,k)` multiplies two runtime matrix
+  entries, never a compile-time literal zero, so there's no fold
+  opportunity here regardless of the flag. `NaN <= 0.0` already evaluates
+  `false` under plain IEEE rules — this was never the real NaN-catcher —
+  and `sqrt()`/division are genuine runtime library calls that correctly
+  propagate an actual runtime NaN either way, since the flag changes what
+  the *compiler* may assume and fold, not what these runtime operations
+  compute. Real NaN detection already happens downstream at `all_finite(dx)`,
+  the site that was actually fixed.
+
+**Verified on the real build, not assumed:**
+- The skew computation in `virtual_sensor.cpp` (now the clean
+  `J.Submatrix<3, 3>(0, 3) = M * skew_matrix(v) - skew_matrix(B_field_global);`,
+  pragma removed) now costs **exactly 33 soft-float calls** — disassembled
+  the real compiled object, located the tail after the `MagnetModel::evaluate`
+  call, subtracted the (separately verified) 15 calls for `B_field_global`
+  and 90 for `M`'s two chained 3×3 products from the 138-call remainder.
+  Full parity with the hand-unrolled form, reached this time because
+  `-O3`/`-ffinite-math-only` are both real project-wide flags rather than a
+  pragma reconstruction.
+- `is_finite_bits()` was **not** folded away: disassembled both
+  `solve_pose.cpp.o` (`all_finite(dx)`) and `CalibrationStorage.cpp.o`
+  (`isPlausible()`) and found the real mask-and-compare sequence intact in
+  both — `movs r3, #255; lsls r3, r3, #23` (building `0x7F800000`),
+  `ands`/`cmp` against it, branching to the NaN-error path
+  (`solve_pose.cpp`) or `return false` (`CalibrationStorage.cpp`). Confirmed
+  directly, not inferred from the source alone.
+- `H = JᵀJ` remains free at `-O3` (unaffected by any of this, doesn't need
+  `finite-math-only`).
+- Full build: **Flash 326,712 B (16.1%) / RAM 70,644 B (26.9%)** — in the
+  same range as the earlier `-O3`-only checkpoint, comfortably inside the
+  2 MB / 264 KB budget.
+- `pio run -e seeed_xiao_rp2040_unity` still builds. The pragma-leak concern
+  the previous attempt's unity check existed for no longer applies — the
+  flag is a real project-wide command-line flag now, not a per-file pragma,
+  so there's nothing for `magnet_model_unity.cpp`'s textual concatenation to
+  leak across.
+- `firmware/test/test_jacobian.cpp`'s finite-difference suite: `pio test
+  -e seeed_xiao_rp2040_test` builds clean (upload fails in this sandbox —
+  no hardware — as expected); ran the equivalent host-native harness this
+  session already built and it's 5/5 passing, including the full 384-point
+  `ForwardModel` grid sweep. This is also the correctness check for the
+  `BicubicField.cpp` change below, per this doc's own evaluate()-touching
+  rule.
+- Host-native solver checks: the realistic hot-start perturbation
+  (~0.03mm/~0.3°) still converges to the same numbers
+  `TODO/eigen-to-bla-migration.md` already documented (`t_err≈2×10⁻⁵mm`,
+  `R_err≈9×10⁻⁶`). The known large-perturbation divergence
+  (`TODO/eigen-to-bla-migration.md`'s caveat, ~0.7mm/~3.5°) still reproduces
+  — checked directly against a true baseline build of the pre-this-session
+  code via `git stash`, which diverges on the identical case too (different
+  specific numbers, same failure), confirming this is the pre-existing,
+  already-documented issue, not a new regression.
+
+### `BicubicField.cpp`'s hand-rolled Catmull-Rom weights: also removed, but this one has a real, measured cost
+
+Corrected an earlier scoping mistake in this document: the second pass's
+"hoisted-once basis weights" conclusion is about **when** the weights are
+computed (once per `evaluate()` call vs. once per row via
+`cubic()`/`cubic_deriv()`), and that hoisting is real and unaffected by any
+of this. It says nothing about **how** they're computed. The actual code
+wrote `a0..a3`/`b0..b3` and their derivatives as 16 individually-expanded
+scalar polynomial lines, and the comment directly above them gave the real
+reason: `BLA::Matrix` has no `constexpr` constructor, so the clean matrix
+form the function's own header comment already documents (a fixed 4×4
+Catmull-Rom basis matrix times a power vector `[1,t,t²,t³]`) couldn't be a
+compile-time constant, and was hand-expanded into scalar arithmetic
+instead. That's a separate axis from the hoisting question, and it *is*
+more hand-unrolling.
+
+Verified the matrix form algebraically against all 16 original scalar
+lines before touching the code (not just spot-checked): `a_i(t) =
+0.5 * Σⱼ BasisMatrix(i,j) * t^j`, e.g. `a0 = -0.5t + t² - 0.5t³` is exactly
+row 0 of `0.5 * BasisMatrix * [1,t,t²,t³]ᵀ`, and `da0_dt = -0.5 + 2t -
+1.5t²` is the same row against `[0,1,2t,3t²]ᵀ`. Replaced with a file-local
+`Mat4`/`Vec4` and four matrix-vector products
+(`a4 = 0.5f*(basis*Vec4(1,t,t2,t3))`, etc.), the overshoot step collapsed
+from 8 scalar `+=` lines to 2 vector ones, and the contraction loops index
+`a4(0)`/`a4(1)`/etc. in place of the old named scalars.
+
+**Fully inlines** — `nm` on the compiled object shows one
+`BicubicField::evaluate` symbol either way, old and new, no separate
+`BLA::operator*` call left out-of-line.
+
+**But it is not free, unlike the skew-matrix case.** Compiled both the old
+scalar version and the new matrix version with the *identical* real project
+compile line (`-O3 -ffinite-math-only`, captured via `pio run -v`) and
+disassembled both:
+
+| version | soft-float calls |
+|---|---|
+| old (hand-unrolled scalar) | 320 (171 `fmul` + 124 `fadd` + 25 `fsub`) |
+| new (matrix form) | 344 (191 `fmul` + 131 `fadd` + 22 `fsub`) |
+
+**24 more calls, ~7.5% more**, even with the same flags that gave the
+skew-matrix case exact parity. The basis matrix's structural zeros (5 of 16
+entries) and the derivative power vector's leading zero give GCC *some*
+fold opportunity, but not enough to fully offset computing all 16 entries
+of two naive `4×4 · 4×1` products per call (`a`, `da/dt`, `b`, `db/du` — 4
+matrix-vector products total) versus the hand-written form, which never
+computed the zero terms in the first place. This is a real, measured
+tradeoff, not a wash — recorded plainly rather than assumed free by
+analogy to the skew case. Kept anyway, per direct instruction to remove all
+remaining hand-unrolling; the small extra cost buys a form that matches the
+function's own documented derivation instead of a second, silently
+-hand-optimized copy of it.
 
 **Small thing found along the way, not acted on**: `dot()` (`math3D.h`)
 costs 18 soft-float calls per length-9 call rather than the achievable 17

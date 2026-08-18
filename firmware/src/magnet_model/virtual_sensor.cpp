@@ -38,30 +38,22 @@ void __not_in_flash_func(VirtualSensor::evaluate)(const MagnetModel &magnet, con
 
     J.Submatrix<3, 3>(0, 0) = -M;
 
-    // J_rot = M * [v]_x - [B_field_global]_x, with both skew products written
-    // out. A skew matrix has a zero diagonal, so a general 3x3 product spends a
-    // third of its multiplies on structural zeros; column j of [a]_x has only
-    // two non-zero entries.
-    //
-    // A file-scoped `#pragma GCC optimize("finite-math-only")` was tried here
-    // to let GCC fold the clean skew_matrix()-based form itself (see
-    // TODO/Performance.md's "-O3, scoped -ffinite-math-only" pass) -- but
-    // measured on the real build, it doesn't reach parity (51 calls vs. this
-    // hand form's 33), unlike the whole-TU command-line-flag measurement it
-    // was extrapolated from. Kept written out until a real per-file
-    // build-flag override is tried instead of a pragma.
-    const float vx = v(0), vy = v(1), vz = v(2);
-    for (int i = 0; i < 3; ++i) {
-        const float m0 = M(i, 0), m1 = M(i, 1), m2 = M(i, 2);
-        J(i, 3) = m1 * vz - m2 * vy;
-        J(i, 4) = m2 * vx - m0 * vz;
-        J(i, 5) = m0 * vy - m1 * vx;
-    }
-
-    // ... then -[B]_x, which touches six entries rather than nine. Note this
-    // uses the pre-gain physical field, as Math.md 4.E requires.
-    const float Bx = B_field_global(0), By = B_field_global(1), Bz = B_field_global(2);
-    J(0, 4) += Bz;   J(0, 5) -= By;
-    J(1, 3) -= Bz;   J(1, 5) += Bx;
-    J(2, 3) += By;   J(2, 4) -= Bx;
+    // J_rot = M * [v]_x - [B_field_global]_x. A skew matrix has a zero
+    // diagonal, so a naive 3x3 product spends a third of its multiplies on
+    // structural zeros -- but this build sets -ffinite-math-only
+    // project-wide (platformio.ini), which licenses GCC to fold
+    // x * 0.0f -> 0.0f, and that's enough for the general form below to
+    // reach the same soft-float call count as writing the products out by
+    // hand (see TODO/Performance.md's "-O3 project-wide" pass; an earlier
+    // attempt scoping the flag to just this file via a pragma measured 51
+    // calls, not the 33 the project-wide flag actually reaches -- scoping
+    // via #pragma/__attribute__((optimize(...))) doesn't reliably combine
+    // an -O level with an -f flag the way real command-line flags do).
+    // Note this uses the pre-gain physical field for the B term, as Math.md
+    // 4.E requires. The -ffinite-math-only fold this relies on can, in
+    // principle, discard a genuine NaN arising in M/v/B_field_global before
+    // it reaches solve_pose.cpp's all_finite(dx) safety net -- that residual
+    // risk is inherent to the flag and documented in TODO/Performance.md,
+    // not something this form or a check downstream can fully close.
+    J.Submatrix<3, 3>(0, 3) = M * skew_matrix(v) - skew_matrix(B_field_global);
 }

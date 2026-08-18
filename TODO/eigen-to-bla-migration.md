@@ -178,14 +178,20 @@ actually ships. Corrections made during implementation:
   `TODO/Performance.md`'s hand-unrolled optimizations can come back out now
   that Eigen's gone~~ — done, see `TODO/Performance.md`'s fourth pass and
   later ones: BLA's `CholeskyDecompose`/`CholeskySolve`/`dot()` inline
-  completely (Eigen's equivalent never did). Of the three unrolling
-  candidates checked, the bicubic basis-weight hoist has independent
-  algorithmic justification and stays as-is; the symmetric `H = JᵀJ` one
-  turned out to be a pure inlining-level artifact of the project's `-O2`
-  and was reverted once the project moved to `-O3` project-wide (free at
-  that level); the written-out skew products are still in place — a
-  `-O3`-project-wide + scoped-`-ffinite-math-only` attempt to drop them was
-  measured to fall short of parity on the real build and was reverted.
+  completely (Eigen's equivalent never did). **All three of the checked
+  candidates are now reverted to their clean `BLA` forms.** `H = JᵀJ` was a
+  pure inlining-level artifact of the project's `-O2` and is free at `-O3`
+  (which the project now builds at project-wide). The written-out skew
+  products needed `-O3` and `-ffinite-math-only` together to reach parity —
+  a scoped-pragma attempt fell short on the real build and was reverted,
+  but going `-ffinite-math-only` project-wide (with a bit-level
+  `is_finite_bits()` check in `math3D.h` protecting the NaN/Inf safety net
+  from that flag) reached exact parity. The bicubic basis-weight
+  computation — separate from the *hoisting* question this bullet
+  originally meant, see `TODO/Performance.md`'s correction — was also
+  un-hand-rolled into a matrix form, but that one is not free: measured
+  ~7.5% more soft-float calls than the scalar version it replaced, kept
+  anyway per explicit instruction to remove all remaining hand-unrolling.
 - **On-device verification.** Nothing here has run on real hardware. The
   host-native numeric checks (above) are strong evidence of correctness but
   are not a substitute for `pio test -e seeed_xiao_rp2040_test` actually

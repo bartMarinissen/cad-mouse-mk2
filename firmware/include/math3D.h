@@ -1,5 +1,7 @@
 #pragma once
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <BasicLinearAlgebra.h>
 
 using Vec3 = BLA::Matrix<3, 1, float>;
@@ -31,11 +33,25 @@ inline float dot(const BLA::MatrixBase<MatAType, Dim, 1, float>& a,
     return sum;
 }
 
+// This build sets -ffinite-math-only (platformio.ini), which licenses GCC to
+// assume no float is ever NaN/Inf and fold accordingly -- including folding
+// isnan()/isinf()/std::isfinite() themselves into a constant, since the
+// compiler is allowed to believe the "not finite" branch is unreachable.
+// Reading the raw IEEE-754 bit pattern via memcpy and testing the exponent
+// field with plain integer ops isn't a floating-point operation in the sense
+// that flag governs, so it can't be folded away the same way: a float is NaN
+// or Inf iff its exponent bits are all one.
+inline bool is_finite_bits(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7F800000u) != 0x7F800000u;
+}
+
 template <int Rows, int Cols, typename MatType>
 inline bool all_finite(const BLA::MatrixBase<MatType, Rows, Cols, float>& m) {
     for (int i = 0; i < Rows; ++i)
         for (int j = 0; j < Cols; ++j)
-            if (!std::isfinite(m(i, j))) return false;
+            if (!is_finite_bits(m(i, j))) return false;
     return true;
 }
 

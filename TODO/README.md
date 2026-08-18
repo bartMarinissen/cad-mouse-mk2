@@ -80,17 +80,22 @@ too, not just the file.
   profiling of `solve_knob_pose`; three completed optimization passes
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
   ~50Hz to ~80Hz, plus a fourth pass confirming BLA (post eigen-to-bla
-  migration) inlines its own glue code far better than Eigen did. The
-  project now builds at `-O3` project-wide (Flash 327,040 B / RAM 70,900 B,
-  both well inside budget), which made the `H = JᵀJ` hand-unrolling free and
-  it's been reverted to `~jacobian * jacobian`. The skew-matrix
-  hand-unrolling is still in place: scoping `-ffinite-math-only` to just
-  `virtual_sensor.cpp` via `#pragma GCC optimize` was tried and measured on
-  the real build to *not* reach parity (51 calls vs. the target 33), so it
-  was reverted rather than kept as a silent regression; a real per-file
-  build-flag override (not a pragma) is the one untried option left.
-  Iteration-count telemetry and an on-device wall-clock re-measurement of
-  the combined changes are still open.
+  migration) inlines its own glue code far better than Eigen did. **All
+  remaining hand-unrolling is now gone.** The project builds at `-O3` +
+  `-ffinite-math-only` project-wide (Flash 326,712 B / RAM 70,644 B, both
+  well inside budget); `solve_pose.cpp`'s `H = JᵀJ` and `virtual_sensor.cpp`'s
+  skew products are both back to their clean `BLA` forms (verified on the
+  real build: 102 and 33 soft-float calls respectively, matching the
+  hand-unrolled originals exactly), and `BicubicField.cpp`'s Catmull-Rom
+  basis weights are now a matrix-vector product instead of 16 hand-expanded
+  scalar lines (this one *isn't* free — measured 344 vs. 320 calls, ~7.5%
+  more, kept anyway per explicit instruction). `math3D.h` gained a
+  bit-level `is_finite_bits()` so `all_finite()` and
+  `CalibrationStorage.cpp`'s `isPlausible()` stay reliable under
+  `-ffinite-math-only` (verified not folded away in the compiled object);
+  a residual risk this can't close — an upstream fold discarding a NaN
+  before any check sees it — is documented, not hidden. Iteration-count
+  telemetry and an on-device wall-clock re-measurement are still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual
