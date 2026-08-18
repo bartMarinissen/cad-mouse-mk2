@@ -53,6 +53,9 @@
 // margin, and TODO/on-device-calibration.md tracks it as open.
 
 #include "math3D.h"
+#ifdef BUNDLE_SOLVER_TRACE
+#include <cstdio>
+#endif
 #include "bundle_param_layout.h"
 #include "schur_normal_equations.h"
 
@@ -267,6 +270,22 @@ struct BundleSolver {
             rebuild_from_params(x_trial);
             const float trial_cost = cost(trial_frames);
 
+            // Per-iteration trace, compiled out unless BUNDLE_SOLVER_TRACE is
+            // defined. Kept because reading it is what explained an otherwise
+            // baffling accept ratio: lambda decays x0.1 per accepted step with
+            // no floor, so five good steps drop it to 1e-8 -- and multiplicative
+            // damping does nothing until lambda approaches 1 (|dx| is identical
+            // to four digits from 1e-8 through 1e-5). The loop then spends one
+            // iteration per decade climbing back. A gentler decay (0.33) cuts
+            // 15 iterations to 11 with an identical answer, so this is wasted
+            // work rather than a wrong result -- but it is invisible from the
+            // outside, and the summary report cannot show it.
+#ifdef BUNDLE_SOLVER_TRACE
+            std::printf("  iter %2d  lambda %10.3e  cost %12.6e  trial %12.6e  |dx| %10.3e  %s\n",
+                        iter, (double)lambda, (double)current_cost, (double)trial_cost,
+                        (double)dx_shared.norm(),
+                        trial_cost < current_cost ? "ACCEPT" : "reject");
+#endif
             if (trial_cost < current_cost) {
                 const float relative_gain =
                     (current_cost - trial_cost) / (current_cost > 0.0f ? current_cost : 1.0f);
