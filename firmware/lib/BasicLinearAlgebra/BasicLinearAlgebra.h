@@ -48,7 +48,10 @@ struct MatrixBase
     DType &z() { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
     DType z() const { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
 
-    MatrixBase() = default;
+    // Vendored addition: explicit so a derived Matrix's own constexpr
+    // constructor (ElementStorage.h) can default-construct this empty base
+    // subobject in a constant expression -- see TODO/eigen-to-bla-migration.md.
+    constexpr MatrixBase() = default;
 
     template <typename MatType>
     MatrixBase(const MatrixBase<MatType, Rows, Cols, DType> &mat)

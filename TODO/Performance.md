@@ -1118,6 +1118,90 @@ seeed_xiao_rp2040_test --without-uploading --without-testing` builds clean
 **Real ARM build, final state**: Flash **328,208 B** (16.2% of 2,027,520),
 RAM **70,888 B** (27.0% of 262,144).
 
+## Sixth pass: `constexpr` for `BLA::Matrix` — closing the last item on the original migration's list
+
+`TODO/eigen-to-bla-migration.md`'s "Open" section had one item left standing
+since the very first pass: `BLA::Matrix` had no `constexpr` constructor, the
+same limitation that made Eigen matrices un-constexpr-able in the first
+place. Closed by patching `BLA::Matrix`'s own variadic fill constructor
+(`firmware/lib/BasicLinearAlgebra/ElementStorage.h`) to initialize `storage`
+through a mem-initializer-list aggregate (`storage{head, args...}`) instead
+of a constructor-body loop — the standard requires the former for a
+constructor to be `constexpr`-eligible; the recursive `FillRowMajor` helper
+that used to do the latter is gone.
+
+**The result landed somewhere this document hadn't been looking.** The
+working assumption (including in this document's own earlier passes'
+phrasing) was that the win would be `BicubicField.cpp`'s small local 4×4
+Catmull-Rom basis matrix, made `static constexpr` so it's built once
+instead of "on every call." **Measured, it makes zero difference**:
+isolated ARM disassembly of `BicubicField::evaluate`, `static constexpr
+Mat4 basis` vs. the previous plain `const Mat4 basis`, produced a
+byte-for-byte identical `.text` section. `-O3` was already
+constant-folding this particular matrix regardless of the C++ keyword,
+because it's local, literal, and never mutated — exactly what ordinary
+compiler constant-propagation already covers without the language needing
+to guarantee it. The ~7.3-7.5% cost this matrix form still carries (fourth
+and fifth passes) is confirmed to live in the generic un-specialized 4×4×4×1
+multiply itself, not in any per-call construction cost — there never was
+one, at `-O3`.
+
+**The real win was a *global*, not a local: `magnet_model_table.cpp`'s
+generated `BICUBIC_INTERPOLATION_TABLE`, a `const Vec2[NZ][NR]` built from
+4,641 individual `Vec2(x, y)` constructor calls.** A local literal matrix
+can be constant-folded by the optimizer whether or not the constructor is
+`constexpr`, because nothing about the C++ object model forces a choice
+either way. A *global* with a non-`constexpr`-eligible constructor has no
+such freedom: the standard requires dynamic initialization — a real
+function running before `main()`, confirmed with `nm`
+(`_GLOBAL__sub_I_BICUBIC_INTERPOLATION_TABLE`), calling the constructor
+4,641 times and writing the result into `.bss` (RAM, symbol type `B`,
+confirmed at a `0x2000...` SRAM address). No optimizer flag reaches around
+that — it's a language rule, not a missed optimization, which is exactly
+why this was worth patching the constructor for rather than trusting `-O3`
+to find it. Once the constructor is `constexpr`, the identical
+`magnet_model_table.cpp` source (not touched — `const`, not even
+`constexpr`, is enough once its initializer is a constant expression)
+qualifies for the standard's "constant initialization" path instead: the
+whole table lands in `.rodata`, symbol type `R`, a `0x1000...` flash
+address, confirmed with `nm` — and the static-initializer function is gone
+entirely.
+
+**Measured (clean rebuild — `rm -rf .pio/build .cache` — before vs. after,
+nothing else changed, reproduced across three independent from-scratch
+builds after an initial non-clean build gave a result that looked
+suspicious and turned out to just be this same effect):**
+
+| | Flash | RAM |
+|---|---:|---:|
+| before (fifth pass's final state) | 328,208 B | 70,888 B |
+| after (`constexpr` fill constructor) | **234,472 B** | **33,648 B** |
+| Δ | **−93,736 B (−28.6%)** | **−37,240 B (−52.5%)** |
+
+The RAM delta lands almost exactly on the table's own size (4,641 × 8 B =
+37,128 B, `TODO/eigen-to-bla-migration.md`'s "Why vendored" section already
+measured this same number once before, diagnosing a different problem);
+the flash delta is the removed 4,641-call constructor sequence, which costs
+far more per byte in code than the raw packed floats it replaced.
+
+**Open caveat, not measured**: the table used to be uniformly fast RAM;
+it's now flash, read through the RP2040's XIP cache. The bicubic lookup's
+access pattern (a local 4×4 window, moving smoothly frame-to-frame under
+hot-starting) should stay cache-friendly, but nothing here confirms
+`BicubicField::evaluate`'s per-call latency didn't regress — same
+unverified-on-hardware gap this document's "Open next steps" below already
+tracks, now with one more specific thing riding on it.
+
+**Verification**: `pio test -e native_test` (all 8 cases, unchanged);
+`pio test -e seeed_xiao_rp2040_test --without-uploading --without-testing`
+builds clean (one pre-existing `-Wnarrowing` warning newly surfaced at a
+`Vec3(0.1, 0.1, 0.1)` call in `SensorController.cpp` — aggregate-list
+initialization checks narrowing more strictly than the old body-assignment
+form did; the double-to-float narrowing itself isn't new, just newly
+visible; not in scope to fix here). Full detail, including the constructor
+patch itself and the `basis`-matrix measurement, is in
+`TODO/eigen-to-bla-migration.md`'s `constexpr` section.
+
 ## Open next steps (not yet acted on)
 
 - **Cross-magnet refactor's real cost, on-device.** The fifth pass measured
@@ -1127,6 +1211,11 @@ RAM **70,888 B** (27.0% of 262,144).
   including its cost, with a rough +40% estimate that needs a real
   `micros()` measurement to confirm or correct. Same instrumentation gap as
   the bullet below, now with one more thing riding on it.
+- **`BICUBIC_INTERPOLATION_TABLE`'s XIP-cache latency, on-device.** The
+  sixth pass moved this 4,641-entry table from RAM to flash. Uniformly-fast
+  RAM access is now XIP-cached flash access instead — plausibly fine given
+  the lookup's local, smoothly-moving 4×4 window, but that's reasoning, not
+  a `micros()` measurement. One more thing riding on real hardware access.
 - Add iteration-count + per-phase (`micros()`) instrumentation to get real
   convergence and timing data instead of static worst-case counts — no longer
   blocked on the Statistics TODO, which is resolved (see above).

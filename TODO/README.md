@@ -81,13 +81,16 @@ too, not just the file.
   (NDEBUG/-O2 fix, `BicubicField` rewrite, solver algebra) took the loop from
   ~50Hz to ~80Hz, a fourth pass confirmed BLA inlines better than Eigen did
   and put all three hand-unrolled forms back to clean BLA (two free, one
-  ~7.5% costlier but kept), and a fifth pass re-verified all of that plus a
+  ~7.5% costlier but kept), a fifth pass re-verified all of that plus a
   brand-new hand-unrolled site (`dipole_field`'s Jacobian) after
   `origin/experimental`'s cross-magnet forward-model refactor — three of
   four candidates free-or-better, `BicubicField` still ~7.3-7.5% costlier
-  and still kept. Real build: Flash 328,208 B / RAM 70,888 B. Iteration-count
-  telemetry and an on-device wall-clock re-measurement (including the
-  cross-magnet refactor's own unverified cost) are still open.
+  and still kept — and a sixth pass made `BLA::Matrix` `constexpr`-capable,
+  moving the generated 4,641-entry bicubic table from a RAM-resident,
+  dynamically-initialized array to `.rodata`. Real build: Flash **234,472 B**
+  / RAM **33,648 B** (down from 328,208 B / 70,888 B). Iteration-count
+  telemetry and on-device wall-clock re-measurement (cross-magnet cost, and
+  now the relocated table's XIP-cache latency too) are still open.
 - **[`eigen-to-bla-migration.md`](eigen-to-bla-migration.md)** — Eigen
   replaced with `BasicLinearAlgebra`, vendored and patched (dropped a
   `Printable` base that was giving every matrix a hidden vtable pointer —
@@ -97,8 +100,13 @@ too, not just the file.
   `Mat2` alias and an `outer()` helper added to the shared BLA surface, and
   `.x()`/`.y()`/`.z()` accessors added to the vendored copy itself (this
   pass brought in enough more Eigen-idiom source that closing that gap once
-  beat hand-translating every call site). `constexpr` for the bicubic table
-  and on-device verification are still open.
+  beat hand-translating every call site). `BLA::Matrix`'s literal-list
+  constructor is now `constexpr`, closing the file's last open item — the
+  real payoff was the generated bicubic table moving from RAM to flash
+  (see `Performance.md`'s sixth pass), not the small local matrix this file
+  originally pointed at, which measured no codegen difference at all.
+  On-device verification (including the relocated table's latency) is
+  still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,
   but bundle calibration only shows one placeholder spinner. The actual

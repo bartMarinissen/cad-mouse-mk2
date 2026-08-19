@@ -12,33 +12,36 @@ class Matrix : public MatrixBase<Matrix<Rows, Cols, DType>, Rows, Cols, DType>
    public:
     DType storage[Rows * Cols];
 
-    DType &operator()(int i, int j = 0) { return storage[i * Cols + j]; }
-    DType operator()(int i, int j = 0) const { return storage[i * Cols + j]; }
+    constexpr DType &operator()(int i, int j = 0) { return storage[i * Cols + j]; }
+    constexpr DType operator()(int i, int j = 0) const { return storage[i * Cols + j]; }
 
     Matrix() = default;
 
+    // Vendored addition (see TODO/eigen-to-bla-migration.md): this is the
+    // constructor a literal fixed matrix like BicubicField.cpp's Catmull-Rom
+    // basis goes through. Made constexpr so such matrices can be declared
+    // `static constexpr` -- a real language guarantee of compile-time
+    // construction, and a precondition for use in contexts that require a
+    // constant expression (static_assert, template arguments, array
+    // bounds). Measured to make no difference to generated code when the
+    // matrix was already all-literal, since -O3 already constant-folded it
+    // regardless (TODO/Performance.md's constexpr pass) -- the win here is
+    // a language guarantee, not a measured performance one. A constexpr
+    // constructor must initialize every member through the mem-initializer
+    // list, not just assign to it in the body (the array default
+    // constructor above stays a plain, possibly-uninitialized `= default`
+    // -- deliberately not touched, since a matrix
+    // that's about to be overwritten shouldn't pay for a zero-fill), so
+    // this fills `storage` via the mem-initializer's aggregate-list syntax
+    // instead of the row-major loop the old FillRowMajor used. Args are
+    // already in row-major order (matching `storage`'s own layout), and any
+    // cells left unlisted are zero-initialized by ordinary aggregate-init
+    // rules -- the same behavior FillRowMajor's zero-fill base case used to
+    // implement by hand.
     template <typename... TAIL>
-    Matrix(DType head, TAIL... args)
+    constexpr Matrix(DType head, TAIL... args) : storage{head, args...}
     {
-        FillRowMajor(0, head, args...);
-    }
-
-    template <typename... TAIL>
-    void FillRowMajor(int start_idx, DType head, TAIL... tail)
-    {
-        static_assert(Rows * Cols > sizeof...(TAIL), "Too many arguments passed to FillRowMajor");
-
-        (*this)(start_idx / Cols, start_idx % Cols) = head;
-
-        FillRowMajor(++start_idx, tail...);
-    }
-
-    void FillRowMajor(int start_idx)
-    {
-        for (int i = start_idx; i < Rows * Cols; ++i)
-        {
-            (*this)(i / Cols, i % Cols) = 0.0;
-        }
+        static_assert(1 + sizeof...(TAIL) <= Rows * Cols, "Too many arguments passed to Matrix");
     }
 
     template <typename DerivedType>

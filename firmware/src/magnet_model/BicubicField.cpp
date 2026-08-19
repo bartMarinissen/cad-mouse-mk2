@@ -129,25 +129,27 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
     const float u2 = u * u, u3 = u2 * u;
 
     // The basis matrix from this function's own header comment above,
-    // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1). Still not
-    // constexpr -- BLA::Matrix has no constexpr constructor
-    // (TODO/eigen-to-bla-migration.md left that out of scope) -- so this is
-    // a normal local, built fresh each call the same as the weights it
-    // produces; the "compute once per evaluate(), not once per row" hoisting
-    // is unchanged; only how a0..b3 are computed changed, not when
-    // (TODO/Performance.md). Unlike the skew-matrix and dipole Jacobian
-    // cases, this one is NOT free: isolated ARM disassembly (real project
-    // flags, this cross-magnet-refactor pass, current Mat2&-out-param
-    // signature) measured 352 soft-float calls for this matrix form against
-    // 328 for the hand-expanded scalar form it replaces -- ~7.3%, in line
-    // with the ~7.5% measured before the signature changed. Kept anyway per
-    // the standing "remove all hand-unrolling" decision (TODO/Performance.md).
+    // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1). Now constexpr:
+    // BLA::Matrix's variadic constructor was patched to support it
+    // (TODO/eigen-to-bla-migration.md), which closes the blocker this
+    // comment used to describe -- `static constexpr` is a real language
+    // guarantee that this is built once, not per-call. Measured (isolated
+    // ARM disassembly, real project flags, TODO/Performance.md's constexpr
+    // pass) to be a byte-for-byte identical .text section against the
+    // previous plain `const` local: -O3 was already constant-folding this
+    // matrix before, since every element is a literal and nothing here
+    // mutates it, so this change closes a correctness/API gap, not a
+    // measured performance one. The ~7.3-7.5% cost this matrix form still
+    // carries over the hand-expanded scalar form it replaced
+    // (TODO/Performance.md's fifth pass) is unchanged and lives in the
+    // generic 4x4*4x1 multiply below, not in constructing `basis`. Kept
+    // anyway per the standing "remove all hand-unrolling" decision.
     using Mat4 = BLA::Matrix<4, 4, float>;
     using Vec4 = BLA::Matrix<4, 1, float>;
-    const Mat4 basis(0.0f, -1.0f,  2.0f, -1.0f,
-                      2.0f,  0.0f, -5.0f,  3.0f,
-                      0.0f,  1.0f,  4.0f, -3.0f,
-                      0.0f,  0.0f, -1.0f,  1.0f);
+    static constexpr Mat4 basis(0.0f, -1.0f,  2.0f, -1.0f,
+                                 2.0f,  0.0f, -5.0f,  3.0f,
+                                 0.0f,  1.0f,  4.0f, -3.0f,
+                                 0.0f,  0.0f, -1.0f,  1.0f);
 
     // The standard Catmull-Rom basis weights for t, and their derivatives.
     // a4 = [a0,a1,a2,a3], da4_dt = [da0_dt,da1_dt,da2_dt,da3_dt].

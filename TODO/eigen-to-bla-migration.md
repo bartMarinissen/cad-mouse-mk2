@@ -240,6 +240,126 @@ file-by-file record this document already keeps.
   their `last_jacobian`/`rcond` plumbing upstream on experimental, orthogonal
   to BLA.
 
+## Extended: `constexpr` for `BLA::Matrix`
+
+The last item this file's "Open" section left standing — closed by patching
+`BLA::Matrix`'s own constructor rather than working around it.
+
+**What changed**: `firmware/lib/BasicLinearAlgebra/ElementStorage.h`'s
+variadic fill constructor (`Matrix(DType head, TAIL... args)`) and
+`operator()` are now `constexpr`; `BasicLinearAlgebra.h`'s
+`MatrixBase() = default` is marked explicitly `constexpr` too, since a
+derived `Matrix`'s constexpr constructor implicitly default-constructs it.
+The fill constructor's body used to walk a recursive `FillRowMajor` helper,
+writing each element via `operator()` inside the constructor *body* — not
+usable in a constexpr constructor, because the standard requires every
+member be initialized through the *mem-initializer list*, not just
+assigned to in the body. Replaced with mem-initializer aggregate-list
+syntax instead: `storage{head, args...}`. Args are already in row-major
+order, matching `storage`'s own layout, and — matching FillRowMajor's old
+zero-fill base case — any cells past the last argument are zero-initialized
+by ordinary C++ aggregate-init rules, for free. `FillRowMajor` itself is
+gone; nothing else called it. The plain `Matrix() = default` (no
+mem-initializer, used everywhere a matrix is about to be overwritten
+in-place, e.g. `solve_pose.cpp`'s locals) was deliberately left alone —
+giving it a default member initializer to make *it* constexpr-eligible too
+would mean every default-constructed matrix pays for a zero-fill it
+usually doesn't need.
+
+### The actual payoff: `BICUBIC_INTERPOLATION_TABLE`, not the basis matrix
+
+Going in, the assumed motivating case was `BicubicField.cpp`'s small 4×4
+Catmull-Rom basis matrix — that's the one the file's own comment named. It
+turned out to be a red herring for runtime cost (see below), and the real
+win was somewhere this document hadn't been pointing at:
+`magnet_model_table.cpp` (generated, not hand-edited —
+`generate_bicubic_table.py`) defines `BICUBIC_INTERPOLATION_TABLE` as a
+`const Vec2[NZ][NR]` — **4,641 individual `Vec2(x, y)` constructions**, all
+literal hex-float arguments, going through the exact constructor just
+patched. Before this pass, since that constructor wasn't `constexpr`, the
+C++ object model required this to be **dynamically initialized**: a real
+function (`_GLOBAL__sub_I_BICUBIC_INTERPOLATION_TABLE`, confirmed with
+`nm`) ran before `main()` and called the `Vec2` constructor 4,641 times,
+writing the results into a `.bss`-resident (RAM) array — confirmed via
+`nm`, symbol type `B` at a `0x2000...` address (RP2040 SRAM). This is
+exactly the "4,641-entry bicubic table... 37,128 bytes" this document's own
+"Why vendored" section already measured as a RAM cost, back when it was
+diagnosing the `Printable` vtable regression — it just hadn't been named as
+"paying for dynamic initialization" until now.
+
+Once the constructor is `constexpr`, the same declaration (`const`, not
+even `constexpr` itself — this is the C++ standard's ordinary "constant
+initialization" upgrade for a `const` global whose initializer happens to
+be a constant expression, not a new keyword anywhere in
+`magnet_model_table.cpp`, which stays untouched) becomes eligible for
+**static, compile-time initialization**: the whole table is placed directly
+in `.rodata`, no runtime construction, symbol type `R` at a `0x1000...`
+address (RP2040 flash, confirmed via `nm`) — and the
+`_GLOBAL__sub_I_BICUBIC_INTERPOLATION_TABLE` static-initializer function is
+gone entirely, along with whatever code was needed to run 4,641 constructor
+calls.
+
+**Measured (clean rebuild, `rm -rf .pio/build .cache`, real
+`-e seeed_xiao_rp2040` build, before vs. after this pass, nothing else
+changed): Flash 328,208 B → 234,472 B (−28.6%, −93,736 B), RAM 70,888 B →
+33,648 B (−52.5%, −37,240 B)** — the RAM delta lands almost exactly on the
+table's own 37,128-byte size (the small remainder is other minor layout
+shifts), and the flash delta is the removed constructor-call code, which is
+far more verbose per byte than the raw packed float data it replaced. This
+is a large, real, structural win, not a rounding artifact — reproduced
+identically across three independent from-scratch rebuilds before being
+trusted (an initial non-`rm -rf`'d build gave a suspicious result that
+turned out to just be evidence of exactly this effect, not a caching bug).
+
+**Open caveat, not verified**: the table used to live in RAM (uniformly
+fast access); it now lives in flash, read through the RP2040's XIP cache.
+The bicubic lookup pattern (a local 4×4 window that moves smoothly
+frame-to-frame under hot-starting) should stay cache-friendly, but this is
+reasoning, not a measurement — nothing here confirms `evaluate()`'s
+per-call latency didn't regress, and that's exactly the kind of thing this
+document's own "on-device verification" bullet (below) already flags as
+open. Flagging rather than asserting.
+
+### The basis matrix: not free, but not the reason to want this
+
+`BicubicField.cpp`'s own local Catmull-Rom `basis` matrix — the case this
+comment used to name as the motivation — was made `static constexpr` too,
+now that the constructor allows it. **Measured, not assumed: no codegen
+change.** Isolated ARM disassembly (real project flags, same method as
+`TODO/Performance.md`'s passes) of `BicubicField::evaluate` compiled both
+ways — `static constexpr Mat4 basis` vs. the previous plain `const Mat4
+basis` — produced a **byte-for-byte identical `.text` section**, not just
+an equal call count. `-O3` was already constant-folding this matrix before
+the language change: every element is a compile-time literal and nothing
+mutates it after construction, which is exactly the case GCC's ordinary
+constant propagation already covers without needing the C++ abstract
+machine to guarantee it. So the ~7.3-7.5% cost this matrix form still
+carries over the hand-expanded scalar form it replaced
+(`TODO/Performance.md`'s fourth and fifth passes) is confirmed to live in
+the generic 4×4×4×1 multiply itself — which doesn't know most of `basis`'s
+entries are 0/±1 the way hand-written scalar code does — not in any
+per-call construction cost, which turns out never to have been real at
+`-O3`. `constexpr` closes a real language gap here (the type is now usable
+where a constant expression is required, and its compile-time-ness is a
+guarantee rather than an optimizer's discretion) but this specific call
+site's runtime cost is unchanged and not expected to be revisited by this
+change. The lesson this leaves for the file: a *local* matrix built from
+literals was already free under `-O3` regardless of the C++ keyword; a
+*global* one wasn't, because dynamic-vs-static initialization is a language
+rule the optimizer can't route around no matter how obviously-constant the
+values are.
+
+**Verification**: a standalone `static_assert(basis(0,0) == 0.0f, ...)`-style
+check confirms `BLA::Matrix`'s fill constructor is now genuinely usable in
+a constant expression, not just accepted syntactically. `pio test -e
+native_test` (all 8 cases, unchanged pass/fail) and `pio test -e
+seeed_xiao_rp2040_test --without-uploading --without-testing` both
+pass/build clean (one pre-existing `-Wnarrowing` warning newly surfaced at
+`SensorController.cpp`'s `Vec3(0.1, 0.1, 0.1)` call — aggregate-list
+initialization checks narrowing more strictly than the old body-assignment
+form did; the double-to-float narrowing itself isn't new, just now visible;
+not fixed here, out of scope for this pass). Real ARM build numbers above.
+
 ## Open
 
 - ~~Whether BLA actually inlines better than Eigen did, and whether any of
@@ -281,13 +401,15 @@ file-by-file record this document already keeps.
 - **The large-perturbation solver divergence noted above** — worth a
   deliberate look (or an explicit "out of scope, hot-start-only" note)
   rather than leaving it as an incidental finding from an ad hoc check.
-- `constexpr` for the bicubic table (the thing that originally motivated
-  looking at alternatives to Eigen) is still not done. Vendoring -- now
-  done, above -- was the blocker for touching BLA's own source to attempt
-  it; `Matrix`, `RefMatrix`, and `MatrixTranspose` are all plain-array/
-  reference-based with no expression-template indirection, which should
-  make this a smaller lift than it ever was against Eigen, but that's an
-  argument for why it's tractable, not a statement that it's been attempted.
+- ~~`constexpr` for the bicubic table (the thing that originally motivated
+  looking at alternatives to Eigen) is still not done~~ — done, see the
+  `constexpr` extended section above. `BLA::Matrix`'s literal-list
+  constructor is now `constexpr`; the real payoff wasn't the small local
+  basis matrix this bullet used to picture, but `magnet_model_table.cpp`'s
+  4,641-entry `BICUBIC_INTERPOLATION_TABLE`, which moved from a dynamically-
+  initialized RAM array to true compile-time `.rodata`: Flash 328,208 B →
+  234,472 B, RAM 70,888 B → 33,648 B. On-device latency impact of the table
+  now living in flash instead of RAM is unverified — see that section.
 - **Vendored code needs a way to stay in sync with upstream on purpose.**
   There's no process yet for noticing if upstream BLA fixes a bug this copy
   also has, or for re-applying the `Printable` patch if someone re-vendors
