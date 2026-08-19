@@ -4,6 +4,12 @@
 
 struct Point { float r; float z; };
 
+// Vec2 comes from math3D.h (BLA::Matrix<2,1,float> -- see
+// TODO/eigen-to-bla-migration.md), not a typedef here. This file used to
+// emit `using Vec2 = Eigen::Vector2f;` before that migration; the checked-in
+// header had it hand-removed but this generator wasn't updated to match,
+// which would have silently reintroduced Eigen into the header on the next
+// regeneration.
 constexpr int NR = 51;
 constexpr int NZ = 91;
 
