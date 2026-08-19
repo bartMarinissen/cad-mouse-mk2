@@ -90,8 +90,8 @@ inline BLA::Matrix<Rows, Cols, float> cwise_sqrt(const BLA::MatrixBase<MatType, 
 }
 
 inline Mat3 skew_matrix(const Vec3& v) {
-    // BLA's variadic constructor fills row-by-row, same order the comma
-    // operator used to.
+    // BLA's variadic constructor fills row-major, so the arguments below read
+    // left-to-right, top-to-bottom exactly as the matrix looks.
     return Mat3(  0.0f,  -v(2),   v(1),
                  v(2),    0.0f,  -v(0),
                 -v(1),    v(0),   0.0f);

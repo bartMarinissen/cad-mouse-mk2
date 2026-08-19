@@ -144,7 +144,8 @@ void PoseColorAnimation::update() {
   // R = Rz(yaw) * Ry(pitch) * Rx(roll), the inverse of the extraction that
   // produced last_rot (extract_angles_robust(), MotionController.cpp).
   // Maps knob frame -> world frame. BLA's variadic constructor fills
-  // row-major, same order the comma operator used to.
+  // row-major, so the arguments below read left-to-right, top-to-bottom
+  // exactly as the matrix looks.
   Mat3 R(cy * cp,     cy * sp * sr - sy * cr,    cy * sp * cr + sy * sr,
          sy * cp,     sy * sp * sr + cy * cr,    sy * sp * cr - cy * sr,
          -sp,         cp * sr,                   cp * cr);

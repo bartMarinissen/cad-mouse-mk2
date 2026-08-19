@@ -31,12 +31,12 @@ void CalibratingState::update() {
   ledController().update();
   sensor.updateCalibration();
 
-  // Bundle calibration is entered from the host, not from a gesture. Button
-  // activity used to jump straight to BundleState here, so a stray tap during
-  // boot silently dropped the mouse into a serial protocol with no PC on the
-  // other end -- it just looked hung. Requiring CAL_START makes the handoff
-  // deliberate on both sides: the user opens the window, the host decides what
-  // happens in it. See TODO/calibration-mode-entry.md.
+  // Bundle calibration is entered from the host, not from a gesture: jumping
+  // straight to BundleState on button activity here would let a stray tap
+  // during boot silently drop the mouse into a serial protocol with no PC on
+  // the other end -- it would just look hung. Requiring CAL_START makes the
+  // handoff deliberate on both sides: the user opens the window, the host
+  // decides what happens in it. See TODO/calibration-mode-entry.md.
   const char* line = serialController().takeLine();
   if (line != nullptr) {
     if (strcmp(line, "CAL_START") == 0) {

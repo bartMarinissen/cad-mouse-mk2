@@ -123,13 +123,13 @@ static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f)
 }
 
 // exp_so3() (exact SO(3) exponential map / Rodrigues' formula, used to
-// perturb R below) now lives in math3D.h as the one shared implementation
-// -- see TODO/eigen-to-bla-migration.md. It matters here specifically
-// because R_new = exp([w]_x) R_old is the actual definition used to derive
-// J_rot, so this FD test must use the exact exponential, not the
-// first-order approximation (I + [w]_x) R, or the FD estimate would pick up
-// an O(h) contamination from the approximation itself (rather than being a
-// clean O(h^2) central-difference estimate).
+// perturb R below) lives in math3D.h as the one shared implementation -- see
+// TODO/eigen-to-bla-migration.md. It matters here specifically because
+// R_new = exp([w]_x) R_old is the actual definition used to derive J_rot, so
+// this FD test must use the exact exponential, not the first-order
+// approximation (I + [w]_x) R, or the FD estimate would pick up an O(h)
+// contamination from the approximation itself (rather than being a clean
+// O(h^2) central-difference estimate).
 
 // ======================================================================
 // 1. BicubicField: check d_dr / d_dz against central differences of
@@ -463,11 +463,11 @@ void test_cross_magnet_terms_are_actually_present(void) {
 // 4. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
-// Updated to accept hardware calibration states.
-// Sensor gain is no longer part of ForwardModel/VirtualSensor - it's applied by
-// SensorController on raw readings before they ever reach the solver - so
-// this exercises the two per-magnet states that *are* still in the model:
-// axis tilt and polarization strength.
+// Accepts hardware calibration states.
+// Sensor gain is not part of ForwardModel/VirtualSensor -- it's applied by
+// SensorController on raw readings before they ever reach the solver -- so
+// this exercises the two per-magnet states that *are* in the model: axis
+// tilt and polarization strength.
 static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
         const Mat3 magnet_rotations[3],
@@ -526,7 +526,7 @@ static void compute_forward_model_jacobians(
 // The Massive Grid Test
 void test_forward_model_jacobian_grid(void) {
     // 1. Define Calibration Scenarios
-    // Sensor gain/skew is no longer modeled here - see the comment on
+    // Sensor gain/skew is not modeled here -- see the comment on
     // compute_forward_model_jacobians(). Only magnet tilt/orientation varies.
     // Scenario A: Perfect Hardware
     Mat3 tilts_perfect[3] = { identity3(), identity3(), identity3() };

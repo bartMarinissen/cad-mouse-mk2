@@ -179,8 +179,8 @@ Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p_local, Mat3& J_loc
 
         float Br_dr_minus_Br_r = dBr_dr - Br_over_r;
 
-        // BLA's variadic constructor fills row-major, same order the comma
-        // operator used to.
+        // BLA's variadic constructor fills row-major, so the arguments below
+        // read left-to-right, top-to-bottom exactly as the matrix looks.
         J_local = Mat3(
             dBr_dr * cx_sq + Br_over_r * cy_sq,  Br_dr_minus_Br_r * cxcy,             dBr_dz * cx,
             Br_dr_minus_Br_r * cxcy,             dBr_dr * cy_sq + Br_over_r * cx_sq,  dBr_dz * cy,

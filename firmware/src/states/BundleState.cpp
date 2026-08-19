@@ -27,10 +27,10 @@ void BundleState::update() {
     ledController().update();
     input.update();
 
-    // Non-blocking, and only dispatched when a line actually arrived -- the
-    // old readBytesUntil() could stall the loop for up to Stream's 1000ms
-    // timeout, and handed the controller a zeroed buffer every idle tick.
-    // The controller decides whether a command ends calibration.
+    // Non-blocking, and only dispatched when a line actually arrived, so an
+    // idle tick with nothing waiting never hands the controller a zeroed
+    // buffer or stalls the loop. The controller decides whether a command
+    // ends calibration.
     const char* command = serialController().takeLine();
     if (command != nullptr && bundleCalibration.handle_serial_command(command)) {
         stateMachine.changeState(&StateMachine::idleState);

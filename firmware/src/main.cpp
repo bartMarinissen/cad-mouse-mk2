@@ -9,9 +9,8 @@ void setup() {
   // Initialize USB HID first
   hidController().begin();
 
-  // Unconditional, where the Serial.begin() this replaces was gated on
-  // Config::ENABLE_TELEMETRY. Serial now carries the calibration protocol as
-  // well as telemetry, so the link has to come up either way -- and the boot
+  // Unconditional: Serial carries the calibration protocol as well as
+  // telemetry, so the link has to come up either way -- and the boot
   // diagnostics from resolveCalibration() below need somewhere to land.
   // TelemetryController still decides for itself whether to *print*.
   serialController().begin();

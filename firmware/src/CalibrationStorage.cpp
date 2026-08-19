@@ -128,10 +128,10 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
 }
 
 bool isPlausible(const CalibrationParams& params) {
-  // Finiteness first, over the whole struct at once. This used to be a bit
-  // test during unpacking, and is again: this build sets -ffinite-math-only
-  // project-wide (platformio.ini), which licenses GCC to fold a plain
-  // isfinite()-style check into a compile-time constant, since the compiler
+  // Finiteness first, over the whole struct at once, as a raw bit test
+  // rather than a plain isfinite()-style check: this build sets
+  // -ffinite-math-only project-wide (platformio.ini), which licenses GCC to
+  // fold such a check into a compile-time constant, since the compiler
   // is allowed to assume the "not finite" branch is unreachable.
   // is_finite_bits() (math3D.h) reads the raw IEEE-754 bit pattern instead,
   // which isn't a floating-point operation that flag governs, so it can't be

@@ -146,7 +146,7 @@ void TelemetryController::publish(const float motion[6], float residual_percent,
 
   // Footer 2 (Update Rate, Buttons, HID status)
   float update_rate = (1000 * kPrintEvery) / (millis() - last_update_ms);
-  // stats.time_tot accumulates microseconds now, not milliseconds.
+  // stats.time_tot accumulates microseconds, hence the 1e6f rather than 1e3f.
   float free_flow_rate = stats.time_tot ? (stats.n_time * 1e6f) / stats.time_tot : 0.0f;
 
   len = snprintf(temp, sizeof(temp), "| Rate: %4.1f / %4.1f Hz | Btn: 0x%02x | HID: %-3s",
