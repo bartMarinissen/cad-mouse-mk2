@@ -119,9 +119,8 @@ constexpr int NR = {len(table.r_line)};
 constexpr int NZ = {len(table.z_line)};
 
 // The extent of the table (in mm), as (r, z) pairs -- .x() is r, .y() is z.
-// `f`-suffixed (unlike the old Point{{r,z}} aggregate-init, this goes through
-// Vec2's constructor, where an unsuffixed double literal narrowing to float
-// warns even when -- as here -- the value is exactly representable).
+// `f`-suffixed: an unsuffixed double literal here warns as a narrowing
+// conversion to float, even though the value is exactly representable.
 constexpr Vec2 BICUBIC_ORIGIN = {{ {table.r_line[0]}f, {table.z_line[0]}f }};
 constexpr Vec2 BICUBIC_FAR    = {{ {table.r_line[-1]}f, {table.z_line[-1]}f }};
 

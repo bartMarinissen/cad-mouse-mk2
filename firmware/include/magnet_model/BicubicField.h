@@ -11,11 +11,7 @@ class BicubicField {
 
 public:
     const Vec2 (&grid_)[NZ][NR]{};
-    // origin_/far_ are (r, z) pairs stored in a Vec2 -- .x() is r, .y() is z
-    // (matches how BICUBIC_ORIGIN/BICUBIC_FAR are constructed in
-    // magnet_model_table.h: Vec2(r, z)). There used to be a dedicated Point{r,z}
-    // struct for this; dropped as a redundant type doing exactly what Vec2
-    // already does.
+    // origin_/far_ are (r, z) pairs stored in a Vec2 -- .x() is r, .y() is z.
     Vec2 origin_{};
     Vec2 far_{};
     float dr_{};

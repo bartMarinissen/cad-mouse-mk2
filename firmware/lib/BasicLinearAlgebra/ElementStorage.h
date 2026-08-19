@@ -17,27 +17,24 @@ class Matrix : public MatrixBase<Matrix<Rows, Cols, DType>, Rows, Cols, DType>
 
     Matrix() = default;
 
-    // Vendored addition (see TODO/eigen-to-bla-migration.md): this is the
-    // constructor a literal fixed matrix like BicubicField.cpp's Catmull-Rom
-    // basis goes through. Made constexpr so such matrices can be declared
-    // `static constexpr` -- a real language guarantee of compile-time
-    // construction, and a precondition for use in contexts that require a
-    // constant expression (static_assert, template arguments, array
-    // bounds). Measured to make no difference to generated code when the
-    // matrix was already all-literal, since -O3 already constant-folded it
-    // regardless (TODO/Performance.md's constexpr pass) -- the win here is
-    // a language guarantee, not a measured performance one. A constexpr
-    // constructor must initialize every member through the mem-initializer
-    // list, not just assign to it in the body (the array default
-    // constructor above stays a plain, possibly-uninitialized `= default`
-    // -- deliberately not touched, since a matrix
-    // that's about to be overwritten shouldn't pay for a zero-fill), so
-    // this fills `storage` via the mem-initializer's aggregate-list syntax
-    // instead of the row-major loop the old FillRowMajor used. Args are
-    // already in row-major order (matching `storage`'s own layout), and any
-    // cells left unlisted are zero-initialized by ordinary aggregate-init
-    // rules -- the same behavior FillRowMajor's zero-fill base case used to
-    // implement by hand.
+    // Vendored addition: constexpr so a literal fixed matrix can be declared
+    // `static constexpr` -- a language guarantee of compile-time
+    // construction and a precondition for use in a constant expression
+    // (static_assert, template arguments, array bounds); see
+    // TODO/eigen-to-bla-migration.md and TODO/Performance.md (no measured
+    // speed difference for local matrices under -O3 -- the value here is
+    // the guarantee, not performance).
+    //
+    // A constexpr constructor must initialize every member through the
+    // mem-initializer list, not the body, so `storage` is filled via the
+    // mem-initializer's aggregate-list syntax: args are in row-major order
+    // (matching `storage`'s own layout), and any cells left unlisted are
+    // zero-initialized by ordinary aggregate-init rules.
+    //
+    // Matrix()'s plain `= default` above is deliberately not given a
+    // default member initializer for `storage` -- that would make every
+    // default-constructed matrix pay for a zero-fill it usually doesn't
+    // need, since most are about to be overwritten anyway.
     template <typename... TAIL>
     constexpr Matrix(DType head, TAIL... args) : storage{head, args...}
     {

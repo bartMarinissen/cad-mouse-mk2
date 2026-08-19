@@ -14,9 +14,8 @@ constexpr int NR = 51;
 constexpr int NZ = 91;
 
 // The extent of the table (in mm), as (r, z) pairs -- .x() is r, .y() is z.
-// `f`-suffixed (unlike the old Point{r,z} aggregate-init, this goes through
-// Vec2's constructor, where an unsuffixed double literal narrowing to float
-// warns even when -- as here -- the value is exactly representable).
+// `f`-suffixed: an unsuffixed double literal here warns as a narrowing
+// conversion to float, even though the value is exactly representable.
 constexpr Vec2 BICUBIC_ORIGIN = { 0.0f, -20.0f };
 constexpr Vec2 BICUBIC_FAR    = { 10.0f, -0.5f };
 

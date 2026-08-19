@@ -42,9 +42,9 @@ struct MatrixBase
     // method, so e.g. .z() on a Vec2 is a compile error, not silently wrong. Mirrors
     // operator()'s const/non-const pair so `v.x() = f;` works exactly like `v(0) = f;` does.
     // constexpr for the same reason operator() above is: usable on a constexpr Vec2/Vec3
-    // (e.g. BicubicField's constexpr constructor reading a Point-replacement Vec2's
-    // components) whenever the concrete derived type's own operator() is constexpr too --
-    // this only enables that, it doesn't force it for derived types that aren't.
+    // (e.g. BicubicField's constexpr constructor reading its Vec2 origin/far members)
+    // whenever the concrete derived type's own operator() is constexpr too -- this only
+    // enables that, it doesn't force it for derived types that aren't.
     constexpr DType &x() { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
     constexpr DType x() const { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
     constexpr DType &y() { static_assert(cols == 1 && rows >= 2, "y() needs a column vector with at least 2 rows"); return (*this)(1); }
