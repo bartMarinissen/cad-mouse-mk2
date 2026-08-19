@@ -165,13 +165,13 @@ def format_cpp(table: FieldTable) -> str:
 #include "{HEADER_RELATIVE_PATH}"
 
 // __not_in_flash (pico/platform.h, transitively via Arduino.h) places this
-// in RAM (.time_critical) despite being `const` -- deliberate: evaluate()'s
-// hot bicubic lookup wants guaranteed-fast access rather than depending on
-// XIP-cache behavior for a 37KB flash-resident table. The BLA::Matrix
-// constexpr constructor (TODO/eigen-to-bla-migration.md) is what makes this
-// safe to combine with RAM placement at all -- it's still a single
-// compile-time-computed image copied to RAM at boot, not 4,641 per-element
-// constructor calls run there.
+// 37KB table in RAM (.time_critical) despite being `const` -- deliberate:
+// evaluate()'s hot bicubic lookup wants guaranteed-fast RAM access, not the
+// XIP-cache-dependent latency it would have if this were left as ordinary
+// flash-resident `.rodata`. The BLA::Matrix constexpr constructor
+// (TODO/eigen-to-bla-migration.md) is what makes this safe to combine with
+// RAM placement at all -- it's still a single compile-time-computed image
+// copied to RAM at boot, not 4,641 per-element constructor calls run there.
 const Vec2 __not_in_flash("bicubic_table") BICUBIC_INTERPOLATION_TABLE[NZ][NR] = {arr};
 """
 

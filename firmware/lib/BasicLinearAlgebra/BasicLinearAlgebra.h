@@ -48,9 +48,14 @@ struct MatrixBase
     DType &z() { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
     DType z() const { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
 
-    // Vendored addition: explicit so a derived Matrix's own constexpr
-    // constructor (ElementStorage.h) can default-construct this empty base
-    // subobject in a constant expression -- see TODO/eigen-to-bla-migration.md.
+    // Vendored addition: a derived Matrix's own constexpr constructor
+    // (ElementStorage.h) default-constructs this empty base subobject, and
+    // an explicitly-defaulted special member function is implicitly
+    // constexpr already if the implicit definition would qualify (this one
+    // does -- no members, nothing to initialize) -- confirmed by testing
+    // without this keyword, which still compiles. Kept explicit anyway as
+    // a guarantee rather than relying on that implicit rule holding across
+    // compilers -- see TODO/eigen-to-bla-migration.md.
     constexpr MatrixBase() = default;
 
     template <typename MatType>

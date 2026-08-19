@@ -248,8 +248,13 @@ The last item this file's "Open" section left standing — closed by patching
 **What changed**: `firmware/lib/BasicLinearAlgebra/ElementStorage.h`'s
 variadic fill constructor (`Matrix(DType head, TAIL... args)`) and
 `operator()` are now `constexpr`; `BasicLinearAlgebra.h`'s
-`MatrixBase() = default` is marked explicitly `constexpr` too, since a
-derived `Matrix`'s constexpr constructor implicitly default-constructs it.
+`MatrixBase() = default` is marked explicitly `constexpr` too, though
+testing without the keyword showed it wasn't strictly required — an
+explicitly-defaulted special member function is already implicitly
+`constexpr` if the implicit definition would qualify, and this one (no
+members to initialize) does. Kept explicit as a guarantee rather than
+relying on that implicit rule, since a derived `Matrix`'s constexpr
+constructor does default-construct this base subobject.
 The fill constructor's body used to walk a recursive `FillRowMajor` helper,
 writing each element via `operator()` inside the constructor *body* — not
 usable in a constexpr constructor, because the standard requires every
