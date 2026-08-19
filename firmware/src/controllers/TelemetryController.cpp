@@ -110,7 +110,7 @@ void TelemetryController::publish(const float motion[6], float residual_percent,
   memcpy(buffer[row++], temp, len);
 
   // Residual rows. Same sensor-major layout as raw_field (see solve_pose.cpp,
-  // where residual.block<3,1>(sensor*3, 0) is filled per sensor).
+  // where residual.Submatrix<3,1>(sensor*3, 0) is filled per sensor).
   for (int i = 0; i < 3; ++i) {
     char axis[] = {'X', 'Y', 'Z'};
     len = snprintf(temp, sizeof(temp), "|   %c:         %7.3f  %7.3f  %7.3f",

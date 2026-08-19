@@ -64,7 +64,7 @@ struct MagnetModel {
 
     // We assume BicubicField is passed by reference to avoid copying the grid
     MagnetModel(const BicubicField& field_model, const Vec3& m_local,
-                const Mat3 &magnet_rotation = Mat3::Identity(),
+                const Mat3 &magnet_rotation = identity3(),
                 float magnet_strength_mT = BICUBIC_FIELD_REFERENCE_MT);
 
     /**

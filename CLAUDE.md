@@ -32,6 +32,20 @@ One README is not an exception to the above but worth naming:
 **`TODO/README.md` does own implementation status.** Being an index of open
 work is its whole job, so it states plainly what's done and what isn't.
 
+## Code comments describe the present, not the past
+
+Write every comment as if the code had always looked this way. State
+what's true now — an invariant, a constraint, a non-obvious consequence
+— never what changed or why it changed; that's the commit message's job.
+
+Bad: `// Made constexpr so this can be static constexpr; used to go
+through FillRowMajor's loop.`
+Good: `// constexpr: usable in a static_assert / constant expression.`
+
+Catching yourself writing "used to", "no longer", "previously", "old X", or
+"this replaces" in a code comment is the signal: that sentence belongs in
+the commit message, not next to the code.
+
 ## Docs that will actively mislead you
 
 - **`TODO/resolved/` is history.** Those files are written in the present

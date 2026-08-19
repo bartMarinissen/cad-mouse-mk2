@@ -6,9 +6,13 @@ Run with:
 pio test -e seeed_xiao_rp2040_test
 ```
 
-That environment extends the normal build but unsets `-DNDEBUG`, so Eigen's
-assertions are live while testing. `test_build_src = yes`, so the tests link
-against the real firmware sources rather than a stub.
+That environment extends the normal build but unsets `-DNDEBUG`, restoring
+standard-library `assert()` checks while testing (historically this also
+kept Eigen's `eigen_assert` bounds checks live; since
+TODO/eigen-to-bla-migration.md, BLA has no runtime assertions at all --
+`operator()` does raw, unchecked array indexing -- so there's nothing
+Eigen-specific left for this to unlock). `test_build_src = yes`, so the
+tests link against the real firmware sources rather than a stub.
 
 ## Why `test_jacobian.cpp` matters more than a typical unit test
 

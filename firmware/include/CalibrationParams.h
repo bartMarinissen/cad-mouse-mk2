@@ -30,20 +30,19 @@
 // placement error into the magnet position offsets instead, so they are not a
 // fitted quantity. They stay in magnet_model/positions.h.
 //
-// PLAIN ARRAYS, NOT EIGEN TYPES. This struct is exactly what CalibrationStorage
+// PLAIN ARRAYS, NOT MATRIX TYPES. This struct is exactly what CalibrationStorage
 // copies to and from flash -- the stored file is a magic/version header, these
 // 300 bytes verbatim, and a CRC. That only works if the struct is trivially
-// copyable, and Eigen::Matrix is not: it declares a user-provided copy
-// constructor, so memcpy'ing into a struct of Mat3/Vec3 would be undefined
-// behaviour even though the storage underneath really is a bare float array.
+// copyable, and BLA::Matrix is not: it declares non-trivial constructors, so
+// memcpy'ing into a struct of Mat3/Vec3 would be undefined behaviour even
+// though the storage underneath really is a bare float array.
 //
 // Two more things fall out of it. The layout is now the language's guarantee
-// rather than Eigen's implementation detail, so `sizeof == 300` is a fact
-// instead of an observation. And the ordering can be ROW-major, matching how
-// numpy ravels on the Python side that writes these files, instead of the
-// column-major Eigen would have imposed -- a transposed gain matrix survives
-// both the CRC and every plausibility check, so that was a silent failure
-// waiting to happen.
+// rather than the matrix library's implementation detail, so `sizeof == 300`
+// is a fact instead of an observation. And the ordering is ROW-major,
+// matching how numpy ravels on the Python side that writes these files --
+// BLA::Matrix's own storage happens to be row-major too so toMat3()/toVec3()
+// below are now a direct per-element copy rather than a reinterpret-and-reorder.
 //
 // Consumers convert with toMat3()/toVec3() below, at construction, which is
 // where they already copied these values out.
@@ -110,16 +109,22 @@ struct CalibrationParams {
 static_assert(sizeof(CalibrationParams) == 300,
               "CalibrationParams is the on-disk payload; its size is the format");
 
-// --- Turning the stored arrays into the Eigen types the model works in. ---
+// --- Turning the stored arrays into the BLA types the model works in. ---
 //
-// Row-major is stated here, once, rather than being spelled out by every
-// consumer: assigning a row-major Map to a column-major Mat3 makes Eigen do
-// the reordering, so no caller has to know which convention the file uses.
-// Map is a view, not an allocation, so this stays inside EIGEN_NO_MALLOC.
+// BLA::Matrix's storage is natively row-major (storage[i*Cols+j] -- see
+// math3D.h / TODO/eigen-to-bla-migration.md), which is exactly how
+// float[3][3] already lays out, and matches numpy's default on the Python
+// side that writes these files. So this is
+// just a direct per-element copy -- no reordering, and stated here once
+// rather than by every caller.
 inline Mat3 toMat3(const float m[3][3]) {
-  return Eigen::Map<const Eigen::Matrix<float, 3, 3, Eigen::RowMajor>>(&m[0][0]);
+  Mat3 out;
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      out(i, j) = m[i][j];
+  return out;
 }
 
 inline Vec3 toVec3(const float v[3]) {
-  return Eigen::Map<const Vec3>(v);
+  return Vec3(v[0], v[1], v[2]);
 }

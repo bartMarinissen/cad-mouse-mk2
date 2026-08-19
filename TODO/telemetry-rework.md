@@ -3,20 +3,19 @@
 Originated from ARCHITECTURE.md issues #7 and #8, merged into one effort per
 discussion.
 
-## Issue A: `rcond` is a hardcoded stub
+## Issue A: `rcond` is a hardcoded stub — RESOLVED
 
-`IdleState.cpp` sets `float rcond = 1.0;` with a commented-out line right
-above it:
-
-```cpp
-//auto eig_vals = motionController.statistics.last_jacobian.jacobiSvd().singularValues();
-```
-We will just drop this
+Done, upstream of this pass: `IdleState.cpp`'s `float rcond = 1.0;` stub and
+its commented-out `jacobiSvd()` line are gone, and
+`TelemetryController::publish()` no longer takes an `rcond` parameter at
+all (the cross-magnet-refactor branch dropped both; ported as dropped, see
+`TODO/eigen-to-bla-migration.md`'s "Extended" section).
 
 ## Issue B: `TelemetryController::publish()`'s signature keeps growing
 
-Currently 9 parameters (`motion`, `residual_percent`, `buttonBits`,
-`hidReportSent`, `stats`, `raw_field`, `last_pos`, `last_rot`, `rcond`) in
+Currently 8 parameters (`motion`, `residual_percent`, `buttonBits`,
+`hidReportSent`, `stats`, `raw_field`, `last_pos`, `last_rot` — `rcond` is
+gone, Issue A above) in
 `firmware/include/controllers/TelemetryController.h` /
 `firmware/src/controllers/TelemetryController.cpp`, and it's grown with every
 diagnostic added so far. 

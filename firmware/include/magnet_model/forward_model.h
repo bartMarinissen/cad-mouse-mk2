@@ -23,10 +23,10 @@ public:
      *   t_world, the position of the knob origin in the world frame
      *   R, the rotation matrix needed to translate from the world frame to the knob frame
      */
-    void evaluate(const Vec3& t_world, 
-                  const Mat3& R, 
-                  Eigen::Matrix<float, 9, 1> &B_field, 
-                  Eigen::Matrix<float, 9, 6> &J) const;
+    void evaluate(const Vec3& t_world,
+                  const Mat3& R,
+                  Vector9f &B_field,
+                  Matrix9x6f &J) const;
 
 private:
     const VirtualSensor sensors_[3];

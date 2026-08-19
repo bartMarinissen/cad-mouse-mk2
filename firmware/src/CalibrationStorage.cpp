@@ -25,7 +25,7 @@ constexpr size_t kCrcOffset = kBlobSize - 4;
 
 // This one IS load-bearing: the payload is a raw copy of the struct, so
 // memcpy'ing into it is only defined behaviour while it stays trivially
-// copyable. Keeping CalibrationParams plain arrays rather than Eigen types is
+// copyable. Keeping CalibrationParams plain arrays rather than matrix types is
 // what buys that -- see the note in CalibrationParams.h.
 static_assert(std::is_trivially_copyable<CalibrationParams>::value,
               "the stored format is a raw copy of CalibrationParams");
@@ -129,15 +129,17 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
 
 bool isPlausible(const CalibrationParams& params) {
   // Finiteness first, over the whole struct at once. This used to be a bit
-  // test during unpacking; plain isfinite() is fine here, because the flag
-  // that would break it is -ffinite-math-only and this build does not set it
-  // (see build_flags in platformio.ini -- associative, reciprocal, no-errno,
-  // no-trapping, no-rounding, no-signed-zeros, none of which license the
-  // compiler to assume finiteness). It is also what rejects erased flash,
-  // where every byte reads 0xFF and every float comes out NaN.
+  // test during unpacking, and is again: this build sets -ffinite-math-only
+  // project-wide (platformio.ini), which licenses GCC to fold a plain
+  // isfinite()-style check into a compile-time constant, since the compiler
+  // is allowed to assume the "not finite" branch is unreachable.
+  // is_finite_bits() (math3D.h) reads the raw IEEE-754 bit pattern instead,
+  // which isn't a floating-point operation that flag governs, so it can't be
+  // folded away the same way. It is also what rejects erased flash, where
+  // every byte reads 0xFF and every float comes out NaN.
   const float* values = &params.sensor_gain[0][0][0];
   for (size_t i = 0; i < kPayloadSize / sizeof(float); i++) {
-    if (!isfinite(values[i])) {
+    if (!is_finite_bits(values[i])) {
       return false;
     }
   }
@@ -159,7 +161,7 @@ bool isPlausible(const CalibrationParams& params) {
     // or an absurd one. Fitted lands near 1 under the det(G)=1 gauge; the
     // default's scalar gains land near 0.885. Two orders either way clears
     // both without encoding either gauge.
-    const float gainDet = fabsf(toMat3(params.sensor_gain[i]).determinant());
+    const float gainDet = fabsf(BLA::Determinant(toMat3(params.sensor_gain[i])));
     if (gainDet < 0.01f || gainDet > 100.0f) {
       return false;
     }

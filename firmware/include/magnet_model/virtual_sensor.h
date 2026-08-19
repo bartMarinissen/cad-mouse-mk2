@@ -32,6 +32,6 @@ struct VirtualSensor {
         const MagnetPlacement &cross_a,
         const MagnetPlacement &cross_b,
         const Vec3& t_world,
-        Eigen::Matrix<float, 3, 1> &B_world,
-        Eigen::Matrix<float, 3, 6> &J) const;
+        Vec3 &B_world,
+        Matrix3x6f &J) const;
 };

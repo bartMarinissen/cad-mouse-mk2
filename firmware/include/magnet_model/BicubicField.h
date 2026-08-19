@@ -11,24 +11,25 @@ class BicubicField {
 
 public:
     const Vec2 (&grid_)[NZ][NR]{};
-    Point origin_{};
-    Point far_{};
+    // origin_/far_ are (r, z) pairs stored in a Vec2 -- .x() is r, .y() is z.
+    Vec2 origin_{};
+    Vec2 far_{};
     float dr_{};
     float dz_{};
     float dr_reciprocal_{};
     float dz_reciprocal_{};
 
-    // values[0][0] = sample at r = origin.r z = origin.z
-    // values[NR-1][NZ-1] = sample at r = far.r z = far.z
+    // values[0][0] = sample at r = origin.x() z = origin.y()
+    // values[NR-1][NZ-1] = sample at r = far.x() z = far.y()
     // intermediate values are uniformly spaced in r and z.
     // dr, dz derived from the bounding box and grid size.
     constexpr BicubicField(const Vec2 (&values)[NZ][NR],
-                            Point origin, Point far) noexcept
+                            Vec2 origin, Vec2 far) noexcept
         : grid_(values),
           origin_(origin), far_(far),
 
-          dr_((far.r - origin.r) / static_cast<float>(NR - 1)),
-          dz_((far.z - origin.z) / static_cast<float>(NZ - 1)),
+          dr_((far.x() - origin.x()) / static_cast<float>(NR - 1)),
+          dz_((far.y() - origin.y()) / static_cast<float>(NZ - 1)),
           dr_reciprocal_(1.0f/dr_),
           dz_reciprocal_(1.0f/dz_)
     {}

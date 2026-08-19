@@ -134,20 +134,20 @@ void PoseColorAnimation::update() {
 
   // last_rot is [pitch, roll, yaw] in degrees, absolute in the world frame.
   const float toRad = float(M_PI) / 180.0f;
-  const float pitch = motion.last_rot[0] * toRad;
-  const float roll = motion.last_rot[1] * toRad;
-  const float yaw = motion.last_rot[2] * toRad;
+  const float pitch = motion.last_rot(0) * toRad;
+  const float roll = motion.last_rot(1) * toRad;
+  const float yaw = motion.last_rot(2) * toRad;
   const float cp = std::cos(pitch), sp = std::sin(pitch);
   const float cr = std::cos(roll), sr = std::sin(roll);
   const float cy = std::cos(yaw), sy = std::sin(yaw);
 
   // R = Rz(yaw) * Ry(pitch) * Rx(roll), the inverse of the extraction that
   // produced last_rot (extract_angles_robust(), MotionController.cpp).
-  // Maps knob frame -> world frame.
-  Mat3 R;
-  R << cy * cp,     cy * sp * sr - sy * cr,    cy * sp * cr + sy * sr,
-       sy * cp,     sy * sp * sr + cy * cr,    sy * sp * cr - cy * sr,
-       -sp,         cp * sr,                   cp * cr;
+  // Maps knob frame -> world frame. BLA's variadic constructor fills
+  // row-major, same order the comma operator used to.
+  Mat3 R(cy * cp,     cy * sp * sr - sy * cr,    cy * sp * cr + sy * sr,
+         sy * cp,     sy * sp * sr + cy * cr,    sy * sp * cr - cy * sr,
+         -sp,         cp * sr,                   cp * cr);
 
   // World point -> knob frame, the same transform VirtualSensor::evaluate() applies
   // to the (likewise world-fixed) physical sensors.

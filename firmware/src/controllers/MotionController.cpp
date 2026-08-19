@@ -46,8 +46,8 @@ void MotionController::reset() {
   }
   motionActive_ = false;
   last_pos = base_pos = Positions::approx_rest_pos;
-  last_rot = base_rot = Vec3::Zero();
-  last_R = Mat3::Identity();
+  last_rot = base_rot = BLA::Zeros<3, 1, float>();
+  last_R = identity3();
   statistics.reset();
 }
 
@@ -58,7 +58,7 @@ void MotionController::set_base_pose(const Vec3 pos, const Vec3 rot){
   // this runs once after calibration, with the knob at rest and therefore
   // within a couple of degrees of identity anyway, so the round trip back
   // through Euler angles would buy nothing.
-  last_R = Mat3::Identity();
+  last_R = identity3();
 }
 
 float MotionController::clampf(float v, float lo, float hi) {
@@ -85,7 +85,7 @@ float MotionController::axisBaseDead(int i) {
 // Forces Pitch into the human-intuitive [-90, +90] degree range to prevent 180-deg flips.
 // Declared in MotionController.h; see that declaration for why this is a free
 // function rather than a method.
-Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
+Vec3 extract_angles_robust(const Mat3& R) {
     float pitch, roll, yaw;
 
     // R(row, col)
@@ -111,8 +111,11 @@ Vec3 extract_angles_robust(const Eigen::Matrix3f& R) {
     }
 
     // Return in radians [Yaw, Pitch, Roll] or [Pitch, Roll, Yaw] depending on your preference
-    // Here returning [Pitch, Roll, Yaw] 
-    return Vec3(pitch, roll, yaw)* (180.0f / M_PI); 
+    // Here returning [Pitch, Roll, Yaw]
+    // M_PI is a double; BLA's scalar operators deduce DType from both
+    // operands (see TODO/eigen-to-bla-migration.md), so this has to reduce
+    // to a float before multiplying a Vec3 by it.
+    return Vec3(pitch, roll, yaw) * (180.0f / float(M_PI));
 }
 
 // Return residual and other quality reports
@@ -148,21 +151,26 @@ float MotionController::compute(const float raw[9], const float baseline[9], flo
   float residual = read_pose(raw, last_pos, last_R);
   last_rot = extract_angles_robust(last_R);
 
-  Eigen::Matrix<float, 9, 1> raw_vec = Eigen::Matrix<float, 9, 1>(raw);
-  float residual_percent = 100 * residual / raw_vec.norm();
+  // BLA has no constructor taking a raw pointer/array (see
+  // TODO/eigen-to-bla-migration.md), and this is only ever used to compute
+  // a norm, so compute the sum-of-squares directly rather than
+  // materializing a Vector9f just to read it back out.
+  float raw_sum_sq = 0.0f;
+  for (int i = 0; i < 9; ++i) raw_sum_sq += raw[i] * raw[i];
+  float residual_percent = 100 * residual / sqrtf(raw_sum_sq);
 
   Vec3 t   = last_pos - base_pos;
   Vec3 rot = last_rot - base_rot;
 
   // Apply sign fixes and gains
   float y[6];
-  y[AXIS_TX] = Config::SIGN_AXIS[AXIS_TX] * t[0] * Config::GAIN_T[AXIS_TX];
-  y[AXIS_TY] = Config::SIGN_AXIS[AXIS_TY] * t[1] * Config::GAIN_T[AXIS_TY];
-  y[AXIS_TZ] = Config::SIGN_AXIS[AXIS_TZ] * t[2] * Config::GAIN_T[AXIS_TZ];
+  y[AXIS_TX] = Config::SIGN_AXIS[AXIS_TX] * t(0) * Config::GAIN_T[AXIS_TX];
+  y[AXIS_TY] = Config::SIGN_AXIS[AXIS_TY] * t(1) * Config::GAIN_T[AXIS_TY];
+  y[AXIS_TZ] = Config::SIGN_AXIS[AXIS_TZ] * t(2) * Config::GAIN_T[AXIS_TZ];
   // TODO: figure out why X and Y rotation here are flipped
-  y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rot[1] * Config::GAIN_R[AXIS_RX - 3];
-  y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * rot[0] * Config::GAIN_R[AXIS_RY - 3];
-  y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rot[2] * Config::GAIN_R[AXIS_RZ - 3];
+  y[AXIS_RX] = Config::SIGN_AXIS[AXIS_RX] * rot(1) * Config::GAIN_R[AXIS_RX - 3];
+  y[AXIS_RY] = Config::SIGN_AXIS[AXIS_RY] * rot(0) * Config::GAIN_R[AXIS_RY - 3];
+  y[AXIS_RZ] = Config::SIGN_AXIS[AXIS_RZ] * rot(2) * Config::GAIN_R[AXIS_RZ - 3];
 
 
   
@@ -201,21 +209,21 @@ void Statistics::update(uint32_t time_last){
 
   // Update second moment for variance calculation
   avg_residual_sq *= smoothing;
-  avg_residual_sq += (1 - smoothing) * last_residual.cwiseProduct(last_residual);
+  avg_residual_sq += (1 - smoothing) * cwise_product(last_residual, last_residual);
 
   time_tot += time_last;
   n_time++;
 }
 
 void Statistics::reset(){
-  avg_residual = Vector9f::Zero();
-  avg_residual_sq= Vector9f::Zero();
-  last_residual = Vector9f::Zero();
+  avg_residual = BLA::Zeros<9, 1, float>();
+  avg_residual_sq = BLA::Zeros<9, 1, float>();
+  last_residual = BLA::Zeros<9, 1, float>();
   time_tot = 0;
   n_time = 0;
 }
 
 Vector9f Statistics::get_residual_stddev() const {
   // Variance = E[X²] - E[X]²
-  return (avg_residual_sq - avg_residual.cwiseProduct(avg_residual)).cwiseSqrt();
+  return cwise_sqrt(avg_residual_sq - cwise_product(avg_residual, avg_residual));
 }
