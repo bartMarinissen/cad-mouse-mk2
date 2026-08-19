@@ -203,10 +203,6 @@ void Statistics::update(uint32_t time_last){
   avg_residual *= smoothing;
   avg_residual += (1 - smoothing) * last_residual;
 
-  // NOTE: deliberately no matching EMA over the 9x6 Jacobian here -- that
-  // would cost ~162 flops every frame for a value nothing reads. Only
-  // avg_residual and avg_residual_sq feed TelemetryController.
-
   // Update second moment for variance calculation
   avg_residual_sq *= smoothing;
   avg_residual_sq += (1 - smoothing) * cwise_product(last_residual, last_residual);
