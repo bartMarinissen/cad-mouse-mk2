@@ -86,11 +86,16 @@ too, not just the file.
   `origin/experimental`'s cross-magnet forward-model refactor — three of
   four candidates free-or-better, `BicubicField` still ~7.3-7.5% costlier
   and still kept — and a sixth pass made `BLA::Matrix` `constexpr`-capable,
-  moving the generated 4,641-entry bicubic table from a RAM-resident,
-  dynamically-initialized array to `.rodata`. Real build: Flash **234,472 B**
-  / RAM **33,648 B** (down from 328,208 B / 70,888 B). Iteration-count
-  telemetry and on-device wall-clock re-measurement (cross-magnet cost, and
-  now the relocated table's XIP-cache latency too) are still open.
+  moving the generated 4,641-entry bicubic table off a dynamically-
+  initialized `.bss` array onto a single compile-time image, then pinned
+  that image back into RAM with `__not_in_flash` (same `.time_critical`
+  mechanism `BicubicField::evaluate` itself already uses) so the hot lookup
+  keeps uniform RAM-speed access instead of depending on XIP-cache
+  behavior. Real build: Flash **234,464 B** / RAM **70,768 B** (down from
+  328,208 B / 70,888 B — all the flash win from removing 4,641 constructor
+  calls kept, RAM essentially unchanged from the original baseline).
+  Iteration-count telemetry and an on-device wall-clock re-measurement of
+  the cross-magnet refactor's own cost are still open.
 - **[`eigen-to-bla-migration.md`](eigen-to-bla-migration.md)** — Eigen
   replaced with `BasicLinearAlgebra`, vendored and patched (dropped a
   `Printable` base that was giving every matrix a hidden vtable pointer —
@@ -102,10 +107,12 @@ too, not just the file.
   pass brought in enough more Eigen-idiom source that closing that gap once
   beat hand-translating every call site). `BLA::Matrix`'s literal-list
   constructor is now `constexpr`, closing the file's last open item — the
-  real payoff was the generated bicubic table moving from RAM to flash
-  (see `Performance.md`'s sixth pass), not the small local matrix this file
-  originally pointed at, which measured no codegen difference at all.
-  On-device verification (including the relocated table's latency) is
+  real payoff was the generated bicubic table, which now builds as a single
+  compile-time image (see `Performance.md`'s sixth pass) instead of 4,641
+  runtime constructor calls, and stays RAM-resident via `__not_in_flash`
+  rather than the small local basis matrix this file originally pointed at,
+  which measured no codegen difference at all either way. On-device
+  verification is
   still open.
 - **[`calibration-led-animations.md`](calibration-led-animations.md)** — The
   LED animation architecture (`AnimationBase`/`std::variant`) is in place,

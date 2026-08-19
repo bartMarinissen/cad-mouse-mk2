@@ -1184,13 +1184,22 @@ measured this same number once before, diagnosing a different problem);
 the flash delta is the removed 4,641-call constructor sequence, which costs
 far more per byte in code than the raw packed floats it replaced.
 
-**Open caveat, not measured**: the table used to be uniformly fast RAM;
-it's now flash, read through the RP2040's XIP cache. The bicubic lookup's
-access pattern (a local 4×4 window, moving smoothly frame-to-frame under
-hot-starting) should stay cache-friendly, but nothing here confirms
-`BicubicField::evaluate`'s per-call latency didn't regress — same
-unverified-on-hardware gap this document's "Open next steps" below already
-tracks, now with one more specific thing riding on it.
+**Resolved (follow-up, same pass): moved back to RAM.** Rather than leave
+the XIP-cache-latency question to reasoning, the table was pinned back into
+RAM with `__not_in_flash("bicubic_table")` (`pico/platform.h`, the same
+`.time_critical` mechanism `__not_in_flash_func` already uses for
+`BicubicField::evaluate` itself) — its own doc comment gives "a `static
+const` array placed in RAM" as the textbook example of this exact case.
+Confirmed with `nm`: RAM address again, but still **zero** static-init
+function — `constexpr` still means a single compile-time image copied to
+RAM by the Pico SDK's existing boot-time bulk copy, not 4,641 constructor
+calls. Re-measured: Flash 234,472 B → 234,464 B (flat — the data was
+already flash-resident as the load image either way), RAM 33,648 B →
+70,768 B (table restored). **Net, vs. the original pre-`constexpr`
+baseline: Flash −93,744 B (−28.6%), RAM −120 B (flat).** All of the flash
+win is kept, RAM lands back where it started, and the XIP-latency question
+is moot since the table isn't read through XIP anymore. Full detail in
+`TODO/eigen-to-bla-migration.md`'s `constexpr` section.
 
 **Verification**: `pio test -e native_test` (all 8 cases, unchanged);
 `pio test -e seeed_xiao_rp2040_test --without-uploading --without-testing`
@@ -1211,11 +1220,9 @@ patch itself and the `basis`-matrix measurement, is in
   including its cost, with a rough +40% estimate that needs a real
   `micros()` measurement to confirm or correct. Same instrumentation gap as
   the bullet below, now with one more thing riding on it.
-- **`BICUBIC_INTERPOLATION_TABLE`'s XIP-cache latency, on-device.** The
-  sixth pass moved this 4,641-entry table from RAM to flash. Uniformly-fast
-  RAM access is now XIP-cached flash access instead — plausibly fine given
-  the lookup's local, smoothly-moving 4×4 window, but that's reasoning, not
-  a `micros()` measurement. One more thing riding on real hardware access.
+- ~~`BICUBIC_INTERPOLATION_TABLE`'s XIP-cache latency, on-device~~ — moot,
+  same pass: the table was pinned back into RAM with `__not_in_flash`
+  rather than left on flash/XIP. See the sixth pass's follow-up above.
 - Add iteration-count + per-phase (`micros()`) instrumentation to get real
   convergence and timing data instead of static worst-case counts — no longer
   blocked on the Statistics TODO, which is resolved (see above).

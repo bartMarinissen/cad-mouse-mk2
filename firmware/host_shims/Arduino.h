@@ -37,6 +37,13 @@
 // rather than of a differently-annotated variant of it.
 #define __not_in_flash_func(func_decl) func_decl
 
+// Same idea as __not_in_flash_func above, but for data (pico/platform.h's
+// __not_in_flash(group), used by magnet_model_table.cpp to keep
+// BICUBIC_INTERPOLATION_TABLE in RAM instead of XIP flash on target). Off
+// target there's nothing to place, so this collapses to nothing and the
+// declaration is compiled exactly as an ordinary array.
+#define __not_in_flash(group)
+
 // Minimal stand-in for Arduino's Print -- just enough surface for
 // MatrixBase::printTo() to typecheck (see above). Never actually invoked by
 // anything this test suite runs.

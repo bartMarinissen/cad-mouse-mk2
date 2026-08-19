@@ -311,14 +311,36 @@ identically across three independent from-scratch rebuilds before being
 trusted (an initial non-`rm -rf`'d build gave a suspicious result that
 turned out to just be evidence of exactly this effect, not a caching bug).
 
-**Open caveat, not verified**: the table used to live in RAM (uniformly
-fast access); it now lives in flash, read through the RP2040's XIP cache.
-The bicubic lookup pattern (a local 4×4 window that moves smoothly
-frame-to-frame under hot-starting) should stay cache-friendly, but this is
-reasoning, not a measurement — nothing here confirms `evaluate()`'s
-per-call latency didn't regress, and that's exactly the kind of thing this
-document's own "on-device verification" bullet (below) already flags as
-open. Flagging rather than asserting.
+**Resolved (follow-up, same pass): moved back to RAM, deliberately.** The
+XIP-cache-latency caveat above was real enough that the decision was made
+not to leave it to reasoning: `magnet_model_table.cpp`'s definition (and
+`bicubic_table.py`'s generator template, so this survives regeneration) now
+reads `const Vec2 __not_in_flash("bicubic_table") BICUBIC_INTERPOLATION_TABLE[NZ][NR]`.
+`__not_in_flash` (`pico/platform.h`, via `Arduino.h`) is the Pico SDK's
+documented mechanism for exactly this — its own doc comment gives "a
+`static const` array placed in RAM" as the example — same `.time_critical`
+placement `__not_in_flash_func` already uses for `BicubicField::evaluate`
+itself, elsewhere in this codebase. Confirmed with `nm`: the table's
+symbol moved from `.bss` (RAM, dynamically constructed — the pre-`constexpr`
+state) to a `.time_critical`-backed RAM address again, but this time with
+**no** static-initializer function at all — `constexpr` still did its job,
+the table is a single compile-time-computed image copied into RAM by the
+Pico SDK's existing bulk boot-copy, not 4,641 constructor calls. Host stub
+(`firmware/host_shims/Arduino.h`) got a matching `__not_in_flash(group)` →
+identity macro, mirroring how `__not_in_flash_func` is already stubbed
+there.
+
+**Measured**: Flash 234,472 B → 234,464 B (flat — the table's data was
+already flash-resident either way, as the load image; RAM-vs-flash-only
+just decides whether it's *also* copied to a RAM address), RAM 33,648 B →
+70,768 B (back up, table restored to RAM). Against the very first,
+pre-`constexpr` baseline (328,208 B / 70,888 B): **Flash −93,744 B (−28.6%),
+RAM −120 B (flat)** — the flash win from removing the dynamic-init
+constructor calls is kept in full, RAM ends up essentially where it
+started, and the XIP-latency caveat is moot because the table isn't read
+through XIP at all. `pio test -e native_test` (8/8) and `-e
+seeed_xiao_rp2040_test --without-uploading --without-testing` both pass
+after this follow-up too.
 
 ### The basis matrix: not free, but not the reason to want this
 
