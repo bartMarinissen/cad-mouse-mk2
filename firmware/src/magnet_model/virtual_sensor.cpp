@@ -61,14 +61,12 @@ void __not_in_flash_func(VirtualSensor::evaluate)(
     // skew matrix has a zero diagonal, so a naive 3x3 product spends a third of its
     // multiplies on structural zeros -- but this build sets -ffinite-math-only
     // project-wide (platformio.ini), which licenses GCC to fold x * 0.0f -> 0.0f, and
-    // that's enough for the general form below optimize that out
+    // that's enough for the general form below to optimize that out
     // (see TODO/Performance.md's "-O3 project-wide" pass,
     // re-verified for this summed-input call shape in the pass covering the cross-magnet
-    // port). 
-    // Note this uses the pre-gain physical field for the B term, as Math.md 4.E
-    // requires because the sensor gain is applied at the real sensors in SensorController
-    
-    // The -ffinite-math-only fold this relies on can, in
+    // port). Note this uses the pre-gain physical field for the B term, as Math.md 4.E
+    // requires -- the sensor gain is applied at the real sensors in SensorController, not
+    // here. The -ffinite-math-only fold this relies on can, in
     // principle, discard a genuine NaN arising in J_displacement_world/v_world/B_world
     // before it reaches solve_pose.cpp's all_finite(dx) safety net -- that residual risk
     // is inherent to the flag and documented in TODO/Performance.md, not something this
