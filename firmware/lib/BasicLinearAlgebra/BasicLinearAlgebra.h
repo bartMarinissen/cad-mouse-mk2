@@ -29,9 +29,9 @@ struct MatrixBase
     constexpr static int Cols = cols;
     using DType = d_type;
 
-    DType &operator()(int i, int j = 0) { return static_cast<DerivedType *>(this)->operator()(i, j); }
+    constexpr DType &operator()(int i, int j = 0) { return static_cast<DerivedType *>(this)->operator()(i, j); }
 
-    DType operator()(int i, int j = 0) const { return static_cast<const DerivedType *>(this)->operator()(i, j); }
+    constexpr DType operator()(int i, int j = 0) const { return static_cast<const DerivedType *>(this)->operator()(i, j); }
 
     // Vendored addition (see TODO/eigen-to-bla-migration.md): upstream 5.1 has no named
     // accessors at all, only operator()(i,j). The first BLA port translated every Eigen
@@ -41,12 +41,16 @@ struct MatrixBase
     // rows to make sense -- static_assert fires only when a call actually instantiates the
     // method, so e.g. .z() on a Vec2 is a compile error, not silently wrong. Mirrors
     // operator()'s const/non-const pair so `v.x() = f;` works exactly like `v(0) = f;` does.
-    DType &x() { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
-    DType x() const { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
-    DType &y() { static_assert(cols == 1 && rows >= 2, "y() needs a column vector with at least 2 rows"); return (*this)(1); }
-    DType y() const { static_assert(cols == 1 && rows >= 2, "y() needs a column vector with at least 2 rows"); return (*this)(1); }
-    DType &z() { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
-    DType z() const { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
+    // constexpr for the same reason operator() above is: usable on a constexpr Vec2/Vec3
+    // (e.g. BicubicField's constexpr constructor reading a Point-replacement Vec2's
+    // components) whenever the concrete derived type's own operator() is constexpr too --
+    // this only enables that, it doesn't force it for derived types that aren't.
+    constexpr DType &x() { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
+    constexpr DType x() const { static_assert(cols == 1 && rows >= 1, "x() needs a column vector with at least 1 row"); return (*this)(0); }
+    constexpr DType &y() { static_assert(cols == 1 && rows >= 2, "y() needs a column vector with at least 2 rows"); return (*this)(1); }
+    constexpr DType y() const { static_assert(cols == 1 && rows >= 2, "y() needs a column vector with at least 2 rows"); return (*this)(1); }
+    constexpr DType &z() { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
+    constexpr DType z() const { static_assert(cols == 1 && rows >= 3, "z() needs a column vector with at least 3 rows"); return (*this)(2); }
 
     // Vendored addition: a derived Matrix's own constexpr constructor
     // (ElementStorage.h) default-constructs this empty base subobject, and

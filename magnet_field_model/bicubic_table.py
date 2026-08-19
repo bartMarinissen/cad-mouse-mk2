@@ -118,9 +118,12 @@ def format_header(table: FieldTable, reference_mt: float) -> str:
 constexpr int NR = {len(table.r_line)};
 constexpr int NZ = {len(table.z_line)};
 
-// The extend of the table (in mm)
-constexpr Point BICUBIC_ORIGIN = {{ {table.r_line[0]}, {table.z_line[0]} }};
-constexpr Point BICUBIC_FAR    = {{ {table.r_line[-1]}, {table.z_line[-1]} }};
+// The extent of the table (in mm), as (r, z) pairs -- .x() is r, .y() is z.
+// `f`-suffixed (unlike the old Point{{r,z}} aggregate-init, this goes through
+// Vec2's constructor, where an unsuffixed double literal narrowing to float
+// warns even when -- as here -- the value is exactly representable).
+constexpr Vec2 BICUBIC_ORIGIN = {{ {table.r_line[0]}f, {table.z_line[0]}f }};
+constexpr Vec2 BICUBIC_FAR    = {{ {table.r_line[-1]}f, {table.z_line[-1]}f }};
 
 // The polarization (remanence, Br) this table was generated at. A real
 // magnet is not this strong or weak -- MagnetModel divides its own

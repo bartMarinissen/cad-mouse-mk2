@@ -39,7 +39,7 @@ static_assert(NZ >= 4, "bicubic stencil needs at least 4 nodes in z");
 // value there because r=0 and index 0 coincide. If the grid's r-origin
 // ever moves off 0, this assumption breaks silently (wrong, not a
 // crash), so pin it down here.
-static_assert(BICUBIC_ORIGIN.r == 0.0f,
+static_assert(BICUBIC_ORIGIN.x() == 0.0f,
               "BicubicField's r=0 axis-symmetry mirror assumes the grid's "
               "r-axis origin is exactly 0");
 
@@ -96,8 +96,8 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
  
     // --- cell location -------------------------------------------
     // ideal cell indexes within grid
-    const float fi = (r - origin_.r) * dr_reciprocal_;
-    const float fj = (z - origin_.z) * dz_reciprocal_;
+    const float fi = (r - origin_.x()) * dr_reciprocal_;
+    const float fj = (z - origin_.y()) * dz_reciprocal_;
 
 
     // Grid cell indexes

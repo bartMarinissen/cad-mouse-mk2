@@ -371,7 +371,7 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     // On the magnet's axis, at the bottom of the table's z range. Far enough
     // out for the dipole limit to be close, still inside the interpolated
     // domain. Local frame: origin at the bottom face, +z along polarization.
-    const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.z);
+    const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.y());
 
     Mat3 J_table;
     const Vec3 B_table = magnet.evaluate(v_l, J_table);
