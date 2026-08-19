@@ -157,8 +157,13 @@ struct MatrixBase
     }
 
     MatrixTranspose<DerivedType> operator~() { return MatrixTranspose<DerivedType>(static_cast<DerivedType &>(*this)); }
+    MatrixTranspose<DerivedType> transpose() { return MatrixTranspose<DerivedType>(static_cast<DerivedType &>(*this)); }
 
     MatrixTranspose<const DerivedType> operator~() const
+    {
+        return MatrixTranspose<const DerivedType>(static_cast<const DerivedType &>(*this));
+    }
+    MatrixTranspose<const DerivedType> transpose() const
     {
         return MatrixTranspose<const DerivedType>(static_cast<const DerivedType &>(*this));
     }

@@ -131,34 +131,22 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
     // The basis matrix from this function's own header comment above,
     // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1). Now constexpr:
     // BLA::Matrix's variadic constructor was patched to support it
-    // (TODO/eigen-to-bla-migration.md), which closes the blocker this
-    // comment used to describe -- `static constexpr` is a real language
-    // guarantee that this is built once, not per-call. Measured (isolated
-    // ARM disassembly, real project flags, TODO/Performance.md's constexpr
-    // pass) to be a byte-for-byte identical .text section against the
-    // previous plain `const` local: -O3 was already constant-folding this
-    // matrix before, since every element is a literal and nothing here
-    // mutates it, so this change closes a correctness/API gap, not a
-    // measured performance one. The ~7.3-7.5% cost this matrix form still
-    // carries over the hand-expanded scalar form it replaced
-    // (TODO/Performance.md's fifth pass) is unchanged and lives in the
-    // generic 4x4*4x1 multiply below, not in constructing `basis`. Kept
-    // anyway per the standing "remove all hand-unrolling" decision.
+    // (TODO/eigen-to-bla-migration.md)
     using Mat4 = BLA::Matrix<4, 4, float>;
     using Vec4 = BLA::Matrix<4, 1, float>;
     static constexpr Mat4 basis(0.0f, -1.0f,  2.0f, -1.0f,
-                                 2.0f,  0.0f, -5.0f,  3.0f,
-                                 0.0f,  1.0f,  4.0f, -3.0f,
-                                 0.0f,  0.0f, -1.0f,  1.0f);
+                                2.0f,  0.0f, -5.0f,  3.0f,
+                                0.0f,  1.0f,  4.0f, -3.0f,
+                                0.0f,  0.0f, -1.0f,  1.0f);
 
     // The standard Catmull-Rom basis weights for t, and their derivatives.
-    // a4 = [a0,a1,a2,a3], da4_dt = [da0_dt,da1_dt,da2_dt,da3_dt].
-    Vec4 a4    = 0.5f * (basis * Vec4(1.0f, t, t2, t3));
-    const Vec4 da4_dt = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * t, 3.0f * t2));
+    // a_coeffs = [a0,a1,a2,a3], da_dt = [da0_dt,da1_dt,da2_dt,da3_dt].
+    Vec4 a_coeffs    = 0.5f * (basis * Vec4(1.0f, t,    t2,       t3));
+    const Vec4 da_dt = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * t, 3.0f * t2));
 
     // Same, for u.
-    Vec4 b4    = 0.5f * (basis * Vec4(1.0f, u, u2, u3));
-    const Vec4 db4_du = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * u, 3.0f * u2));
+    Vec4 b_coeffs    = 0.5f * (basis * Vec4(1.0f, u,    u2,       u3));
+    const Vec4 db_du = 0.5f * (basis * Vec4(0.0f, 1.0f, 2.0f * u, 3.0f * u2));
 
     // --- Linear extension outside of the grid ---------------------
     // If there is overshoot (i.e. if t_overshoot or u_overshoot aren't zero) then here we let that
@@ -166,8 +154,8 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
     // Note that since our function f(t) is computed as \sum_i a_i(t) * p_i
     // that df(t)/dt = \sum_i da_i(t)/dt * pi
     // (is this worth the extra float multiplications and additions?)
-    a4 += t_overshoot * da4_dt;
-    b4 += u_overshoot * db4_du;
+    a_coeffs += t_overshoot * da_dt;
+    b_coeffs += u_overshoot * db_du;
 
     // --- contract in r, for each of the 4 rows in z ---------------
     Vec2 row[4], row_deriv[4];
@@ -180,8 +168,8 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
             const Vec2 p1 = grid_[jj][i0    ];
             const Vec2 p2 = grid_[jj][i0 + 1];
             const Vec2 p3 = grid_[jj][i0 + 2];
-            row[k]       = p0 * a4(0) + p1 * a4(1) + p2 * a4(2) + p3 * a4(3);
-            row_deriv[k] = p0 * da4_dt(0) + p1 * da4_dt(1) + p2 * da4_dt(2) + p3 * da4_dt(3);
+            row[k]       = p0 * a_coeffs(0) + p1 * a_coeffs(1) + p2 * a_coeffs(2) + p3 * a_coeffs(3);
+            row_deriv[k] = p0 * da_dt(0) + p1 * da_dt(1) + p2 * da_dt(2) + p3 * da_dt(3);
         }
     } else {
         // On-axis patch (r in [0, dr)): the stencil needs a virtual
@@ -195,19 +183,19 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
             const Vec2 p2 = grid_[jj][1];
             const Vec2 p0(-p2.x(), p2.y());
             const Vec2 p3 = grid_[jj][2];
-            row[k]       = p0 * a4(0) + p1 * a4(1) + p2 * a4(2) + p3 * a4(3);
-            row_deriv[k] = p0 * da4_dt(0) + p1 * da4_dt(1) + p2 * da4_dt(2) + p3 * da4_dt(3);
+            row[k]       = p0 * a_coeffs(0) + p1 * a_coeffs(1) + p2 * a_coeffs(2) + p3 * a_coeffs(3);
+            row_deriv[k] = p0 * da_dt(0) + p1 * da_dt(1) + p2 * da_dt(2) + p3 * da_dt(3);
         }
     }
 
     // --- contract in z -------------------------------------------
-    Vec2 value = row[0] * b4(0) + row[1] * b4(1) + row[2] * b4(2) + row[3] * b4(3);
+    Vec2 value = row[0] * b_coeffs(0) + row[1] * b_coeffs(1) + row[2] * b_coeffs(2) + row[3] * b_coeffs(3);
 
-    jacobian.Column(0) = (row_deriv[0] * b4(0) + row_deriv[1] * b4(1) + row_deriv[2] * b4(2) + row_deriv[3] * b4(3))
+    jacobian.Column(0) = (row_deriv[0] * b_coeffs(0) + row_deriv[1] * b_coeffs(1) + row_deriv[2] * b_coeffs(2) + row_deriv[3] * b_coeffs(3))
             * dr_reciprocal_;
 
     // row[] is independent of z, so the z-derivative weights apply directly
-    jacobian.Column(1) = (row[0] * db4_du(0) + row[1] * db4_du(1) + row[2] * db4_du(2) + row[3] * db4_du(3))
+    jacobian.Column(1) = (row[0] * db_du(0) + row[1] * db_du(1) + row[2] * db_du(2) + row[3] * db_du(3))
             * dz_reciprocal_;
 
     return value;

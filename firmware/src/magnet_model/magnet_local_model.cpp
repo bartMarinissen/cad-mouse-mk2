@@ -80,7 +80,7 @@ Vec3 __not_in_flash_func(dipole_field)(const Vec3& m, const Vec3& r, Mat3& J) {
     const float a15 = 5.0f * a3 * mdotr * inv_rho_pow2;   // 15 k (m.r) rho^-7
 
     const Mat3 outer_mr = outer(m, r);
-    J = a3 * (outer_mr + ~outer_mr + mdotr * identity3()) - a15 * outer(r, r);
+    J = a3 * (outer_mr + outer_mr.transpose() + mdotr * identity3()) - a15 * outer(r, r);
 
     return B_local;
 }
@@ -97,7 +97,7 @@ Vec3 MagnetPlacement::near_approx_world(const Vec3& p_world, Mat3& J_world) cons
 
     // --- To the local frame ----
     // Rotation from the world frame to the local frame
-    const Mat3 R_total_T = ~R_total;
+    const Mat3 R_total_T = R_total.transpose();
     // Measurement position in the local frame
     const Vec3 p_local = R_total_T * (p_world - origin_world);
 

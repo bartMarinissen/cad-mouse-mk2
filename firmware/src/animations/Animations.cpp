@@ -151,7 +151,7 @@ void PoseColorAnimation::update() {
 
   // World point -> knob frame, the same transform VirtualSensor::evaluate() applies
   // to the (likewise world-fixed) physical sensors.
-  const Mat3 worldToKnob = ~R;
+  const Mat3 worldToKnob = R.transpose();
 
   const int n = ring_.numPixels();
   for (int i = 0; i < n; i++) {

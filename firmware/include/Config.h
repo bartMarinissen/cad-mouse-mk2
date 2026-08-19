@@ -76,9 +76,7 @@ constexpr float sensor_offset_mT[3][3] = {
 //
 // A genuine compile-time constant: CalibrationParams is plain data and every
 // input here is constexpr, so this is constant-initialised into flash rather
-// than built on each of the two calls resolveCalibration() makes at boot. It
-// used to be a function because the struct held Eigen types and the positions
-// were dynamically initialised Vec3s; neither is true any more.
+// than built on each of the two calls resolveCalibration() makes at boot.
 //
 // Spelled out rather than loop-filled so the shape is readable against the
 // struct, and so it matches what export.py's format_cpp() emits for a fitted

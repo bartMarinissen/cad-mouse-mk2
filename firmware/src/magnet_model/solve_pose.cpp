@@ -30,10 +30,7 @@ float __not_in_flash_func(solve_knob_pose)(
     for (int iter = 0; iter < MAX_ITER; ++iter) {
         // 1. Evaluate forward model
         model.evaluate(t, R, residual, jacobian);
-        // Calculate the residual. Both operands are genuine Vector9f lvalues here (not
-        // Submatrix() sub-block views), so BLA's -= (a free function requiring a
-        // non-const lvalue) binds fine -- see TODO/eigen-to-bla-migration.md's note on
-        // where that restriction actually bites.
+        // Calculate the residual.
         residual -= measured_fields;
 
         // 2. Construct Damped Normal Equations (Levenberg-Marquardt).
@@ -44,9 +41,9 @@ float __not_in_flash_func(solve_knob_pose)(
         // TODO/Performance.md's "-O3" pass, re-verified byte-for-byte in the
         // cross-magnet-refactor pass -- unaffected since jacobian's 9x6 shape
         // never changed), so the general form is kept.
-        Matrix6x6f H = ~jacobian * jacobian;
+        Matrix6x6f H = jacobian.transpose() * jacobian;
         for (int i = 0; i < 6; ++i) H(i, i) += LM_FIXED_DAMPING;
-        Vector6f g = -(~jacobian * residual);
+        Vector6f g = -(jacobian.transpose() * residual);
 
         // 3. Solve the 6x6 linear system. CholeskyDecompose factorizes H
         // in place (it's rebuilt fresh every iteration, so nothing downstream

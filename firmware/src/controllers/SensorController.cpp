@@ -206,7 +206,7 @@ void SensorController::updateCalibration() {
   float raw[9] = {};
   read_mT(raw);
 
-  Vec3 pos = Positions::approx_rest_pos - Vec3(0.1, 0.1, 0.1);
+  Vec3 pos = Positions::approx_rest_pos;
   // Deliberately a local identity rather than the controller's hot-start state:
   // calibration wants every sample solved from the same fixed starting guess,
   // not seeded by whatever the previous sample converged to.

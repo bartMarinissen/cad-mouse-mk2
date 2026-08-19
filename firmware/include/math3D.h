@@ -109,7 +109,7 @@ inline Mat3 skew_matrix(const Vec3& v) {
 // called every frame against slowly-accumulating drift; ~2 3x3 products, no
 // sqrt, no branches, unlike quaternion-normalize-and-rebuild.
 inline Mat3 orthonormalize_approx(const Mat3& R) {
-    return R * (1.5f * BLA::Eye<3, 3, float>() - 0.5f * (~R * R));
+    return R * (1.5f * BLA::Eye<3, 3, float>() - 0.5f * (R.transpose() * R));
 }
 
 // Exact SO(3) exponential map (Rodrigues' formula): R_new = exp([w]_x) *

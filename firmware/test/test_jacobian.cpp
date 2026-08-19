@@ -337,7 +337,7 @@ static void check_dipole_at(const Vec3& m, const Vec3& r) {
     // is therefore minus the Hessian of a scalar potential. Asserted so that
     // an asymmetric edit fails here rather than producing a plausible-looking
     // solver that drifts.
-    const float asym = BLA::Norm(J_analytic - ~J_analytic) / BLA::Norm(J_analytic);
+    const float asym = BLA::Norm(J_analytic - J_analytic.transpose()) / BLA::Norm(J_analytic);
     snprintf(msg, sizeof(msg),
              "dipole J not symmetric at r=(%.2f, %.2f, %.2f): rel asymmetry %.3e",
              r(0), r(1), r(2), asym);

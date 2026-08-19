@@ -33,8 +33,7 @@
 // PLAIN ARRAYS, NOT MATRIX TYPES. This struct is exactly what CalibrationStorage
 // copies to and from flash -- the stored file is a magic/version header, these
 // 300 bytes verbatim, and a CRC. That only works if the struct is trivially
-// copyable, and BLA::Matrix is not (nor was Eigen::Matrix before it, see
-// TODO/eigen-to-bla-migration.md): it declares non-trivial constructors, so
+// copyable, and BLA::Matrix is not: it declares non-trivial constructors, so
 // memcpy'ing into a struct of Mat3/Vec3 would be undefined behaviour even
 // though the storage underneath really is a bare float array.
 //
@@ -42,9 +41,8 @@
 // rather than the matrix library's implementation detail, so `sizeof == 300`
 // is a fact instead of an observation. And the ordering is ROW-major,
 // matching how numpy ravels on the Python side that writes these files --
-// BLA::Matrix's own storage happens to be row-major too (unlike Eigen's
-// column-major default), so toMat3()/toVec3() below are now a direct
-// per-element copy rather than a reinterpret-and-reorder.
+// BLA::Matrix's own storage happens to be row-major too so toMat3()/toVec3()
+// below are now a direct per-element copy rather than a reinterpret-and-reorder.
 //
 // Consumers convert with toMat3()/toVec3() below, at construction, which is
 // where they already copied these values out.
@@ -116,8 +114,7 @@ static_assert(sizeof(CalibrationParams) == 300,
 // BLA::Matrix's storage is natively row-major (storage[i*Cols+j] -- see
 // math3D.h / TODO/eigen-to-bla-migration.md), which is exactly how
 // float[3][3] already lays out, and matches numpy's default on the Python
-// side that writes these files. So unlike the Eigen::Map<...,RowMajor>
-// reinterpret this used to need (Eigen defaults to column-major), this is
+// side that writes these files. So this is
 // just a direct per-element copy -- no reordering, and stated here once
 // rather than by every caller.
 inline Mat3 toMat3(const float m[3][3]) {
