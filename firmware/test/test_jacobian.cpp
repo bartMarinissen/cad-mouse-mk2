@@ -73,27 +73,6 @@ static const Vec3 MAGNET_LOCAL[3] = {
     Positions::Magnet_3_knob,
 };
 
-// Base pose used for the ForwardModel tests.
-// x/y chosen so r = sqrt(t.x^2 + t.y^2) ~ 2.5mm at rest (comfortably
-// inside [0,6], away from both 0 and the outer edge).
-// z = 6.0f is the real standoff: at rest the sensor plane sits 6mm
-// below the magnet plane.
-static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
-
-// NOTE: physically, the two frames are rotationally ALIGNED at rest -
-// R=Identity, with only the 6mm z-standoff as an offset. The non-zero
-// axis below is a synthetic test pose, not an attempt to model rest.
-// It's kept non-identity deliberately: the analytic Jacobian needs to
-// be correct for any R the solver encounters while tracking, not just
-// R=Identity, and testing only at Identity risks masking a bug that
-// only shows up once R^T actually does something (e.g. a transpose or
-// sign error in how R feeds into the local-frame conversion). Kept
-// small purely so the resulting v_l for all three magnet/sensor pairs
-// stays within r<=6, -12<=z<=-0.5 -- a margin well inside the table's
-// actual r<=10, -20<=z<=-0.5 domain (see the TODO on the same margin in
-// test_magnet_model_jacobian_generic above).
-static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
-
 // ======================================================================
 // Helpers
 // ======================================================================
@@ -223,9 +202,10 @@ void test_magnet_model_jacobian_generic(void) {
     // z_l kept within [-12,-0.5], a margin well inside the table's actual
     // [-20,-0.5] domain (z=0 is NOT valid - it's past BICUBIC_FAR at -0.5,
     // i.e. sensor plane is below the magnet).
-    // TODO: test_forward_model_jacobian_grid's pose sweep is not checked
-    // against this [-12,-0.5]/r<=6 margin -- confirm it actually stays
-    // inside it, or the margin claim here is unverified.
+    // test_forward_model_jacobian_grid's pose sweep stays within this same
+    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus a
+    // standoff, the same derivation test_cross_magnet_terms_are_actually_present
+    // uses below.
     check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
     check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
     check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));
@@ -573,9 +553,18 @@ void test_forward_model_jacobian_grid(void) {
     // Translations (mm) - kept small to avoid pushing local coordinates out of the [0, 6] r-bounds
     float t_x_steps[] = { -3.0f, -1.5f, 0.0f, 1.2f };
     float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
-    // Z is the vertical standoff (rest is 6.0mm)
-    float t_z_steps[] = { 8.0f,  6.0f, 4.3f, 2.5f }; 
-    
+    // t is the knob pivot's world position, not the sensor-to-magnet standoff
+    // directly -- MagnetModel::place offsets by Positions::magnet_z_pos_from_pivot
+    // (15mm) before applying it, so each entry here is that pivot height plus
+    // the standoff it represents (rest is 6.0mm), matching the derivation
+    // test_cross_magnet_terms_are_actually_present uses below.
+    float t_z_steps[] = {
+        Positions::magnet_z_pos_from_pivot + 8.0f,
+        Positions::magnet_z_pos_from_pivot + 6.0f,
+        Positions::magnet_z_pos_from_pivot + 4.3f,
+        Positions::magnet_z_pos_from_pivot + 2.5f,
+    };
+
     // Rotations (axis-angle vectors)
     Vec3 rot_steps[] = {
         Vec3(0.0f, 0.0f, 0.0f),         // Rest
