@@ -73,27 +73,6 @@ static const Vec3 MAGNET_LOCAL[3] = {
     Positions::Magnet_3_knob,
 };
 
-// Base pose used for the ForwardModel tests.
-// x/y chosen so r = sqrt(t.x^2 + t.y^2) ~ 2.5mm at rest (comfortably
-// inside [0,6], away from both 0 and the outer edge).
-// z = 6.0f is the real standoff: at rest the sensor plane sits 6mm
-// below the magnet plane.
-static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
-
-// NOTE: physically, the two frames are rotationally ALIGNED at rest -
-// R=Identity, with only the 6mm z-standoff as an offset. The non-zero
-// axis below is a synthetic test pose, not an attempt to model rest.
-// It's kept non-identity deliberately: the analytic Jacobian needs to
-// be correct for any R the solver encounters while tracking, not just
-// R=Identity, and testing only at Identity risks masking a bug that
-// only shows up once R^T actually does something (e.g. a transpose or
-// sign error in how R feeds into the local-frame conversion). Kept
-// small purely so the resulting v_l for all three magnet/sensor pairs
-// stays within r<=6, -12<=z<=-0.5 -- a margin well inside the table's
-// actual r<=10, -20<=z<=-0.5 domain (see the TODO on the same margin in
-// test_magnet_model_jacobian_generic above).
-static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
-
 // ======================================================================
 // Helpers
 // ======================================================================
@@ -124,6 +103,33 @@ static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f)
     return max_rel_error_mat<3, 1>(a, n);
 }
 
+// Asserts a local-frame point actually lands inside the bicubic table's real
+// domain (BICUBIC_ORIGIN/BICUBIC_FAR, magnet_model_table.h -- generated, read
+// from there rather than retyped here), with `margin` mm of clearance from
+// the edges a caller's finite-difference or pose perturbation can reach.
+// `label` identifies the caller in the failure message.
+//
+// r's lower bound is the symmetry axis (r=0) itself, not a true edge:
+// BicubicField::evaluate deliberately handles it (and the slightly negative r
+// an FD step can land on) via a mirror stencil, so no margin is subtracted
+// there -- only away from the table's outer r edge, and away from both z
+// edges, where there is no such handling.
+static void assert_within_bicubic_domain(const Vec3& p_local, float margin, const char* label) {
+    const float r = sqrtf(p_local(0) * p_local(0) + p_local(1) * p_local(1));
+    const float z = p_local(2);
+
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "%s: r=%.4f outside bicubic table domain [%.3f, %.3f] (margin %.4f)",
+             label, r, BICUBIC_ORIGIN.x(), BICUBIC_FAR.x(), margin);
+    TEST_ASSERT_TRUE_MESSAGE(r >= BICUBIC_ORIGIN.x() && r <= BICUBIC_FAR.x() - margin, msg);
+
+    snprintf(msg, sizeof(msg),
+             "%s: z=%.4f outside bicubic table domain [%.3f, %.3f] (margin %.4f)",
+             label, z, BICUBIC_ORIGIN.y(), BICUBIC_FAR.y(), margin);
+    TEST_ASSERT_TRUE_MESSAGE(z >= BICUBIC_ORIGIN.y() + margin && z <= BICUBIC_FAR.y() - margin, msg);
+}
+
 // exp_so3() (exact SO(3) exponential map / Rodrigues' formula, used to
 // perturb R below) lives in math3D.h as the one shared implementation -- see
 // TODO/eigen-to-bla-migration.md. It matters here specifically because
@@ -141,6 +147,8 @@ static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f)
 // ======================================================================
 
 static void check_bicubic_point(float r0, float z0) {
+    assert_within_bicubic_domain(Vec3(r0, 0.0f, z0), FD_STEP_LINEAR, "bicubic_field probe");
+
     Mat2 jac0;
     CALCULATED_BICUBIC_FIELD.evaluate(r0, z0, jac0);
     const Vec2 ddr0 = jac0.Column(0);
@@ -176,6 +184,8 @@ void test_bicubic_field_derivatives(void) {
 //    of MagnetModel::evaluate() over v_l.
 // ======================================================================
 static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
+    assert_within_bicubic_domain(v_l, FD_STEP_LINEAR, "magnet_model probe");
+
     Mat3 J_analytic;
     Vec3 B0 = model.evaluate(v_l, J_analytic);
     (void)B0;
@@ -223,9 +233,10 @@ void test_magnet_model_jacobian_generic(void) {
     // z_l kept within [-12,-0.5], a margin well inside the table's actual
     // [-20,-0.5] domain (z=0 is NOT valid - it's past BICUBIC_FAR at -0.5,
     // i.e. sensor plane is below the magnet).
-    // TODO: test_forward_model_jacobian_grid's pose sweep is not checked
-    // against this [-12,-0.5]/r<=6 margin -- confirm it actually stays
-    // inside it, or the margin claim here is unverified.
+    // test_forward_model_jacobian_grid's pose sweep stays within this same
+    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus a
+    // standoff, the same derivation test_cross_magnet_terms_are_actually_present
+    // uses below.
     check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
     check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
     check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));
@@ -268,6 +279,8 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
     char msg[192];
 
     for (const Vec3& p : probes) {
+        assert_within_bicubic_domain(p, 0.0f, "magnet_strength probe");
+
         Mat3 J_unit;
         const Vec3 B_unit = unit.evaluate(p, J_unit);
 
@@ -378,6 +391,7 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     // out for the dipole limit to be close, still inside the interpolated
     // domain. Local frame: origin at the bottom face, +z along polarization.
     const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.y());
+    assert_within_bicubic_domain(v_l, 0.0f, "dipole_matches_table v_l");
 
     Mat3 J_table;
     const Vec3 B_table = magnet.evaluate(v_l, J_table);
@@ -443,6 +457,14 @@ void test_cross_magnet_terms_are_actually_present(void) {
         MagnetPlacement placements[3] = {
             magnets[0].place(t, R), magnets[1].place(t, R), magnets[2].place(t, R),
         };
+
+        // The paired (magnet 0, sensor 0) point actually reached, checked
+        // against the table's real domain rather than trusted from the
+        // standoff arithmetic alone.
+        const Vec3 p_local0 = placements[0].R_total.transpose() *
+                               (SENSOR_POS[0] - placements[0].origin_world);
+        assert_within_bicubic_domain(p_local0, 0.0f, "cross_magnet_terms pair 0");
+
         MagnetPlacement inert[3] = { placements[0], placements[1], placements[2] };
         for (int j = 0; j < 3; ++j) inert[j].moment_world = BLA::Zeros<3, 1, float>();
 
@@ -486,6 +508,19 @@ static void compute_forward_model_jacobians(
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1], magnet_strengths[1]),
         MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2], magnet_strengths[2]),
     };
+
+    // Sanity-check the representative (magnet 0, sensor 0) pair actually
+    // lands inside the bicubic table's real domain -- this is what would
+    // have caught t_z_steps' missing pivot offset immediately, as a loud
+    // assertion failure, instead of a silently-passing evaluation of
+    // BicubicField's extrapolation branch. Margin covers both FD_STEP_LINEAR
+    // (applied directly to t) and the larger swing FD_STEP_ANGULAR induces
+    // through the ~22mm lever arm from pivot to magnet (~22 * 5e-4 =~
+    // 0.011mm), with headroom.
+    const MagnetPlacement placement0 = magnets[0].place(t, R);
+    const Vec3 p_local0 = placement0.R_total.transpose() *
+                           (SENSOR_POS[0] - placement0.origin_world);
+    assert_within_bicubic_domain(p_local0, 0.02f, "forward_model_jacobian_grid pair 0");
 
     VirtualSensor sensors[3] = {
         VirtualSensor(SENSOR_POS[0]),
@@ -573,9 +608,18 @@ void test_forward_model_jacobian_grid(void) {
     // Translations (mm) - kept small to avoid pushing local coordinates out of the [0, 6] r-bounds
     float t_x_steps[] = { -3.0f, -1.5f, 0.0f, 1.2f };
     float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
-    // Z is the vertical standoff (rest is 6.0mm)
-    float t_z_steps[] = { 8.0f,  6.0f, 4.3f, 2.5f }; 
-    
+    // t is the knob pivot's world position, not the sensor-to-magnet standoff
+    // directly -- MagnetModel::place offsets by Positions::magnet_z_pos_from_pivot
+    // (15mm) before applying it, so each entry here is that pivot height plus
+    // the standoff it represents (rest is 6.0mm), matching the derivation
+    // test_cross_magnet_terms_are_actually_present uses below.
+    float t_z_steps[] = {
+        Positions::magnet_z_pos_from_pivot + 8.0f,
+        Positions::magnet_z_pos_from_pivot + 6.0f,
+        Positions::magnet_z_pos_from_pivot + 4.3f,
+        Positions::magnet_z_pos_from_pivot + 2.5f,
+    };
+
     // Rotations (axis-angle vectors)
     Vec3 rot_steps[] = {
         Vec3(0.0f, 0.0f, 0.0f),         // Rest
