@@ -20,8 +20,8 @@
 #include "math3D.h"
 #include "magnet_model/BicubicField.h"
 #include "magnet_model/magnet_local_model.h"   // declares CALCULATED_BICUBIC_FIELD + MagnetModel
-#include "magnet_model/forward_model.h"        // declares ForwardModel  (adjust filename if different)
-#include "magnet_model/positions.h"            // declares Positions:: sensor_i_world / Magnet_i_knob (adjust filename if different)
+#include "magnet_model/forward_model.h"        // declares ForwardModel
+#include "magnet_model/positions.h"            // declares Positions:: sensor_i_world / Magnet_i_knob
 
 // ======================================================================
 // Config: fill in with real values
@@ -89,7 +89,9 @@ static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
 // only shows up once R^T actually does something (e.g. a transpose or
 // sign error in how R feeds into the local-frame conversion). Kept
 // small purely so the resulting v_l for all three magnet/sensor pairs
-// stays inside the field's r<=6, -12<=z<=-0.5 domain.
+// stays within r<=6, -12<=z<=-0.5 -- a margin well inside the table's
+// actual r<=10, -20<=z<=-0.5 domain (see the TODO on the same margin in
+// test_magnet_model_jacobian_generic above).
 static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 
 // ======================================================================
@@ -123,13 +125,13 @@ static float max_rel_error(const Vec3& a, const Vec3& n, float floor_ = 1.0e-5f)
 }
 
 // exp_so3() (exact SO(3) exponential map / Rodrigues' formula, used to
-// perturb R below) now lives in math3D.h as the one shared implementation
-// -- see TODO/eigen-to-bla-migration.md. It matters here specifically
-// because R_new = exp([w]_x) R_old is the actual definition used to derive
-// J_rot, so this FD test must use the exact exponential, not the
-// first-order approximation (I + [w]_x) R, or the FD estimate would pick up
-// an O(h) contamination from the approximation itself (rather than being a
-// clean O(h^2) central-difference estimate).
+// perturb R below) lives in math3D.h as the one shared implementation -- see
+// TODO/eigen-to-bla-migration.md. It matters here specifically because
+// R_new = exp([w]_x) R_old is the actual definition used to derive J_rot, so
+// this FD test must use the exact exponential, not the first-order
+// approximation (I + [w]_x) R, or the FD estimate would pick up an O(h)
+// contamination from the approximation itself (rather than being a clean
+// O(h^2) central-difference estimate).
 
 // ======================================================================
 // 1. BicubicField: check d_dr / d_dz against central differences of
@@ -218,8 +220,12 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 void test_magnet_model_jacobian_generic(void) {
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
-    // z_l must stay in [-12,-0.5] (z=0 is NOT valid - it's the boundary
-    // BICUBIC_FAR sits at -0.5, i.e. sensor plane is below the magnet).
+    // z_l kept within [-12,-0.5], a margin well inside the table's actual
+    // [-20,-0.5] domain (z=0 is NOT valid - it's past BICUBIC_FAR at -0.5,
+    // i.e. sensor plane is below the magnet).
+    // TODO: test_forward_model_jacobian_grid's pose sweep is not checked
+    // against this [-12,-0.5]/r<=6 margin -- confirm it actually stays
+    // inside it, or the margin claim here is unverified.
     check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
     check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
     check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));
@@ -463,11 +469,11 @@ void test_cross_magnet_terms_are_actually_present(void) {
 // 4. ForwardModel: Grid Sweep & Calibration State Validation
 // ======================================================================
 
-// Updated to accept hardware calibration states.
-// Sensor gain is no longer part of ForwardModel/VirtualSensor - it's applied by
-// SensorController on raw readings before they ever reach the solver - so
-// this exercises the two per-magnet states that *are* still in the model:
-// axis tilt and polarization strength.
+// Accepts hardware calibration states.
+// Sensor gain is not part of ForwardModel/VirtualSensor -- it's applied by
+// SensorController on raw readings before they ever reach the solver -- so
+// this exercises the two per-magnet states that *are* in the model: axis
+// tilt and polarization strength.
 static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
         const Mat3 magnet_rotations[3],
@@ -526,7 +532,7 @@ static void compute_forward_model_jacobians(
 // The Massive Grid Test
 void test_forward_model_jacobian_grid(void) {
     // 1. Define Calibration Scenarios
-    // Sensor gain/skew is no longer modeled here - see the comment on
+    // Sensor gain/skew is not modeled here -- see the comment on
     // compute_forward_model_jacobians(). Only magnet tilt/orientation varies.
     // Scenario A: Perfect Hardware
     Mat3 tilts_perfect[3] = { identity3(), identity3(), identity3() };

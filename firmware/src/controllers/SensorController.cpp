@@ -188,9 +188,8 @@ void SensorController::beginCalibration() {
 }
 
 // Note, this should be folded into MotionController.
-// This used to zero-out the magnetic field at the rest pose.
-// Now it just measures the rest pose directly.
-// See 'TODO/tare-and-calibration.md'
+// Measures the rest pose directly, rather than zeroing the magnetic field at
+// it. See 'TODO/tare-and-calibration.md'
 void SensorController::updateCalibration() {
   if (!calibrationActive_) {
     return;

@@ -126,7 +126,4 @@ constexpr CalibrationParams defaultCalibration = {
     {BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT},
 };
 
-// Uncomment this one and define it in config.cpp if you ran calibration and don't want to store it in flash.
-// CalibrationParams fittedCalibration();
-
 }  // namespace Config

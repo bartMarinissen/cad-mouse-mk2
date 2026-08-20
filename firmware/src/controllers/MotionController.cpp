@@ -130,10 +130,10 @@ float MotionController::read_pose(const float raw[9], Vec3 &position, Mat3 &R){
 
   // Both `position` and `R` arrive carrying the caller's starting guess -- for
   // the live path that is the previous frame's pose -- and the solver refines
-  // them in place. R used to be reset to identity here, which threw away half
-  // the hot start and made the solver re-converge the rotation every frame.
-  // solve_knob_pose also re-orthonormalizes R before returning, since it's now
-  // long-lived state rather than rebuilt from scratch each call.
+  // them in place, preserving the hot start rather than re-converging the
+  // rotation from identity every frame. Because R is therefore long-lived
+  // state rather than rebuilt from scratch each call, solve_knob_pose also
+  // re-orthonormalizes it before returning.
   const uint32_t before = micros();
   float residual_magnitude = solve_knob_pose(position, R, forward_model_, measured, residual_vec_ptr);
   const uint32_t after = micros();
@@ -202,10 +202,6 @@ void Statistics::update(uint32_t time_last){
   // Update mean (first moment)
   avg_residual *= smoothing;
   avg_residual += (1 - smoothing) * last_residual;
-
-  // NOTE: there used to be a matching EMA over the 9x6 Jacobian here. It cost
-  // ~162 flops every frame and nothing ever read the result -- avg_residual and
-  // avg_residual_sq feed TelemetryController, avg_jacobian fed nothing.
 
   // Update second moment for variance calculation
   avg_residual_sq *= smoothing;

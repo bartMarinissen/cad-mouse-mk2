@@ -9,14 +9,14 @@
 // handle_serial_command() takes an already-extracted line and never touches
 // Serial itself.
 //
-// This replaces the Serial.readBytesUntil('\n', ...) that used to live in
-// BundleState::update(). Message size is not really the argument -- normal
-// operation never sees a long line. The problem is that readBytesUntil blocks
-// until the delimiter arrives *or* Stream's 1000ms timeout expires, so any
-// line that never completes stalls the ~120Hz loop for a full second and
-// stutters HID. A host dying midway through "CAL_ACK 60" does that just as
-// well as anything long. Here each update() takes only the bytes already
-// buffered and returns, so an unfinished line costs nothing.
+// Non-blocking by construction: each update() takes only the bytes already
+// buffered and returns, so an unfinished line costs nothing. That matters
+// because Serial.readBytesUntil('\n', ...) blocks until the delimiter arrives
+// *or* Stream's 1000ms timeout expires, so any line that never completes
+// would stall the ~120Hz loop for a full second and stutter HID -- a host
+// dying midway through "CAL_ACK 60" does that just as well as anything long.
+// Message size is not really the argument -- normal operation never sees a
+// long line.
 //
 // A calibration upload is ~640 characters, which is the one case where even a
 // complete line takes a visible ~55ms at 115200 baud, but that is a second
@@ -66,6 +66,6 @@ class SerialController {
 
   // Set when a line outgrows the buffer. The rest of that line is discarded
   // through its newline rather than silently truncated into a command that
-  // looks valid -- the old 128-byte read had no way to tell the difference.
+  // looks valid.
   bool overflow_ = false;
 };

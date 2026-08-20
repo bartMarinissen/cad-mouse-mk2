@@ -129,9 +129,7 @@ Vec2 __not_in_flash_func(BicubicField::evaluate)(float r, float z, Mat2 &jacobia
     const float u2 = u * u, u3 = u2 * u;
 
     // The basis matrix from this function's own header comment above,
-    // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1). Now constexpr:
-    // BLA::Matrix's variadic constructor was patched to support it
-    // (TODO/eigen-to-bla-migration.md)
+    // a_i(t) = 0.5 * sum_j BasisMatrix(i,j) * t^j (t^0=1).
     using Mat4 = BLA::Matrix<4, 4, float>;
     using Vec4 = BLA::Matrix<4, 1, float>;
     static constexpr Mat4 basis(0.0f, -1.0f,  2.0f, -1.0f,
