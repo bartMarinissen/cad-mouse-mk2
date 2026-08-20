@@ -122,7 +122,7 @@ uint32_t solidColor(const Vec3& pKnob) {
 
 PoseColorAnimation::PoseColorAnimation(Adafruit_NeoPixel& ring) : AnimationBase(ring) {
   for (int i = 0; i < Config::LED_COUNT; i++) {
-    const float angle = (i + 1/16) * (-2.0f * float(M_PI) / Config::LED_COUNT);
+    const float angle = (i + 1.0/16.0) * (-2.0f * float(M_PI) / Config::LED_COUNT);
     samplerWorld_[i] = Positions::approx_rest_pos +
                        Vec3(kSamplerRingRadiusMm * std::sin(angle),
                             kSamplerRingRadiusMm * std::cos(angle), 0.0f);
