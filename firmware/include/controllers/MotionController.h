@@ -66,9 +66,8 @@ class MotionController {
   static float axisBaseDead(int i);
 
   // The model the pose solve runs against. Owned here, and const, because it
-  // is built from this controller's calibration and never changes after
-  // that -- which is what gives a calibration write-back a path to the
-  // running VirtualSensor/MagnetModel instances.
+  // is built from this controller's own calibration and never changes after
+  // that.
   const ForwardModel forward_model_;
 
   float filt_[6] = {};

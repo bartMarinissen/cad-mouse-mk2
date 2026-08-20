@@ -94,9 +94,9 @@ const char* resultText(Result result) {
 }
 
 uint32_t crc32(const uint8_t* data, size_t len) {
-  // Bitwise rather than table-driven: this runs twice at boot over 312 bytes,
-  // so the ~2.5k iterations cost nothing measurable and it saves a 1KB table
-  // in flash.
+  // Bitwise rather than table-driven: this runs twice at boot over a few
+  // hundred bytes, so the ~2.5k iterations cost nothing measurable and it
+  // saves a 1KB table in flash.
   uint32_t crc = 0xFFFFFFFFu;
   for (size_t i = 0; i < len; i++) {
     crc ^= data[i];
@@ -159,8 +159,8 @@ bool isPlausible(const CalibrationParams& params) {
     // in polarity, so the determinant is legitimately either sign. What is
     // not legitimate is a singular gain (uninvertible, no usable correction)
     // or an absurd one. Fitted lands near 1 under the det(G)=1 gauge; the
-    // default's scalar gains land near 0.885. Two orders either way clears
-    // both without encoding either gauge.
+    // default's scalar gains land roughly in the 0.9-1.7 range. Two orders
+    // either way clears both without encoding either gauge.
     const float gainDet = fabsf(BLA::Determinant(toMat3(params.sensor_gain[i])));
     if (gainDet < 0.01f || gainDet > 100.0f) {
       return false;

@@ -21,7 +21,7 @@ public:
      * 
      * The pose is given as: 
      *   t_world, the position of the knob origin in the world frame
-     *   R, the rotation matrix needed to translate from the world frame to the knob frame
+     *   R, the rotation matrix that carries knob-frame vectors into the world frame
      */
     void evaluate(const Vec3& t_world,
                   const Mat3& R,

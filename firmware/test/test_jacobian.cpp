@@ -20,8 +20,8 @@
 #include "math3D.h"
 #include "magnet_model/BicubicField.h"
 #include "magnet_model/magnet_local_model.h"   // declares CALCULATED_BICUBIC_FIELD + MagnetModel
-#include "magnet_model/forward_model.h"        // declares ForwardModel  (adjust filename if different)
-#include "magnet_model/positions.h"            // declares Positions:: sensor_i_world / Magnet_i_knob (adjust filename if different)
+#include "magnet_model/forward_model.h"        // declares ForwardModel
+#include "magnet_model/positions.h"            // declares Positions:: sensor_i_world / Magnet_i_knob
 
 // ======================================================================
 // Config: fill in with real values
@@ -89,7 +89,9 @@ static const Vec3 BASE_T(2.0f, -1.5f, 6.0f);
 // only shows up once R^T actually does something (e.g. a transpose or
 // sign error in how R feeds into the local-frame conversion). Kept
 // small purely so the resulting v_l for all three magnet/sensor pairs
-// stays inside the field's r<=6, -12<=z<=-0.5 domain.
+// stays within r<=6, -12<=z<=-0.5 -- a margin well inside the table's
+// actual r<=10, -20<=z<=-0.5 domain (see the TODO on the same margin in
+// test_magnet_model_jacobian_generic above).
 static const Vec3 BASE_ROTATION_AXIS(0.05f, -0.03f, 0.02f);
 
 // ======================================================================
@@ -218,8 +220,12 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 void test_magnet_model_jacobian_generic(void) {
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
-    // z_l must stay in [-12,-0.5] (z=0 is NOT valid - it's the boundary
-    // BICUBIC_FAR sits at -0.5, i.e. sensor plane is below the magnet).
+    // z_l kept within [-12,-0.5], a margin well inside the table's actual
+    // [-20,-0.5] domain (z=0 is NOT valid - it's past BICUBIC_FAR at -0.5,
+    // i.e. sensor plane is below the magnet).
+    // TODO: test_forward_model_jacobian_grid's pose sweep is not checked
+    // against this [-12,-0.5]/r<=6 margin -- confirm it actually stays
+    // inside it, or the margin claim here is unverified.
     check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
     check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
     check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));

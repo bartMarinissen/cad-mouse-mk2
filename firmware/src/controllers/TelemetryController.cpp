@@ -25,7 +25,7 @@ void TelemetryController::publish(const float motion[6], float residual_percent,
 
   // --- UI Configuration Constants ---
   constexpr int kCols = 51; 
-  constexpr int kRows = 24; // Increased to 23 to fit the split footer
+  constexpr int kRows = 24; // Sized to fit the split footer
   
   char buffer[kRows][kCols];
   

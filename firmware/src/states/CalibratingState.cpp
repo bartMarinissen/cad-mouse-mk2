@@ -14,9 +14,11 @@ void CalibratingState::enter() {
   motionController().reset();
   ledController().set(SpinnerAnimation(ledController().ring(), Config::LED_CALIBRATING_COLOR));
 
-  // Tells the host that its command window is open. This state is the only
-  // place CAL_START and CAL_UPLOAD are accepted and it lasts just
-  // Config::ZERO_SAMPLES ticks (~1.7s), so the PC waits for this line and
+  // Tells the host that its command window is open. This is the intended
+  // entry point into bundle calibration: CAL_START and CAL_UPLOAD are only
+  // accepted here or once BundleState is entered (BundleCalibrationController
+  // routes them there too), and this window lasts just Config::ZERO_SAMPLES
+  // ticks (~1.7s), so the PC waits for this line and
   // replies immediately rather than trying to guess the timing. The expected
   // route in is the deliberate both-buttons-3s tare gesture from IdleState,
   // where the port is already open and there is no enumeration to race.
