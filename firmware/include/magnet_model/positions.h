@@ -7,12 +7,13 @@ namespace Positions{
     constexpr float triangle_sidelength_mm = 28.58f;
     constexpr float R = triangle_sidelength_mm / SQRT3_F;
 
-    // The offset between the magnet's two origin conventions -- its bottom
-    // face vs. its geometric centre -- along its own axis. The forward
-    // model only ever works in the centre-based frame; this exists for the
-    // one place that still has to cross the boundary, CalibrationStorage's
-    // load-time reconciliation of the bottom-face-referenced positions the
-    // Python calibration fit still produces (see CalibrationStorage.cpp).
+    // How far the magnet's geometric centre -- the only origin this codebase
+    // uses -- sits above its bottom face along its own axis. The bottom face
+    // is not a convention anything here works in; it exists solely because
+    // the Python calibration fit (magnet_field_model/calibration/) has not
+    // been updated off it yet, and CalibrationStorage.cpp needs this one
+    // number to correct for that at load time. Delete this constant once
+    // that fit is rewritten to fit the centre directly.
     constexpr float magnet_half_height_mm = 3.0f;
 
     // How far the magnets' origin -- their geometric centre -- sits below

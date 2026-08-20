@@ -112,7 +112,7 @@ struct MagnetPlacement {
     /**
      * Get the field of this magnet using the far approximation in the world frame
      * at position p_world in the world frame. This uses a dipole model,
-     * placed at origin_world -- the magnet's geometric centre.
+     * placed at this->origin_world -- the magnet's geometric centre.
      *
      * Returns the magnetic field, outputs the jacobian w.r.t. p_world in J_world.
      */

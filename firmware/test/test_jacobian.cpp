@@ -235,9 +235,9 @@ void test_magnet_model_jacobian_generic(void) {
     // valid, it's past BICUBIC_FAR, i.e. the sensor plane is below the
     // magnet's centre).
     // test_forward_model_jacobian_grid's pose sweep stays within this same
-    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus
-    // magnet_half_height_mm plus a standoff, the same derivation
-    // test_cross_magnet_terms_are_actually_present uses below.
+    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus a
+    // standoff, the same derivation test_cross_magnet_terms_are_actually_present
+    // uses below.
     check_magnet_model_at(model, Vec3(2.0f,  0.0f, -4.0f));
     check_magnet_model_at(model, Vec3(1.4f,  1.4f, -6.0f));
     check_magnet_model_at(model, Vec3(0.0f,  3.0f, -9.0f));
@@ -443,15 +443,12 @@ void test_cross_magnet_terms_are_actually_present(void) {
 
     // Across the knob's heave range: the share grows with lift, because the
     // paired magnet's field falls off fast while the cross magnets, a fixed
-    // triangle side away, barely change. standoff is the bottom face's
-    // height above the sensor, matching Positions::magnet_rest_distance_sensor's
-    // convention -- magnet_half_height_mm below converts that to the origin
-    // (centre) height MagnetModel::place actually works in.
-    const float standoffs[] = { 4.3f, 6.0f, 8.0f };
+    // triangle side away, barely change. standoff is how far the magnet's
+    // origin (its centre) sits above the sensor; 9.0 is rest.
+    const float standoffs[] = { 7.3f, 9.0f, 11.0f };
 
     for (float standoff : standoffs) {
-        const Vec3 t(0.0f, 0.0f,
-                      Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + standoff);
+        const Vec3 t(0.0f, 0.0f, Positions::magnet_z_pos_from_pivot + standoff);
 
         Vector9f B_all;
         Matrix9x6f J_unused;
@@ -614,17 +611,15 @@ void test_forward_model_jacobian_grid(void) {
     float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
     // t is the knob pivot's world position, not the sensor-to-magnet standoff
     // directly -- MagnetModel::place offsets by Positions::magnet_z_pos_from_pivot
-    // (the pivot-to-origin distance) before applying it, and the origin itself
-    // sits magnet_half_height_mm above the magnet's bottom face, so each entry
-    // here is pivot height + that half-height + the bottom-face standoff it
-    // represents (rest is 6.0mm, i.e. Positions::magnet_rest_distance_sensor),
-    // matching the derivation test_cross_magnet_terms_are_actually_present
-    // uses below.
+    // before applying it, so each entry here is that pivot-to-origin distance
+    // plus the standoff it represents: how far the magnet's origin (its
+    // centre) sits above the sensor. 9.0 is rest, matching the derivation
+    // test_cross_magnet_terms_are_actually_present uses below.
     float t_z_steps[] = {
-        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 8.0f,
-        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 6.0f,
-        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 4.3f,
-        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 2.5f,
+        Positions::magnet_z_pos_from_pivot + 11.0f,
+        Positions::magnet_z_pos_from_pivot + 9.0f,
+        Positions::magnet_z_pos_from_pivot + 7.3f,
+        Positions::magnet_z_pos_from_pivot + 5.5f,
     };
 
     // Rotations (axis-angle vectors)

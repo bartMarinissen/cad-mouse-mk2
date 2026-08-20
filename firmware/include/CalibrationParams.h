@@ -57,13 +57,9 @@ struct CalibrationParams {
   float sensor_offset_mT[3][3];
 
   // --- Knob/magnet geometry, consumed by the forward model. ---
-  // Knob-frame magnet positions, origin (geometric centre) reference.
-  // Replaces the nominal Positions::Magnet_i_knob values as the model's
-  // actual geometry. The Python calibration fit still produces these
-  // bottom-face-referenced; CalibrationStorage::deserialize() reconciles
-  // that to the centre-based convention this struct's in-memory values are
-  // in, so by the time a caller reads this field it already means centre.
-  // Indexed [magnet][xyz].
+  // Knob-frame magnet positions. Each position is the magnet's origin,
+  // i.e. its geometric centre. Replaces the nominal Positions::Magnet_i_knob
+  // values as the model's actual geometry. Indexed [magnet][xyz].
   float magnet_pos_knob[3][3];
   // Per-magnet axis tilt in the knob frame. VirtualSensor::evaluate already rotates
   // into and out of the magnet frame with this; every construction site simply

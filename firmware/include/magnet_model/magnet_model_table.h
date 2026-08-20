@@ -29,8 +29,7 @@ constexpr float BICUBIC_FIELD_REFERENCE_MT = 1000.0f;
 // The table above covers the near model for each magnet. At larger
 // distances we fall back to a dipole model instead. The dipole belongs at
 // the magnet's geometric centre, which is exactly what this frame's origin
-// already is -- so the near (table) and far (dipole) models share one
-// frame with no separate offset between them.
+// already is -- so the near (table) and far (dipole) models share one frame.
 
 // Dipole moment magnitude at BICUBIC_FIELD_REFERENCE_MT, in mT*mm^3, so it
 // scales by exactly the same ratio the table does and the two models can
