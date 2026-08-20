@@ -1,147 +1,11 @@
-# On-Device Bundle Calibration — How the Full Model Relates to the Pose Solver
-
-*Written this session, from reading the current forward-model code
-(`firmware/src/magnet_model/`) against `design documentation/Math.md`.
-Supersedes the older session's notes below wherever the two disagree — the
-disclaimer that session's summary carries is exactly why.*
-
-## 1. The reuse point is one level lower than the prior session assumed
-
-The prior session's plan (§2.1 below) recovers a magnet's field gradient $M$
-by reading it off `ForwardModel::evaluate()`'s returned pose Jacobian (its
-translation block). That was true before cross-magnet interference existed.
-It no longer is: `ForwardModel::evaluate()` now sums all three magnets'
-contributions into a single 3×3 per sensor before returning
-($J_{trans,i}=-M_i,\ M_i=\sum_j M_{ij}$, `virtual_sensor.cpp`'s
-`J_displacement_world`) — the summation Math.md §4.F derives as exact but,
-correspondingly, irreversible. A magnet-position or -tilt derivative needs
-that one magnet's own $M_{ij}$, not the sum, so it cannot be recovered from
-`ForwardModel::evaluate()`'s output anymore.
-
-It doesn't need to be. `MagnetPlacement::near_approx_world()` and
-`::far_approx_world()` (`magnet_local_model.{h,cpp}`) already return exactly
-that, unsummed, and are already public methods that `VirtualSensor::evaluate()`
-itself calls once per (sensor, magnet) pair, before it sums them:
-
-```
-B_ij, M_ij = placement_j.near_approx_world(sensor_i)   // paired magnet
-B_ij, M_ij = placement_j.far_approx_world(sensor_i)    // cross magnets
-```
-
-This is the actual reuse boundary: calibration code calls these two methods
-directly, once per (sensor, magnet, frame), and never touches
-`ForwardModel::evaluate()`'s summing loop for the shared-parameter columns.
-It still reuses `MagnetModel::place()` unchanged, once per magnet per frame.
-
-## 2. One formula, both branches — why that's true, and wasn't obvious
-
-Both `near_approx_world` and `far_approx_world` share an interface: world
-position in, field and $\partial B/\partial(\text{world position})$ out. That
-alone is enough to reuse the prior session's magnet position/tilt chain rule
-(§2.2 below) across *both* branches, but it needs one fact the prior session
-had no reason to check, since dipole cross-terms didn't exist yet: the dipole
-field is rotation-*equivariant*, $B(Q\mathbf m,Q\mathbf r)=Q\,B(\mathbf m,\mathbf r)$
-for any rotation $Q$. A magnet's polarization is always its own local
-$-\hat z$, so the dipole's *local* moment never depends on tilt — only its
-*world* moment does, through $R_{total,j}$. That makes
-$\mathbf B_{w,ij}=R_{total,j}B_j(\mathbf v_{l,ij})$ (Math.md §2's general form)
-hold for the far branch too, not only the near/interpolated one it was
-written for. Consequence: the position derivative
-
-$$\frac{\partial \mathbf B_{ij}}{\partial \mathbf m_j} = -M_{ij}\,R$$
-
-holds unmodified for both branches, and the tilt derivative below (§2.2)
-generalizes the same way — *provided* $\mathbf d$ (the magnet-to-sensor
-vector the formula needs) is taken relative to the frame each branch actually
-uses: `origin_world` for the near branch, `centre_world` for the far one.
-That distinction is new; nothing before cross-magnet modelling would have
-surfaced it.
-
-## 3. Two forward models, one field, one test
-
-| | Pose solver's forward model | Calibration's forward model |
-|---|---|---|
-| Solves for | one frame's $(\mathbf t,R)$ | $N$ frames' $(\mathbf t_k,R_k)$ + 45 shared params |
-| Per-frame block (6 cols) | `ForwardModel::evaluate()` | the same call, unchanged |
-| Shared-param block (45 cols) | doesn't exist | new: built from `near_/far_approx_world` |
-| Underlying field/Jacobian math | Math.md §3–4 | same, chain rule extended to the shared params |
-
-The pose-solver forward model is a special case of the calibration one, at
-$\theta=\theta_{nominal}$, one frame. That gives the agreement test the user
-asked for almost for free: evaluate the calibration model's field prediction
-and its 6 pose columns at nominal $\theta$, for one frame, and require it to
-match `ForwardModel::evaluate()`'s own output to float tolerance. Because the
-pose columns literally are that same call, this is less "agreement between
-two implementations" and more "the new code didn't disturb the old call
-path" — which is the point: there is one forward model, evaluated over a
-wider parameter vector, not two forward models kept in sync by hand.
-
-## 4. Where the 45 shared columns come from
-
-| Group | Cols | Derivative | Reuses |
-|---|--:|---|---|
-| magnet position | 3 (of 9, gauge-reduced) | $-M_{ij}R$ | $M_{ij}$ from either `*_approx_world` call |
-| magnet tilt | 2 per magnet (6) | $M_{ij}R[\mathbf d]_\times - R[\mathbf b]_\times$, chart-projected | same, + gnomonic chart (§2.5 below, unaffected by cross-magnet) |
-| strength, common + spread | 3 | $\mathbf B_{ij}/s_j \cdot s_{nom}$ | $\mathbf B_{ij}$ from either call — both branches linear in $s_j$ |
-| sensor offset | 9 | see §5 | raw reading only |
-| sensor gain | 24 (of 27, traceless) | see §5 | raw reading only |
-
-Position, tilt and strength are the only groups that touch the field model,
-and each is one 3×3 (or a field value) already computed by the calls in §1 —
-no new field lookups, matching the prior session's efficiency claim, just
-sourced one layer down from where it expected.
-
-## 5. Gain and offset: fit the convention the firmware actually uses
-
-The prior session assumed the PC fit's convention, prediction
-$\hat{\mathbf B}=G\mathbf B_{model}+\text{offset}$, and warned (§2.4 below)
-that gain then multiplies every field-derived column — a documented,
-easy-to-drop factor. The firmware doesn't use that convention.
-`SensorController::read_mT()` applies gain to the *measurement*:
-`corrected = sensor_gain·raw − sensor_offset_mT`. Written into the residual
-the pose solver already minimizes ($\mathbf r=\hat{\mathbf B}-\mathbf B_{measured}$,
-`solve_pose.cpp`), fitting on-device against that same convention gives
-
-$$\mathbf r_i = (G_i\,\mathbf{raw}_i - \mathbf{offset}_i) - \mathbf B_{w,i}(\theta_{geom},\rho)$$
-
-$$\frac{\partial \mathbf r_i}{\partial \mathbf{offset}_i} = -I, \qquad \frac{\partial \mathbf r_i}{\partial g_k} = G_k\,\mathbf{raw}_i$$
-
-Gain and offset columns now act only on a stored raw reading; every
-field-derived column (position, tilt, strength, pose) is untouched by gain
-entirely. The §2.4 pitfall below — a column scaled twice, or a missing $G$ —
-has no way to occur in this formulation, since there is no shared factor
-between the two column families to forget. This also matches
-`TODO/resolved/sensor-gain-calibration.md`'s existing decision to keep
-correction at the sensor, not the model — the calibration forward model
-should follow the same split rather than reintroduce gain inside it.
-
-## 6. Left open
-
-Two things this exploration surfaced but didn't resolve, both blocking before
-any solver code gets written:
-
-- **The arrowhead/Schur elimination algebra has no home yet.** The prior
-  session cites "Math.md §7" for it (§3.1 below); `Math.md` currently ends at
-  §6. That derivation needs to exist somewhere citable before the two-pass
-  solver (§3 below) can be implemented against it.
-- **On-device frame volume vs. RAM.** `BundleCalibrationController` currently
-  streams roughly a second of samples per step across 7 steps to the PC —
-  enough frames that storing all of them, rather than the two-pass scheme's
-  rebuild-from-raw-reading approach, is very unlikely to fit. Not a blocker
-  for the math above, but the two-pass design's premise should be checked
-  against real capture counts before committing to it.
-
----
-
 Below is a summary of the approach taken by an older claude session, written by that same session.
 
 That session ran into issues, so it was abandoned. Since then one significant piece of math changed:
 we now model cross magnet interference. Another piece changed: we now use BLA instead of eigen.
 
-Take this as a good source for first things to try. Not as gospel — see §1–§6 above for where it
-has already been checked against the current code and where it needed correcting.
+Take this as a good source for first things to try. Not as gospel.
 
-# Appendix: prior session's notes — Deriving the Jacobians, and the Two-Pass Solver
+# Bundle Calibration — Deriving the Jacobians, and the Two-Pass Solver
 
 Calibration fits the constants the pose solver treats as frozen — where each
 magnet sits in the knob, how it is tilted, how strong it is, and each sensor's
@@ -524,4 +388,3 @@ unregularized is safe even though it is near-degenerate with position and gain,
 because a flat direction only survives if it lies *entirely* within
 unregularized coordinates — and every parameter it trades against does carry a
 justified prior, which supplies curvature along the whole combined direction.
-
