@@ -162,3 +162,11 @@ archived file's own header has the detail.
   about one I2C round-trip. Implemented in `7d1fb42`/`26e604d`; live
   description is `ARCHITECTURE.md` → "Sensor read timing". One caveat is
   still unverified on hardware (RP2040 `Wire` clock stretching).
+- **[`resolved/test-point-standoff-bounds.md`](resolved/test-point-standoff-bounds.md)** —
+  `test_forward_model_jacobian_grid`'s `t_z_steps` hardcoded a raw standoff as
+  `t.z`, skipping `Positions::magnet_z_pos_from_pivot`, which sent the
+  local-frame `z` positive instead of negative — silently exercising
+  extrapolation outside the bicubic table instead of the near-table poses
+  the sweep was meant to cover. Fixed in `85146bd` to derive from
+  `Positions::magnet_z_pos_from_pivot + standoff`, matching
+  `test_cross_magnet_terms_are_actually_present`'s existing pattern.
