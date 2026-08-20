@@ -35,25 +35,46 @@
 static constexpr float FD_STEP_LINEAR  = 5.0e-4f;   // mm (or your length unit)
 static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 
+// Every near-field probe point below (BICUBIC_TEST_POINTS and the ones in
+// test_magnet_model_jacobian_generic/_at_origin/test_magnet_strength_scales_
+// field_and_jacobian) is expressed as a fraction of the table's real domain
+// -- BICUBIC_ORIGIN/BICUBIC_FAR, magnet_model_table.h, generated -- rather
+// than a hand-picked mm value. That is what lets them track the grid
+// automatically if it is ever regenerated with different bounds, instead of
+// silently drifting outside the real domain the way a bare literal did:
+// see TODO/resolved/test-point-standoff-bounds.md for what that looked like
+// in practice, and assert_within_bicubic_domain() below for the loud check
+// that catches it if a fraction is ever chosen badly regardless.
+//
+// t=0 is BICUBIC_ORIGIN (deep below the magnet), t=1 is BICUBIC_FAR (just
+// short of the magnet's own centre). Fractions here skew toward the t=1 end
+// on purpose: that's the region real knob poses -- a few mm of standoff --
+// actually reach, not the far extrapolation-adjacent end of the table.
+static constexpr float lerp_domain(float lo, float hi, float t) { return lo + t * (hi - lo); }
+static constexpr float R_AT(float t) { return lerp_domain(BICUBIC_ORIGIN.x(), BICUBIC_FAR.x(), t); }
+static constexpr float Z_AT(float t) { return lerp_domain(BICUBIC_ORIGIN.y(), BICUBIC_FAR.y(), t); }
+// One grid cell's width in r, for a point deliberately placed a fraction of
+// a cell off the r=0 axis rather than at a round mm value.
+static constexpr float R_CELL = (BICUBIC_FAR.x() - BICUBIC_ORIGIN.x()) / (NR - 1);
+// A 45-degree in-plane direction, for probe points off the x/y axes. Fixed
+// regardless of the domain -- azimuth doesn't depend on where the table's
+// bounds happen to sit.
+static constexpr float SQRT1_2 = 0.70710678f;
+
 // (r, z) points to probe the BicubicField / MagnetModel derivatives at.
-// read BICUBIC_ORIGIN / BICUBIC_FAR in magnet_model_table.h, for the actual
-// domain. This file is generated. 
-// z is always negative -- the sensor plane sits below
-// the magnet. The points below are chosen to sit well inside the current domain, 
-// with margin >> FD_STEP_LINEAR, and deliberately cluster in the region real knob
-// poses actually reach rather than spanning the whole table.
+// z is always negative -- the sensor plane sits below the magnet.
 struct RZSample { float r; float z; };
 static constexpr RZSample BICUBIC_TEST_POINTS[] = {
-    { 1.0f, -4.0f },
-    { 3.0f, -9.0f },
-    { 5.0f, -4.0f },
-    { 0.5f, -14.0f },
+    { R_AT(0.10f), Z_AT(0.85f) },
+    { R_AT(0.30f), Z_AT(0.65f) },
+    { R_AT(0.50f), Z_AT(0.85f) },
+    { R_AT(0.05f), Z_AT(0.45f) },
     // On the r=0 symmetry axis and just inside the first cell: exercises
     // the axis_patch mirror stencil in BicubicField::evaluate (and, via
     // the central-difference d_dr probe at r=0, the graceful handling of
     // a slightly negative r from the FD step landing just past the axis).
-    { 0.0f, -9.0f },
-    { 0.05f, -9.0f },
+    { 0.0f, Z_AT(0.65f) },
+    { 0.25f * R_CELL, Z_AT(0.65f) },
 };
 
 // PCB / knob geometry, taken from Positions:: rather than placeholders.
@@ -229,19 +250,19 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 
 void test_magnet_model_jacobian_generic(void) {
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
-    // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
-    // z_l kept with a margin well inside the table's actual BICUBIC_ORIGIN/
-    // BICUBIC_FAR domain (magnet_model_table.h -- generated; z=0 is NOT
-    // valid, it's past BICUBIC_FAR, i.e. the sensor plane is below the
-    // magnet's centre).
-    // test_forward_model_jacobian_grid's pose sweep stays within this same
-    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus a
-    // standoff, the same derivation test_cross_magnet_terms_are_actually_present
-    // uses below.
-    check_magnet_model_at(model, Vec3(2.0f,  0.0f, -4.0f));
-    check_magnet_model_at(model, Vec3(1.4f,  1.4f, -6.0f));
-    check_magnet_model_at(model, Vec3(0.0f,  3.0f, -9.0f));
-    check_magnet_model_at(model, Vec3(-2.0f, -2.0f, -11.0f));
+    // Generic points away from r=0, at varying azimuth (in the local frame
+    // v_l = [x_l,y_l,z_l]). r and z come from R_AT/Z_AT above, so they track
+    // BICUBIC_ORIGIN/BICUBIC_FAR automatically instead of needing
+    // hand-recomputed mm values whenever the grid changes; only the azimuth
+    // (SQRT1_2, fixed) doesn't depend on the domain at all.
+    // test_forward_model_jacobian_grid's pose sweep reaches this same
+    // region via a different derivation: its t_z_steps are
+    // Positions::magnet_z_pos_from_pivot plus a standoff, matching what
+    // test_cross_magnet_terms_are_actually_present uses below.
+    check_magnet_model_at(model, Vec3(R_AT(0.20f), 0.0f, Z_AT(0.85f)));
+    check_magnet_model_at(model, Vec3(R_AT(0.15f) * SQRT1_2, R_AT(0.15f) * SQRT1_2, Z_AT(0.65f)));
+    check_magnet_model_at(model, Vec3(0.0f, R_AT(0.30f), Z_AT(0.45f)));
+    check_magnet_model_at(model, Vec3(-R_AT(0.25f) * SQRT1_2, -R_AT(0.25f) * SQRT1_2, Z_AT(0.35f)));
 }
 
 void test_magnet_model_jacobian_at_origin(void) {
@@ -250,10 +271,10 @@ void test_magnet_model_jacobian_at_origin(void) {
     // gives r = FD_STEP_LINEAR > 0 on both sides (never crosses back
     // through the singularity), so central differences are well-defined
     // even though the *base* point requires the L'Hopital limit.
-    // z_l chosen well away from the z=-0.5 domain edge for margin.
+    // z_l from Z_AT above, well away from either domain edge for margin.
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -4.0f));
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -9.0f));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, Z_AT(0.85f)));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, Z_AT(0.45f)));
 }
 
 void test_magnet_strength_scales_field_and_jacobian(void) {
@@ -269,11 +290,13 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
     // as "B_s should be ratio * B_unit" regardless of what
     // BICUBIC_FIELD_REFERENCE_MT itself happens to be.
     const float ratios[] = { 0.87f, 1.0f, 1.23f };
+    // Same domain-fraction derivation as test_magnet_model_jacobian_generic
+    // above -- see R_AT/Z_AT.
     const Vec3 probes[] = {
-        Vec3( 1.4f,  1.4f, -6.0f),
-        Vec3( 0.0f,  3.0f, -9.0f),
-        Vec3(-2.0f, -2.0f, -11.0f),
-        Vec3( 0.0f,  0.0f, -9.0f),   // the r = 0 branch
+        Vec3(R_AT(0.15f) * SQRT1_2, R_AT(0.15f) * SQRT1_2, Z_AT(0.65f)),
+        Vec3(0.0f, R_AT(0.30f), Z_AT(0.45f)),
+        Vec3(-R_AT(0.25f) * SQRT1_2, -R_AT(0.25f) * SQRT1_2, Z_AT(0.35f)),
+        Vec3(0.0f, 0.0f, Z_AT(0.45f)),   // the r = 0 branch
     };
 
     MagnetModel unit(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
