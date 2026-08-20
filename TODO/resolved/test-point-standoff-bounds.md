@@ -3,16 +3,29 @@
 > `t_z_steps` now derives from `Positions::magnet_z_pos_from_pivot + standoff`
 > instead of hardcoding the raw standoff as `t.z`; `BASE_T`/`BASE_ROTATION_AXIS`
 > (unused dead code carrying the identical mistake) were deleted. Fixed in
-> `85146bd`. See `test_forward_model_jacobian_grid` and
+> `85146bd`.
+>
+> That first fix only corrected the one known instance by hand — nothing in
+> the file actually checked a test point against the table's real domain, it
+> was all comments a human had to re-verify by tracing the pipeline, which is
+> exactly how this bug went unnoticed in the first place. `b545617` closes
+> that gap: `assert_within_bicubic_domain()` reads `BICUBIC_ORIGIN`/
+> `BICUBIC_FAR` straight from `magnet_model_table.h` and is now called by
+> every test that evaluates through the bicubic table — the direct `(r,z)`/
+> `v_l` probes, and the pose-level tests via the local point read off the
+> actual `MagnetPlacement` for a representative magnet/sensor pair. A
+> regression check (temporarily reverting `t_z_steps`) confirmed the
+> assertion fails loudly and immediately on exactly this bug instead of
+> passing silently. See `test_forward_model_jacobian_grid` and
 > `test_cross_magnet_terms_are_actually_present` in
-> `firmware/test/test_jacobian.cpp` for the live pattern — the latter already
-> did this correctly and is what the fix now matches.
+> `firmware/test/test_jacobian.cpp` for the live pattern.
 >
 > Verified with `pio test -e native_test`: all 8 cases pass, including
 > `test_forward_model_jacobian_grid` now exercising genuinely in-domain
-> points. `pio test -e seeed_xiao_rp2040_test` was not run to completion for
-> this fix (no physical board attached in the environment it was fixed in),
-> though the build itself completed without error before the upload stage.
+> points and enforcing it. `pio test -e seeed_xiao_rp2040_test` was not run
+> to completion for this fix (no physical board attached in the environment
+> it was fixed in), though the build itself completed without error before
+> the upload stage.
 
 ---
 
@@ -72,3 +85,10 @@ same standoff values, so the physical scenario being swept is unchanged and
 only the world-frame `z` it turns into is corrected. Delete `BASE_T`/
 `BASE_ROTATION_AXIS` rather than fixing them, since nothing references either
 one.
+
+Correcting the arithmetic only fixes the one instance found by inspection,
+though — it doesn't stop the next one. Better: make every test point check
+itself against the table's actual size (`BICUBIC_ORIGIN`/`BICUBIC_FAR` in
+`magnet_model_table.h`) instead of relying on a human-verified comment, so a
+future out-of-domain point fails the test instead of silently exercising
+`BicubicField::evaluate`'s extrapolation branch.

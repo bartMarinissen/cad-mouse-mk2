@@ -167,6 +167,8 @@ archived file's own header has the detail.
   `t.z`, skipping `Positions::magnet_z_pos_from_pivot`, which sent the
   local-frame `z` positive instead of negative — silently exercising
   extrapolation outside the bicubic table instead of the near-table poses
-  the sweep was meant to cover. Fixed in `85146bd` to derive from
-  `Positions::magnet_z_pos_from_pivot + standoff`, matching
-  `test_cross_magnet_terms_are_actually_present`'s existing pattern.
+  the sweep was meant to cover. Fixed in `85146bd`; `b545617` went further
+  and added `assert_within_bicubic_domain()`, checked against
+  `magnet_model_table.h`'s real `BICUBIC_ORIGIN`/`BICUBIC_FAR` extent, to
+  every test point in the file so a future out-of-domain point fails loudly
+  instead of silently extrapolating.
