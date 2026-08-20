@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "Config.h"
+#include "magnet_model/positions.h"
 
 namespace CalibrationStorage {
 namespace {
@@ -112,7 +113,8 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
   if (memcmp(in + kMagicOffset, kMagic, sizeof(kMagic)) != 0) {
     return Result::BadMagic;
   }
-  if (readU32(in + kVersionOffset) != kVersion) {
+  const uint32_t version = readU32(in + kVersionOffset);
+  if (version != kVersion && version != kBottomFaceOriginVersion) {
     return Result::BadVersion;
   }
   if (crc32(in, kCrcOffset) != readU32(in + kCrcOffset)) {
@@ -123,6 +125,21 @@ Result deserialize(const uint8_t in[kBlobSize], CalibrationParams& out) {
   // host's problem, decided once in format_binary(); this side only has to
   // agree on the length, which the static_asserts above pin down.
   memcpy(&out, in + kPayloadOffset, kPayloadSize);
+
+  // kBottomFaceOriginVersion blobs store magnet_pos_knob relative to each
+  // magnet's bottom face, not its centre -- see CalibrationStorage.h. Shift
+  // each one up by its own half-height along its own (already-fitted) axis,
+  // to the centre-based convention CalibrationParams now means everywhere
+  // else.
+  if (version == kBottomFaceOriginVersion) {
+    for (int i = 0; i < 3; i++) {
+      const Vec3 shifted = toVec3(out.magnet_pos_knob[i]) +
+          toMat3(out.magnet_rotation[i]) * Vec3(0.0f, 0.0f, Positions::magnet_half_height_mm);
+      out.magnet_pos_knob[i][0] = shifted(0);
+      out.magnet_pos_knob[i][1] = shifted(1);
+      out.magnet_pos_knob[i][2] = shifted(2);
+    }
+  }
 
   return isPlausible(out) ? Result::Ok : Result::Implausible;
 }

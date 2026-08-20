@@ -233,9 +233,15 @@ architecture and the load-bearing frame conventions.
 
 Two things are worth knowing before touching it:
 
-- The magnet position reference is the magnet's **bottom face**, not its
-  centre — that is what `positions.h` means and what the notebook baked into
-  the bicubic table. magpylib positions cylinders by their centre.
+- The magnet position reference is the magnet's **geometric centre** — that
+  is what `positions.h` means and what the notebook bakes into the bicubic
+  table, and it is also where magpylib positions cylinders natively. The
+  bottom-face convention this replaced still lives on in one place: the
+  Python calibration fit (`magnet_field_model/calibration/`) hasn't been
+  updated and still produces bottom-face-referenced `magnet_pos_knob`
+  values, so `CalibrationStorage::deserialize()` reconciles that to the
+  centre-based convention when loading a blob tagged with the older format
+  version.
 - The raw capture path streams `readUncorrected()`, so the sensors might read the
   **opposite sign** to the modelled field — matching `Config::magnet_gains`
   . The fit attributes that flip to magnet polarity,

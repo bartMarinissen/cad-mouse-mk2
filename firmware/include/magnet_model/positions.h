@@ -7,9 +7,19 @@ namespace Positions{
     constexpr float triangle_sidelength_mm = 28.58f;
     constexpr float R = triangle_sidelength_mm / SQRT3_F;
 
-    // How far the magnets sit below the pivot point of the knob
-    // That pivot point is the origin of the knob-frame
-    constexpr float magnet_z_pos_from_pivot = 15;
+    // The offset between the magnet's two origin conventions -- its bottom
+    // face vs. its geometric centre -- along its own axis. The forward
+    // model only ever works in the centre-based frame; this exists for the
+    // one place that still has to cross the boundary, CalibrationStorage's
+    // load-time reconciliation of the bottom-face-referenced positions the
+    // Python calibration fit still produces (see CalibrationStorage.cpp).
+    constexpr float magnet_half_height_mm = 3.0f;
+
+    // How far the magnets' origin -- their geometric centre -- sits below
+    // the pivot point of the knob. That pivot point is the origin of the
+    // knob-frame. (The magnets' bottom face, 15mm below the pivot, sits
+    // magnet_half_height_mm further down still.)
+    constexpr float magnet_z_pos_from_pivot = 12;
     // The aproximate expected distance form the sensor to the magnet
     constexpr float magnet_rest_distance_sensor = 6;
 
@@ -19,6 +29,9 @@ namespace Positions{
     inline const Vec3 sensor_3_world = {  R * SQRT3_F/2,  R * 0.5f, 0.0f }; // Top Right
 
     // Knob frame (Assuming magnets sit perfectly above sensors at rest)
+    //
+    // Each magnet's position is its origin, the magnet's own geometric
+    // centre -- see magnet_half_height_mm above.
     //
     // Plain arrays are the primary definition, with the Vec3 forms below
     // derived from them, so there is still exactly one set of numbers. The

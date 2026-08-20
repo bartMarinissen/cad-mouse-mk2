@@ -7,9 +7,6 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
                          const Mat3 &magnet_rotation, float magnet_strength_mT)
     : magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
       magnet_strength_mT(magnet_strength_mT),
-      // The centre is half a magnet along the magnet's OWN axis, not the
-      // knob's z, so the tilt has to be applied to the offset before adding.
-      magnet_centre_knob(m_local + magnet_rotation * Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM)),
       moment_mT_mm3((magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT)
                     * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3),
       field_model_(field_model),
@@ -18,14 +15,13 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
 
 MagnetPlacement __not_in_flash_func(MagnetModel::place)(const Vec3& t, const Mat3& R) const {
     Mat3 R_total = R * magnet_rotation;
-    Vec3 centre_world = t + R * magnet_centre_knob;
     Vec3 origin_world = t + R * magnet_pos_knob;
     // Polarization runs along the magnet's local -z, so the moment vector is
     // -|m| times its own axis -- which, mapped to world, is R_total's third
     // column. A column read and a scale: the entire cost of carrying this
     // magnet's orientation into the far-field model.
     Vec3 moment_world = -moment_mT_mm3 * R_total.Column(2);
-    return MagnetPlacement{R_total, centre_world, origin_world, moment_world, *this};
+    return MagnetPlacement{R_total, origin_world, moment_world, *this};
 }
 
 
@@ -88,7 +84,7 @@ Vec3 __not_in_flash_func(dipole_field)(const Vec3& m, const Vec3& r, Mat3& J) {
 Vec3 MagnetPlacement::far_approx_world(const Vec3& p_world, Mat3& J_world) const{
     // The far approximation is just the dipole aproximation. That means we can evaluate this in the
     // world frame directly
-    return dipole_field(moment_world, p_world - centre_world, J_world);
+    return dipole_field(moment_world, p_world - origin_world, J_world);
 }
 
 Vec3 MagnetPlacement::near_approx_world(const Vec3& p_world, Mat3& J_world) const{

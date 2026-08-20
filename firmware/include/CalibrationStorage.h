@@ -44,10 +44,24 @@ constexpr size_t kPayloadSize = 300;
 constexpr size_t kHexChars = kBlobSize * 2;
 
 // Carried so a future format change has somewhere to announce itself. There
-// is deliberately no migration logic -- a blob whose version we do not know
-// is rejected rather than guessed at, which is what keeps a v2 layout from
-// being silently misread as v1.
-constexpr uint32_t kVersion = 1;
+// is deliberately no general migration facility -- a blob whose version we
+// do not know is rejected rather than guessed at, which is what keeps an
+// unknown layout from being silently misread. The one exception is
+// kBottomFaceOriginVersion below, which is not a layout change at all.
+constexpr uint32_t kVersion = 2;
+
+// The byte layout has not changed since version 1 -- CalibrationParams is
+// exactly the same 300-byte payload. What changed is what magnet_pos_knob
+// means: version 1 is bottom-face-referenced (what the Python calibration
+// fit still produces, and therefore what every blob in existence is), while
+// kVersion is origin (geometric centre) referenced, which is what the
+// forward model now works in. deserialize() accepts both and reconciles a
+// kBottomFaceOriginVersion blob's magnet_pos_knob to the centre-based
+// convention on load (see CalibrationStorage.cpp), rather than rejecting
+// it outright. This stops being needed, and can be deleted along with that
+// reconciliation, once the Python fit is rewritten to emit centre-based
+// positions directly and its export.py bumps BLOB_VERSION to match.
+constexpr uint32_t kBottomFaceOriginVersion = 1;
 
 // Why a blob was turned away. Boot diagnostics and the serial upload's error
 // responses both need to say which check failed, not just that one did.

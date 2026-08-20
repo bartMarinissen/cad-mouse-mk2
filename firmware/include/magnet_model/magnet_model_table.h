@@ -16,8 +16,8 @@ constexpr int NZ = 91;
 // The extent of the table (in mm), as (r, z) pairs -- .x() is r, .y() is z.
 // `f`-suffixed: an unsuffixed double literal here warns as a narrowing
 // conversion to float, even though the value is exactly representable.
-constexpr Vec2 BICUBIC_ORIGIN = { 0.0f, -20.0f };
-constexpr Vec2 BICUBIC_FAR    = { 10.0f, -0.5f };
+constexpr Vec2 BICUBIC_ORIGIN = { 0.0f, -23.0f };
+constexpr Vec2 BICUBIC_FAR    = { 10.0f, -3.5f };
 
 // The polarization (remanence, Br) this table was generated at. A real
 // magnet is not this strong or weak -- MagnetModel divides its own
@@ -26,12 +26,11 @@ constexpr float BICUBIC_FIELD_REFERENCE_MT = 1000.0f;
 
 // --- Far-field (dipole) constants, for the cross-magnet terms ---
 //
-// The table above covers the near model for each magnet.
-// At larger distances we can fall back to a dipole model instead. The
-// frame's origin is the magnet's BOTTOM FACE (see local_field.py), but the
-// dipole belongs at the geometric centre -- placing it at the origin instead
-// is not a small error, it is tens of percent at cross-magnet range.
-constexpr float MAGNET_HALF_HEIGHT_MM = 3.0f;
+// The table above covers the near model for each magnet. At larger
+// distances we fall back to a dipole model instead. The dipole belongs at
+// the magnet's geometric centre, which is exactly what this frame's origin
+// already is -- so the near (table) and far (dipole) models share one
+// frame with no separate offset between them.
 
 // Dipole moment magnitude at BICUBIC_FIELD_REFERENCE_MT, in mT*mm^3, so it
 // scales by exactly the same ratio the table does and the two models can

@@ -149,13 +149,19 @@ difference between measured and assumed.
 
 Recorded explicitly, because several are load-bearing:
 
-1. **Magnet position reference is the BOTTOM FACE, not the centre.**
-   `bicubic_table.py`'s `build_magnet()` places the cylinder at `z=+3` so its
-   bottom face lands on `z=0`, so that is what `positions.h`'s magnet
-   positions mean. magpylib positions a cylinder by its centre, so
-   `local_field.py` adds the half-height. Getting this wrong shifts the model
-   by that half-height and inflates the predicted field severalfold at rest —
-   it is not a subtle error, but it is a silent one.
+1. **The bicubic table and the calibration fit use different magnet position
+   references, and that's deliberate, not drift.** `bicubic_table.py`'s
+   `build_magnet()` places the cylinder at its magpylib-native centre — so
+   `positions.h`'s magnet positions, and the table's own `(r, z)` origin,
+   mean the magnet's geometric centre. `calibration/local_field.py`, by
+   contrast, still places the cylinder at `z=+3` so its bottom face lands on
+   `z=0`, matching what the still-unrewritten Python calibration fit
+   produces. Firmware's `CalibrationStorage::deserialize()` is what
+   reconciles the two, shifting a fitted (bottom-face) `magnet_pos_knob` to
+   the centre-based convention the forward model uses everywhere else.
+   Getting either half of this wrong shifts the model by the magnet's
+   half-height and inflates the predicted field severalfold at rest — it is
+   not a subtle error, but it is a silent one.
 2. **The raw sensors' sign flip is attributed to magnet polarity, not gain.**
    The capture path streams `readUncorrected()`, and the raw sensors read the
    opposite sign to the field `local_field.py` models. The firmware carries

@@ -44,16 +44,16 @@ static constexpr float FD_STEP_ANGULAR = 5.0e-4f;   // radians
 // poses actually reach rather than spanning the whole table.
 struct RZSample { float r; float z; };
 static constexpr RZSample BICUBIC_TEST_POINTS[] = {
-    { 1.0f, -1.0f },
-    { 3.0f, -6.0f },
-    { 5.0f, -1.0f },
-    { 0.5f, -11.0f },
+    { 1.0f, -4.0f },
+    { 3.0f, -9.0f },
+    { 5.0f, -4.0f },
+    { 0.5f, -14.0f },
     // On the r=0 symmetry axis and just inside the first cell: exercises
     // the axis_patch mirror stencil in BicubicField::evaluate (and, via
     // the central-difference d_dr probe at r=0, the graceful handling of
     // a slightly negative r from the FD step landing just past the axis).
-    { 0.0f, -6.0f },
-    { 0.05f, -6.0f },
+    { 0.0f, -9.0f },
+    { 0.05f, -9.0f },
 };
 
 // PCB / knob geometry, taken from Positions:: rather than placeholders.
@@ -230,17 +230,18 @@ static void check_magnet_model_at(const MagnetModel& model, const Vec3& v_l) {
 void test_magnet_model_jacobian_generic(void) {
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
     // Generic points away from r=0 (in the local frame v_l = [x_l,y_l,z_l]).
-    // z_l kept within [-12,-0.5], a margin well inside the table's actual
-    // [-20,-0.5] domain (z=0 is NOT valid - it's past BICUBIC_FAR at -0.5,
-    // i.e. sensor plane is below the magnet).
+    // z_l kept with a margin well inside the table's actual BICUBIC_ORIGIN/
+    // BICUBIC_FAR domain (magnet_model_table.h -- generated; z=0 is NOT
+    // valid, it's past BICUBIC_FAR, i.e. the sensor plane is below the
+    // magnet's centre).
     // test_forward_model_jacobian_grid's pose sweep stays within this same
-    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus a
-    // standoff, the same derivation test_cross_magnet_terms_are_actually_present
-    // uses below.
-    check_magnet_model_at(model, Vec3(2.0f,  0.0f, -1.0f));
-    check_magnet_model_at(model, Vec3(1.4f,  1.4f, -3.0f));
-    check_magnet_model_at(model, Vec3(0.0f,  3.0f, -6.0f));
-    check_magnet_model_at(model, Vec3(-2.0f, -2.0f, -8.0f));
+    // margin: its t_z_steps are Positions::magnet_z_pos_from_pivot plus
+    // magnet_half_height_mm plus a standoff, the same derivation
+    // test_cross_magnet_terms_are_actually_present uses below.
+    check_magnet_model_at(model, Vec3(2.0f,  0.0f, -4.0f));
+    check_magnet_model_at(model, Vec3(1.4f,  1.4f, -6.0f));
+    check_magnet_model_at(model, Vec3(0.0f,  3.0f, -9.0f));
+    check_magnet_model_at(model, Vec3(-2.0f, -2.0f, -11.0f));
 }
 
 void test_magnet_model_jacobian_at_origin(void) {
@@ -251,8 +252,8 @@ void test_magnet_model_jacobian_at_origin(void) {
     // even though the *base* point requires the L'Hopital limit.
     // z_l chosen well away from the z=-0.5 domain edge for margin.
     MagnetModel model(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -1.0f));
-    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -6.0f));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -4.0f));
+    check_magnet_model_at(model, Vec3(0.0f, 0.0f, -9.0f));
 }
 
 void test_magnet_strength_scales_field_and_jacobian(void) {
@@ -269,10 +270,10 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
     // BICUBIC_FIELD_REFERENCE_MT itself happens to be.
     const float ratios[] = { 0.87f, 1.0f, 1.23f };
     const Vec3 probes[] = {
-        Vec3( 1.4f,  1.4f, -3.0f),
-        Vec3( 0.0f,  3.0f, -6.0f),
-        Vec3(-2.0f, -2.0f, -8.0f),
-        Vec3( 0.0f,  0.0f, -6.0f),   // the r = 0 branch
+        Vec3( 1.4f,  1.4f, -6.0f),
+        Vec3( 0.0f,  3.0f, -9.0f),
+        Vec3(-2.0f, -2.0f, -11.0f),
+        Vec3( 0.0f,  0.0f, -9.0f),   // the r = 0 branch
     };
 
     MagnetModel unit(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
@@ -373,23 +374,22 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
     // The two models have to describe the SAME magnet: the table is generated
     // from a 6x6mm cylinder at BICUBIC_FIELD_REFERENCE_MT, and the dipole is
     // supposed to be that cylinder's far-field limit. Nothing else in the
-    // suite would notice a moment that is off by a constant factor, or a
-    // dipole placed at the magnet's bottom face instead of its centre -- both
-    // produce a smooth, self-consistent, finite-difference-clean field that is
-    // simply the wrong size.
+    // suite would notice a moment that is off by a constant factor -- both a
+    // correctly-placed dipole and a mis-scaled one produce a smooth,
+    // self-consistent, finite-difference-clean field, just of the wrong size.
     //
     // The check is against MagnetModel::evaluate at the far edge of the
     // table's domain, where both models are valid at once. Agreement there is
     // limited by the dipole approximation itself (the cylinder is not a point
     // at 10mm), so the tolerance is percent-scale on purpose -- this is a
-    // units-and-placement check, not a precision one. A wrong 1/mu0 factor
-    // would show up here as a factor of ~8e5, and the bottom-face-vs-centre
-    // error as tens of percent.
+    // units check, not a precision one. A wrong 1/mu0 factor would show up
+    // here as a factor of ~8e5.
     MagnetModel magnet(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>());
 
     // On the magnet's axis, at the bottom of the table's z range. Far enough
     // out for the dipole limit to be close, still inside the interpolated
-    // domain. Local frame: origin at the bottom face, +z along polarization.
+    // domain. Local frame: origin at the magnet's geometric centre, +z along
+    // polarization.
     const Vec3 v_l(0.0f, 0.0f, BICUBIC_ORIGIN.y());
     assert_within_bicubic_domain(v_l, 0.0f, "dipole_matches_table v_l");
 
@@ -398,9 +398,9 @@ void test_dipole_matches_the_magnet_the_table_models(void) {
 
     // Polarization is along local -z, so the moment vector is -|m| * z_hat.
     const Vec3 m(0.0f, 0.0f, -magnet.moment_mT_mm3);
-    // Displacement from the DIPOLE (at the centre) to the field point, which
-    // is what makes MAGNET_HALF_HEIGHT_MM load-bearing here.
-    const Vec3 r = v_l - Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM);
+    // Displacement from the dipole to the field point. The dipole sits at the
+    // origin, same as the table, so this is just v_l itself.
+    const Vec3 r = v_l;
 
     Mat3 J_dipole;
     const Vec3 B_dipole = dipole_field(m, r, J_dipole);
@@ -443,11 +443,15 @@ void test_cross_magnet_terms_are_actually_present(void) {
 
     // Across the knob's heave range: the share grows with lift, because the
     // paired magnet's field falls off fast while the cross magnets, a fixed
-    // triangle side away, barely change.
+    // triangle side away, barely change. standoff is the bottom face's
+    // height above the sensor, matching Positions::magnet_rest_distance_sensor's
+    // convention -- magnet_half_height_mm below converts that to the origin
+    // (centre) height MagnetModel::place actually works in.
     const float standoffs[] = { 4.3f, 6.0f, 8.0f };
 
     for (float standoff : standoffs) {
-        const Vec3 t(0.0f, 0.0f, Positions::magnet_z_pos_from_pivot + standoff);
+        const Vec3 t(0.0f, 0.0f,
+                      Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + standoff);
 
         Vector9f B_all;
         Matrix9x6f J_unused;
@@ -610,14 +614,17 @@ void test_forward_model_jacobian_grid(void) {
     float t_y_steps[] = {  -1.5f, 0.0f, 0.5f, 1.5f };
     // t is the knob pivot's world position, not the sensor-to-magnet standoff
     // directly -- MagnetModel::place offsets by Positions::magnet_z_pos_from_pivot
-    // (15mm) before applying it, so each entry here is that pivot height plus
-    // the standoff it represents (rest is 6.0mm), matching the derivation
-    // test_cross_magnet_terms_are_actually_present uses below.
+    // (the pivot-to-origin distance) before applying it, and the origin itself
+    // sits magnet_half_height_mm above the magnet's bottom face, so each entry
+    // here is pivot height + that half-height + the bottom-face standoff it
+    // represents (rest is 6.0mm, i.e. Positions::magnet_rest_distance_sensor),
+    // matching the derivation test_cross_magnet_terms_are_actually_present
+    // uses below.
     float t_z_steps[] = {
-        Positions::magnet_z_pos_from_pivot + 8.0f,
-        Positions::magnet_z_pos_from_pivot + 6.0f,
-        Positions::magnet_z_pos_from_pivot + 4.3f,
-        Positions::magnet_z_pos_from_pivot + 2.5f,
+        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 8.0f,
+        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 6.0f,
+        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 4.3f,
+        Positions::magnet_z_pos_from_pivot + Positions::magnet_half_height_mm + 2.5f,
     };
 
     // Rotations (axis-angle vectors)

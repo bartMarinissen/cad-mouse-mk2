@@ -39,25 +39,25 @@ MAGNET_VOLUME_MM3 = np.pi * (MAGNET_DIAMETER_MM / 2.0) ** 2 * MAGNET_HEIGHT_MM
 # -- a separate, unrelated constant.
 BICUBIC_FIELD_REFERENCE_MT = 1000.0
 
-# --- Interpolation grid: (r, z) in the magnet's local frame, bottom face at
-# the origin, +z along the polarization axis. Matches
+# --- Interpolation grid: (r, z) in the magnet's local frame, its geometric
+# centre at the origin, +z along the polarization axis. Matches
 # firmware/include/magnet_model/magnet_model_table.h's BICUBIC_ORIGIN/FAR. ---
 NR, NZ = 51, 91
 R_MIN, R_MAX = 0.0, 10.0
-Z_MIN, Z_MAX = -20.0, -0.5
+Z_MIN, Z_MAX = -23.0, -3.5
 
 HEADER_RELATIVE_PATH = "magnet_model/magnet_model_table.h"
 
 
 def build_magnet(polarization_mt: float = BICUBIC_FIELD_REFERENCE_MT) -> magpy.magnet.Cylinder:
     """The magnet the table is generated from, at the canonical local pose:
-    bottom face at the origin, polarized along -z (see local_field.py's
-    module docstring for why the origin is the bottom face, not the center).
+    its geometric centre at the origin, polarized along -z. magpylib positions
+    cylinders by their centre, so this is the natural placement -- no offset.
     """
     return magpy.magnet.Cylinder(
         polarization=(0, 0, -polarization_mt),
         dimension=(MAGNET_DIAMETER_MM, MAGNET_HEIGHT_MM),
-        position=(0, 0, MAGNET_HALF_HEIGHT_MM),  # center at half-height -> bottom face at z=0
+        position=(0, 0, 0),
     )
 
 
@@ -97,7 +97,6 @@ def _hex_array_2d(arr: NDArray[np.float64]) -> str:
 
 
 def format_header(table: FieldTable, reference_mt: float) -> str:
-    half_height = MAGNET_HALF_HEIGHT_MM
     # Polarization x volume. Tied to reference_mt for the same reason the table
     # is: MagnetModel scales both by magnet_strength_mT / reference, so if the
     # reference moved and this did not, the near and far models would silently
@@ -131,12 +130,11 @@ constexpr float BICUBIC_FIELD_REFERENCE_MT = {reference_mt}f;
 
 // --- Far-field (dipole) constants, for the cross-magnet terms ---
 //
-// The table above covers the near model for each magnet.
-// At larger distances we can fall back to a dipole model instead. The
-// frame's origin is the magnet's BOTTOM FACE (see local_field.py), but the
-// dipole belongs at the geometric centre -- placing it at the origin instead
-// is not a small error, it is tens of percent at cross-magnet range.
-constexpr float MAGNET_HALF_HEIGHT_MM = {half_height}f;
+// The table above covers the near model for each magnet. At larger
+// distances we fall back to a dipole model instead. The dipole belongs at
+// the magnet's geometric centre, which is exactly what this frame's origin
+// already is -- so the near (table) and far (dipole) models share one
+// frame with no separate offset between them.
 
 // Dipole moment magnitude at BICUBIC_FIELD_REFERENCE_MT, in mT*mm^3, so it
 // scales by exactly the same ratio the table does and the two models can
