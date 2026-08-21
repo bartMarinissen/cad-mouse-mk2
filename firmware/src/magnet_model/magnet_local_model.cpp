@@ -4,12 +4,12 @@
 
 
 MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
-                         const Mat3 &magnet_rotation, float magnet_strength_mT)
-    : magnet_pos_knob(m_local), magnet_rotation(magnet_rotation),
+                         const Vec3 &magnet_axis, float magnet_strength_mT)
+    : magnet_pos_knob(m_local), magnet_axis(magnet_axis),
       magnet_strength_mT(magnet_strength_mT),
       // The centre is half a magnet along the magnet's OWN axis, not the
       // knob's z, so the tilt has to be applied to the offset before adding.
-      magnet_centre_knob(m_local + magnet_rotation * Vec3(0.0f, 0.0f, MAGNET_HALF_HEIGHT_MM)),
+      magnet_centre_knob(m_local + MAGNET_HALF_HEIGHT_MM * magnet_axis),
       moment_mT_mm3((magnet_strength_mT / BICUBIC_FIELD_REFERENCE_MT)
                     * DIPOLE_MOMENT_AT_REFERENCE_MT_MM3),
       field_model_(field_model),
@@ -17,15 +17,15 @@ MagnetModel::MagnetModel(const BicubicField& field_model, const Vec3& m_local,
 
 
 MagnetPlacement __not_in_flash_func(MagnetModel::place)(const Vec3& t, const Mat3& R) const {
-    Mat3 R_total = R * magnet_rotation;
+    Vec3 axis_world = R * magnet_axis;
     Vec3 centre_world = t + R * magnet_centre_knob;
     Vec3 origin_world = t + R * magnet_pos_knob;
     // Polarization runs along the magnet's local -z, so the moment vector is
-    // -|m| times its own axis -- which, mapped to world, is R_total's third
-    // column. A column read and a scale: the entire cost of carrying this
-    // magnet's orientation into the far-field model.
-    Vec3 moment_world = -moment_mT_mm3 * R_total.Column(2);
-    return MagnetPlacement{R_total, centre_world, origin_world, moment_world, *this};
+    // -|m| times its own axis in world coordinates. A vector rotation and a
+    // scale: the entire cost of carrying this magnet's orientation into the
+    // far-field model.
+    Vec3 moment_world = -moment_mT_mm3 * axis_world;
+    return MagnetPlacement{axis_world, centre_world, origin_world, moment_world, *this};
 }
 
 
@@ -92,25 +92,57 @@ Vec3 MagnetPlacement::far_approx_world(const Vec3& p_world, Mat3& J_world) const
 }
 
 Vec3 MagnetPlacement::near_approx_world(const Vec3& p_world, Mat3& J_world) const{
-    // The near approximation needs to be computed in the magnet local frame.
-    // So we frame swap to the magnet local frame, compute, and frame swap back.
+    // Same trick as the far-field/dipole branch: the table is axisymmetric,
+    // so project the query point against the magnet's own axis to get z and
+    // r directly in world coordinates, instead of rotating into a local
+    // frame and back. See design documentation/Math.md 3.3-3.4 and 4.D.
+    const Vec3 d = p_world - origin_world;
+    const float z = dot(d, axis_world);
+    const Vec3 d_perp = d - z * axis_world;
+    const float r = sqrtf(dot(d_perp, d_perp));
 
-    // --- To the local frame ----
-    // Rotation from the world frame to the local frame
-    const Mat3 R_total_T = R_total.transpose();
-    // Measurement position in the local frame
-    const Vec3 p_local = R_total_T * (p_world - origin_world);
+    Mat2 J_cylindrical;
+    const Vec2 B_cylindrical = magnet.evaluate_cylindrical(r, z, J_cylindrical);
 
-    // --- Evaluate in local frame ---
-    Mat3 J_local;
-    const Vec3 B_local = magnet.evaluate(p_local, J_local);
+    const float Br = B_cylindrical(0);
+    const float Bz = B_cylindrical(1);
+    const float dBr_dr = J_cylindrical(0, 0);
+    const float dBz_dr = J_cylindrical(1, 0);
+    const float dBr_dz = J_cylindrical(0, 1);
+    const float dBz_dz = J_cylindrical(1, 1);
 
-    // --- Back to world frame ---
-    const Vec3 B_world = R_total * B_local;
-    // Since this is a matrix we need matrix conjugation
-    J_world = R_total * J_local * R_total_T;
+    const Mat3 axis_outer = outer(axis_world, axis_world);
+    const float EPSILON = 1e-6f;
 
-    return B_world;
+    if (r < EPSILON) {
+        // r_hat is undefined on-axis. Linearize using d_perp directly -- the
+        // same limit MagnetModel::evaluate's own r<EPSILON branch uses
+        // (Br ~ dBr_dr * r near r=0, since Br(0,z)=0 by axial symmetry) --
+        // under which the transverse Jacobian block is isotropic.
+        J_world = dBr_dr * (identity3() - axis_outer) + dBz_dz * axis_outer;
+        return Bz * axis_world + dBr_dr * d_perp;
+    }
+
+    const float r_reciprocal = 1.0f / r;
+    const Vec3 r_hat = r_reciprocal * d_perp;
+    const float Br_over_r = Br * r_reciprocal;
+
+    // Same object as the old R_total * J_local * R_total^T conjugation --
+    // see Math.md 4.D. The arbitrary tangential direction cancels out, so it
+    // never needs to be constructed.
+    J_world = outer(axis_world, dBz_dr * r_hat + dBz_dz * axis_world)
+            + outer(r_hat, dBr_dr * r_hat + dBr_dz * axis_world)
+            + Br_over_r * (identity3() - axis_outer - outer(r_hat, r_hat));
+
+    return Bz * axis_world + Br * r_hat;
+}
+
+Vec2 __not_in_flash_func(MagnetModel::evaluate_cylindrical)(float r, float z, Mat2& J_cylindrical) const {
+    // Note the jacobian is returned as two gradient vectors d_dr, d_dz
+    Vec2 B_cylindrical = field_model_.evaluate(r, z, J_cylindrical);
+    J_cylindrical = strength_ratio_ * J_cylindrical;
+    B_cylindrical = strength_ratio_ * B_cylindrical;
+    return B_cylindrical;
 }
 
 /**
@@ -126,14 +158,8 @@ Vec3 __not_in_flash_func(MagnetModel::evaluate)(const Vec3& p_local, Mat3& J_loc
     // This also solves the r < EPSILON singularity.
     float r = sqrtf(p_local(0)*p_local(0) + p_local(1)*p_local(1));
 
-    // Get the interpolated field and jacobian.
-    // Note the jacobian is returned as two gradient vectors d_dr, d_dz
     Mat2 J_cylindrical;
-    Vec2 B_cylindrical = field_model_.evaluate(r, p_local.z(), J_cylindrical);
-
-    J_cylindrical = strength_ratio_ * J_cylindrical;
-    B_cylindrical = strength_ratio_ * B_cylindrical;
-
+    Vec2 B_cylindrical = evaluate_cylindrical(r, p_local.z(), J_cylindrical);
 
     // Decompose the measured field
     // Because we need to reconsitute the magnetic field in the x and y direction based on Br

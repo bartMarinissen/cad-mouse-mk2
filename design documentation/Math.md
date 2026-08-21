@@ -20,17 +20,16 @@ $\{1,2,3\}$. Every sensor sees every magnet, so most quantities below carry both
 |---|---|
 | $\mathbf{s}_i$ | sensor $i$ position, world/PCB frame (constant) |
 | $\mathbf{m}_j$ | magnet $j$ resting position (bottom face), knob frame (constant) |
-| $R_{m,j}$ | magnet $j$'s tilt inside the knob (constant) |
+| $\hat{\mathbf{a}}_j$ | magnet $j$'s polarization axis, knob frame (constant, unit vector) |
 | $G_i$ | sensor $i$'s gain/distortion matrix (constant) |
 | $\mathbf{t}$ | knob translation, world frame (**solved for**) |
 | $R$ | knob rotation matrix (**solved for**) |
 | $\boldsymbol{\rho}=(\mathbf t,\boldsymbol\omega)$ | 6DOF pose coordinates: translation + rotation-update vector |
 | $R(\boldsymbol\omega)=\exp([\boldsymbol\omega]_\times)$ | rotation as a function of $\boldsymbol\omega\in\mathfrak{so}(3)$ (Rodrigues) |
 | $F,\,f_i$ | the forward model, overall and per-sensor (§2) |
-| $B_j$ | the local magnet-field function for magnet $j$ (§3.3–3.4) |
-| $R_{total,j} = R\,R_{m,j}$ | combined knob + magnet rotation |
-| $\mathbf{v}_{l,ij}$ | sensor $i$'s position relative to magnet $j$, in magnet $j$'s local frame |
-| $\mathbf{B}_{l,ij}$ | field at sensor $i$ from magnet $j$, in magnet $j$'s local frame |
+| $B_j$ | the knob-frame magnet-field function for magnet $j$ (§3.2–3.4) |
+| $\hat{\mathbf{a}}_{w,j} = R\,\hat{\mathbf{a}}_j$ | magnet $j$'s polarization axis, world frame |
+| $\mathbf{u}_{ij}$ | sensor $i$'s position relative to magnet $j$, in the **knob** frame (not further rotated into a magnet-local frame — see §3.2) |
 | $\mathbf{B}_{w,ij}$ | field at sensor $i$ from magnet $j$, world frame (pre-gain) |
 | $\mathbf{B}_{w,i}=\sum_j \mathbf{B}_{w,ij}$ | total field at sensor $i$, world frame (pre-gain) |
 | $\hat{\mathbf{B}}_i$ | predicted sensor reading |
@@ -39,8 +38,9 @@ $\{1,2,3\}$. Every sensor sees every magnet, so most quantities below carry both
 | $\mathbf{c}_j$ | magnet $j$'s geometric centre, world frame (§3.6) |
 
 Only $\mathbf{t}$ and $R$ are optimization variables. Everything else — $\mathbf{s}_i$,
-$\mathbf{m}_j$, $R_{m,j}$, $G_i$ — is a frozen calibration constant, and so contributes
-**zero** to every derivative below. That fact is used repeatedly to prune terms.
+$\mathbf{m}_j$, $\hat{\mathbf{a}}_j$, $G_i$ — is a frozen calibration constant, and so
+contributes **zero** to every derivative below. That fact is used repeatedly to prune
+terms.
 
 ---
 
@@ -58,10 +58,14 @@ Each $f_i:\mathbb{R}^6\to\mathbb{R}^3$ is the prediction for sensor $i$ alone. A
 sees **all three** magnets, and magnetic fields superpose, so it is a sum over $j$ of
 the per-magnet composition of every stage in §3:
 
-$$f_i(\boldsymbol\rho) = G_i \sum_{j} R(\boldsymbol\omega)R_{m,j}\; B_j\!\Big(R_{m,j}^T\big(R(\boldsymbol\omega)^T(\mathbf{s}_i-\mathbf{t})-\mathbf{m}_j\big)\Big)$$
+$$f_i(\boldsymbol\rho) = G_i \sum_{j} R(\boldsymbol\omega)\; B_j\!\Big(R(\boldsymbol\omega)^T(\mathbf{s}_i-\mathbf{t})-\mathbf{m}_j\Big)$$
 
-where $B_j:\mathbb{R}^3\to\mathbb{R}^3$ — defined in §3.3–3.4 — maps a local query point
-to the field magnet $j$ produces there.
+where $B_j:\mathbb{R}^3\to\mathbb{R}^3$ — defined in §3.2–3.4 — maps a knob-frame query
+point to the field magnet $j$ produces there. $B_j$ has the magnet's own tilt
+$\hat{\mathbf{a}}_j$ baked in as a fixed parameter rather than as a rotation applied to
+the input: unlike the old rotation-matrix representation, there is no longer a second,
+magnet-local frame to rotate into. This is why only $R$ — the knob's own rotation, the
+actual solved-for quantity — appears above, not a magnet-specific composite.
 
 **Where the sum sits matters.** Superposition is a property of the *field*, so the sum
 has to be taken there, at $\mathbf{B}_w$, and not somewhere more convenient further out.
@@ -77,7 +81,7 @@ a point dipole (§3.6). Which applies is fixed by the geometry, not chosen per
 evaluation — see §3.6.
 
 Note that $\boldsymbol\omega$ appears **twice**:
-once rotating into the local frame ($R^T$, inside $B_j$'s argument) and once rotating
+once rotating into the knob frame ($R^T$, inside $B_j$'s argument) and once rotating
 back out to world frame ($R$, outside). This is the reason the Jacobian derivation in §4 needs
 the product rule rather than a single pass of the chain rule — both occurrences must be
 differentiated and their contributions summed.
@@ -99,59 +103,67 @@ freshly at every iteration rather than known once in closed form.
 This section unpacks $f_i$ from §2 into the sequence of physical steps that compute it,
 one sensor/magnet pair at a time.
 
-### 3.1 Combined rotation
+### 3.1 The magnet's axis in world coordinates
 
-The knob's rotation $R$ (the solved-for state) and the magnet's fixed tilt $R_{m,j}$
-compose into a single rotation from the magnet-local frame to world frame:
+Each magnet is a solid of revolution about its own polarization axis, so spin about
+that axis is physically unobservable — it is not represented at all. A magnet's whole
+orientation is carried as one unit vector, $\hat{\mathbf{a}}_j$, fixed in the knob
+frame. The one place it needs to be in world coordinates is the far-field branch
+(§3.6):
 
-$$R_{total,j} = R \, R_{m,j}$$
+$$\hat{\mathbf{a}}_{w,j} = R\,\hat{\mathbf{a}}_j$$
 
-### 3.2 Local vector geometry
+### 3.2 Knob-frame vector geometry
 
-The vector from a magnet to its sensor is built up frame by frame, not in one jump: first
-the sensor position is expressed in the knob's frame, then the magnet's own resting
-offset is subtracted *in that frame*, and only then is the result rotated into the
-magnet's own (possibly tilted) local frame:
+The vector from a magnet to its sensor only needs to reach the *knob* frame, not a
+further magnet-local one: the sensor position is expressed in the knob's frame, then
+the magnet's own resting offset is subtracted in that same frame.
 
-$$\mathbf{v}_{l,ij} = R_{m,j}^T\Big(R^T(\mathbf{s}_i - \mathbf{t}) - \mathbf{m}_j\Big) = R_{total,j}^T(\mathbf{s}_i - \mathbf{t}) \;-\; R_{m,j}^T \mathbf{m}_j$$
+$$\mathbf{u}_{ij} = R^T(\mathbf{s}_i - \mathbf{t}) - \mathbf{m}_j$$
 
-The order matters for getting the right physical answer: $\mathbf{m}_j$ is subtracted
-before the magnet-tilt rotation is applied, so the correct constant offset term is
-$R_{m,j}^T\mathbf{m}_j$, not a bare $\mathbf{m}_j$.
+There is no second rotation here. Compare the old two-rotation form
+($R_{m,j}^T\big(R^T(\mathbf s_i-\mathbf t)-\mathbf m_j\big)$, rotating first into the
+knob frame and then again into a magnet-local frame) — dropping the second rotation is
+exactly what removes the "rotate in, evaluate, rotate out" cost from the near-field
+branch, the same way §3.6's dipole always avoided it.
 
 ### 3.3 Cylindrical query and interpolation
 
-The magnets are axially polarized, so the field they produce is symmetric around their
-own local axis and depends only on radius and height relative to that axis:
+The magnets are axially polarized, so the field they produce is symmetric around
+$\hat{\mathbf{a}}_j$ and depends only on the position relative to that axis. Project
+$\mathbf{u}_{ij}$ onto it to get height and radius:
 
-$$r = \sqrt{x_l^2+y_l^2}, \qquad z = z_l, \qquad \text{where } \mathbf{v}_{l,ij}=(x_l,y_l,z_l)$$
+$$z = \hat{\mathbf{a}}_j\cdot\mathbf{u}_{ij}, \qquad \mathbf{u}_{\perp} = \mathbf{u}_{ij} - z\,\hat{\mathbf{a}}_j, \qquad r = |\mathbf{u}_{\perp}|$$
 
 A precomputed, $C^1$-continuous bicubic interpolation table is queried at $(r,z)$,
 returning the two cylindrical field components $B_r, B_z$ and their four spatial
 partials $\partial B_r/\partial r$, $\partial B_z/\partial r$, $\partial B_r/\partial z$,
 $\partial B_z/\partial z$.
 
-### 3.4 Local field reconstruction
+### 3.4 Field reconstruction
 
-The scalar cylindrical field is rotated back into the 3D local Cartesian frame using
-directional cosines $c_x = x_l/r$, $c_y = y_l/r$. Together, §3.3–3.4 constitute the
-function $B_j$ from §2:
+The scalar cylindrical field is reassembled directly along $\hat{\mathbf{a}}_j$ and the
+radial direction $\hat{\mathbf{u}}_\perp = \mathbf{u}_\perp/r$ — there is no arbitrary
+in-plane reference direction to construct, because the field has no component
+perpendicular to both (no azimuthal component, by the same axial symmetry §3.3 uses).
+Together, §3.2–3.4 constitute the function $B_j$ from §2:
 
-$$\mathbf{B}_{l,ij} = B_j(\mathbf{v}_{l,ij}) = \begin{bmatrix} B_r c_x \\ B_r c_y \\ B_z \end{bmatrix}$$
+$$\mathbf{B}_{ij} = B_j(\mathbf{u}_{ij}) = B_z\,\hat{\mathbf{a}}_j + B_r\,\hat{\mathbf{u}}_\perp$$
 
 ### 3.5 Back to world frame, then gain
 
-The local field is rotated into the world frame, summed over magnets, then passed
+The knob-frame field is rotated into the world frame by $R$ — the knob's own rotation,
+and the *only* rotation this branch ever applies — summed over magnets, then passed
 through the sensor's own gain/distortion matrix to give the predicted sensor reading:
 
-$$\mathbf{B}_{w,ij} = R_{total,j}\, \mathbf{B}_{l,ij}, \qquad \mathbf{B}_{w,i} = \sum_j \mathbf{B}_{w,ij}, \qquad \hat{\mathbf{B}}_i = f_i(\boldsymbol\rho) = G_i\, \mathbf{B}_{w,i}$$
+$$\mathbf{B}_{w,ij} = R\, \mathbf{B}_{ij}, \qquad \mathbf{B}_{w,i} = \sum_j \mathbf{B}_{w,ij}, \qquad \hat{\mathbf{B}}_i = f_i(\boldsymbol\rho) = G_i\, \mathbf{B}_{w,i}$$
 
 (An additive sensor baseline/offset, if calibrated, is handled upstream as a
 correction to the raw measurement rather than as a term in this model.)
 
 ### 3.6 The far-field branch — magnets a sensor does not sit under
 
-§3.3–3.4 is the model for the magnet a sensor is paired with. The other two sit a
+§3.2–3.4 is the model for the magnet a sensor is paired with. The other two sit a
 knob-triangle side away (28.58mm, `Positions::triangle_sidelength_mm`), far outside the
 interpolation grid's domain, and are modelled as **ideal point dipoles**:
 
@@ -167,17 +179,17 @@ what the firmware's dipole is measured against.
 
 Two details are load-bearing rather than incidental:
 
-- **The dipole sits at the magnet's geometric centre**, not at $\mathbf{m}_j$. The local
-  frame's origin is the magnet's *bottom face* (§3.2), so the centre is half a magnet
-  higher **along the magnet's own axis**: $\mathbf{c}_j = \mathbf{t} + R\,(\mathbf{m}_j + R_{m,j}\,h\hat{\mathbf{z}})$.
-  Placing it at the bottom face instead is a ~50% error at cross-magnet range, not a
-  refinement.
+- **The dipole sits at the magnet's geometric centre**, not at $\mathbf{m}_j$. The knob
+  frame's origin for this offset is the magnet's *bottom face* (§3.2), so the centre is
+  half a magnet higher **along the magnet's own axis**:
+  $\mathbf{c}_j = \mathbf{t} + R\,(\mathbf{m}_j + h\,\hat{\mathbf{a}}_j)$. Placing it at
+  the bottom face instead is a ~50% error at cross-magnet range, not a refinement.
 - **The moment is the same magnet the table describes.** $|\boldsymbol\mu_j|$ is the
   reference moment (polarization × volume, in mT·mm³) scaled by the same per-magnet
   strength ratio that scales the interpolated field, so the near and far models cannot
-  describe magnets of different strength. Polarization runs along the magnet's local
-  $-\hat{\mathbf{z}}$, so in world coordinates $\boldsymbol\mu_j = -|\boldsymbol\mu_j|\,R_{total,j}\,\hat{\mathbf{z}}$
-  — the third column of $R_{total,j}$, scaled.
+  describe magnets of different strength. Polarization runs along the magnet's own
+  $-\hat{\mathbf{a}}_j$, so in world coordinates
+  $\boldsymbol\mu_j = -|\boldsymbol\mu_j|\,\hat{\mathbf{a}}_{w,j} = -|\boldsymbol\mu_j|\,R\,\hat{\mathbf{a}}_j$.
 
 **Which branch applies is fixed by geometry, not measured per evaluation.** Over the
 knob's full travel the paired magnet never exceeds ~12mm from its own centre and the
@@ -185,12 +197,14 @@ cross magnets never come closer than ~25mm, so the two regimes cannot overlap an
 is nothing to test at runtime. This is why no blending between the models is needed:
 the gap between them is never visited.
 
-Unlike §3.3–3.4 this branch is **frame-agnostic**. A magnet's orientation reaches the
-formula entirely through $\boldsymbol\mu$, a single vector, so supplying $\boldsymbol\mu_j$
-and $\mathbf{r} = \mathbf{s}_i - \mathbf{c}_j$ in world coordinates yields the world
-field and (§4.E) the world gradient directly — no rotation into the magnet's frame and
-no rotation back. The interpolated branch has no such freedom: it is tabulated in
-$(r,z)$ and must be handed magnet-local coordinates.
+This branch has always been **frame-agnostic**: a magnet's orientation reaches the
+formula entirely through $\boldsymbol\mu$, a single vector, so supplying
+$\boldsymbol\mu_j$ and $\mathbf{r} = \mathbf{s}_i - \mathbf{c}_j$ in world coordinates
+yields the world field and (§4.E) the world gradient directly. §3.2–3.5 now shares that
+property: both branches reach a query point through exactly one rotation ($R$), not two
+— the interpolated branch is tabulated in $(r,z)$, but $(r,z)$ themselves are obtained
+by projecting against $\hat{\mathbf{a}}_j$ rather than by a second rotation into a
+magnet-local frame.
 
 ---
 
@@ -226,27 +240,31 @@ $$\Delta\hat{\mathbf{B}}_i = G_i\, \Delta\mathbf{B}_{w,i}$$
 §4.B–4.D take **one** (sensor, magnet) pair at a time, through the interpolated branch.
 §4.E does the same for the far-field branch, and §4.F sums the results over $j$.
 
-From $\mathbf{B}_{w,ij}=R_{total,j}\mathbf{B}_{l,ij}$, the product rule gives:
+From $\mathbf{B}_{w,ij}=R\,\mathbf{B}_{ij}$, the product rule gives:
 
-$$\Delta\mathbf{B}_{w,ij} = (\Delta R_{total,j})\,\mathbf{B}_{l,ij} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
+$$\Delta\mathbf{B}_{w,ij} = (\Delta R)\,\mathbf{B}_{ij} + R\,\Delta\mathbf{B}_{ij}$$
 
-$R_{m,j}$ is constant, so $\Delta R_{total,j} = (\Delta R)R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R\, R_{m,j} = [\Delta\boldsymbol{\omega}]_\times R_{total,j}$ (Identity 2). Substituting, then applying Identity 1 with $\mathbf{a}=\Delta\boldsymbol{\omega}$, $\mathbf{b}=\mathbf{B}_{w,ij}=R_{total,j}\mathbf{B}_{l,ij}$:
+By Identity 2, $(\Delta R)\mathbf{B}_{ij} = [\Delta\boldsymbol{\omega}]_\times R\,\mathbf{B}_{ij} = [\Delta\boldsymbol{\omega}]_\times \mathbf{B}_{w,ij}$. Applying Identity 1 with $\mathbf{a}=\Delta\boldsymbol{\omega}$, $\mathbf{b}=\mathbf{B}_{w,ij}$:
 
 $$[\Delta\boldsymbol{\omega}]_\times \mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times \Delta\boldsymbol{\omega}$$
 
-$$\Rightarrow \quad \Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times \Delta\boldsymbol{\omega} + R_{total,j}\,\Delta\mathbf{B}_{l,ij}$$
+$$\Rightarrow \quad \Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times \Delta\boldsymbol{\omega} + R\,\Delta\mathbf{B}_{ij}$$
 
-### 4.C Inner layer — local vector variation
+(This is the same derivation the old two-rotation form used, with $R_{total,j}$ replaced
+by the bare $R$ — the magnet's own tilt no longer appears here at all, having been
+absorbed into $B_j$ itself in §3.2–3.4.)
 
-The local field's variation is driven by the local query vector, via the analytic
-Jacobian of §4.D:
+### 4.C Inner layer — knob-frame vector variation
 
-$$\Delta\mathbf{B}_{l,ij} = J_{local}\,\Delta\mathbf{v}_{l,ij}$$
+The knob-frame field's variation is driven by the knob-frame query vector, via the
+analytic Jacobian of §4.D:
 
-From $\mathbf{v}_{l,ij} = R_{total,j}^T(\mathbf{s}_i-\mathbf{t}) - R_{m,j}^T\mathbf{m}_j$, and since the
-$R_{m,j}^T\mathbf{m}_j$ term is entirely constant, only the first term varies:
+$$\Delta\mathbf{B}_{ij} = J_{axis}\,\Delta\mathbf{u}_{ij}$$
 
-$$\Delta\mathbf{v}_{l,ij} = \Delta(R_{total,j}^T)(\mathbf{s}_i-\mathbf{t}) + R_{total,j}^T(-\Delta\mathbf{t})$$
+From $\mathbf{u}_{ij} = R^T(\mathbf{s}_i-\mathbf{t}) - \mathbf{m}_j$, and since $\mathbf{m}_j$
+is entirely constant, only the first term varies:
+
+$$\Delta\mathbf{u}_{ij} = \Delta(R^T)(\mathbf{s}_i-\mathbf{t}) + R^T(-\Delta\mathbf{t})$$
 
 Let $\mathbf{v} = \mathbf{s}_i - \mathbf{t}$. Note this depends on the sensor only, **not**
 on the magnet — all three magnets ride the same rigid knob — which is what §4.F later
@@ -254,71 +272,69 @@ exploits to pull the rotation block out of the sum over $j$.
 Using Identity 2, then Identity 1 with $\mathbf{a}=\Delta\boldsymbol{\omega}$,
 $\mathbf{b}=\mathbf{v}$:
 
-$$\Delta(R_{total,j}^T)\,\mathbf{v} = -R_{total,j}^T[\Delta\boldsymbol{\omega}]_\times \mathbf{v} = R_{total,j}^T[\mathbf{v}]_\times \Delta\boldsymbol{\omega}$$
+$$\Delta(R^T)\,\mathbf{v} = -R^T[\Delta\boldsymbol{\omega}]_\times \mathbf{v} = R^T[\mathbf{v}]_\times \Delta\boldsymbol{\omega}$$
 
-$$\Rightarrow \quad \Delta\mathbf{v}_{l,ij} = R_{total,j}^T[\mathbf{v}]_\times\,\Delta\boldsymbol{\omega} \;-\; R_{total,j}^T\,\Delta\mathbf{t}$$
+$$\Rightarrow \quad \Delta\mathbf{u}_{ij} = R^T[\mathbf{v}]_\times\,\Delta\boldsymbol{\omega} \;-\; R^T\,\Delta\mathbf{t}$$
 
-*(Remark: had we instead used the simpler-looking but incomplete $\mathbf{v}_{l,ij}=R_{total,j}^T(\mathbf{s}_i-\mathbf{t})-\mathbf{m}_j$ from §3.2, the derivative would come out identical — differentiating any constant term, whatever its exact form, always contributes zero. The correction in §3.2 matters for the field value, not for the Jacobian.)*
-
-### 4.D $J_{local}$ — the cylindrical-to-Cartesian chain rule
+### 4.D $J_{axis}$ — the axis-projection chain rule
 
 This is the one link in the chain not handled by rigid-body identities — it's a genuine
-multivariable chain rule through $r=\sqrt{x_l^2+y_l^2}$.
+multivariable chain rule, this time through $r$ and $z$ as obtained by projecting onto
+$\hat{\mathbf{a}}_j$ (§3.3) rather than through a directional cosine in a fixed local
+frame.
 
-We need $\partial(\mathbf{B}_l)_a/\partial x_j$ for $a,j \in \{x_l,y_l,z_l\}$, with
-$\mathbf{B}_l = (B_r c_x,\; B_r c_y,\; B_z)$, $c_x=x_l/r$, $c_y=y_l/r$, and $B_r,B_z$
-functions of $(r,z_l)$ only. First, the geometric partials of $r$ itself:
+We need $\partial\mathbf{B}/\partial\mathbf{u}$ for
+$\mathbf{B} = B_z\hat{\mathbf{a}}_j + B_r\hat{\mathbf{u}}_\perp$, with
+$z=\hat{\mathbf{a}}_j\cdot\mathbf{u}$, $\mathbf{u}_\perp=\mathbf{u}-z\hat{\mathbf{a}}_j$,
+$r=|\mathbf{u}_\perp|$, $\hat{\mathbf{u}}_\perp=\mathbf{u}_\perp/r$, and $B_r,B_z$
+functions of $(r,z)$ only. Both $z$ and $r$ are linear-then-norm functions of
+$\mathbf{u}$, so their gradients are the constant/unit vectors one would expect:
 
-$$\frac{\partial r}{\partial x_l} = \frac{x_l}{r} = c_x, \qquad \frac{\partial r}{\partial y_l}=c_y, \qquad \frac{\partial r}{\partial z_l}=0$$
+$$\frac{\partial z}{\partial \mathbf{u}} = \hat{\mathbf{a}}_j^T, \qquad \frac{\partial r}{\partial \mathbf{u}} = \hat{\mathbf{u}}_\perp^T$$
 
-**Row 1** ($B_x = B_r(r,z_l)\cdot x_l/r$), by the product rule:
+($\partial|\mathbf x|/\partial\mathbf x=\hat{\mathbf x}^T$ applied to $\mathbf u_\perp$;
+its own dependence on $\mathbf u$ goes through the constant projector
+$P_\perp = I-\hat{\mathbf a}_j\hat{\mathbf a}_j^T$, but $\hat{\mathbf u}_\perp^T P_\perp=\hat{\mathbf u}_\perp^T$
+already, so $P_\perp$ drops out of this particular gradient.)
 
-$$\frac{\partial B_x}{\partial x_l} = \underbrace{\frac{\partial B_r}{\partial r}c_x}_{\text{chain rule thru } r}\cdot c_x \;+\; B_r\,\frac{\partial}{\partial x_l}\!\left(\frac{x_l}{r}\right)$$
+$\hat{\mathbf{a}}_j$ is constant, so the $B_z\hat{\mathbf{a}}_j$ term is a plain chain
+rule through $r,z$:
 
-The second term needs the quotient rule: $\partial(x_l/r)/\partial x_l = (r - x_l c_x)/r^2$.
-Using $x_l c_x = x_l^2/r$ and $r^2=x_l^2+y_l^2$:
+$$\frac{\partial(B_z\hat{\mathbf{a}}_j)}{\partial\mathbf{u}} = \hat{\mathbf{a}}_j\left(\frac{\partial B_z}{\partial r}\hat{\mathbf{u}}_\perp^T + \frac{\partial B_z}{\partial z}\hat{\mathbf{a}}_j^T\right)$$
 
-$$r - x_l c_x = r - \frac{x_l^2}{r} = \frac{r^2-x_l^2}{r} = \frac{y_l^2}{r} \quad\Rightarrow\quad \frac{\partial}{\partial x_l}\!\left(\frac{x_l}{r}\right) = \frac{y_l^2}{r^3} = \frac{c_y^2}{r}$$
+$B_r\hat{\mathbf{u}}_\perp$ needs the product rule too, because $\hat{\mathbf u}_\perp$
+itself varies with $\mathbf u$ — the one genuinely new piece, the quotient-rule
+derivative of $\mathbf u_\perp/r$:
 
-So:
+$$\frac{\partial\hat{\mathbf{u}}_\perp}{\partial\mathbf{u}} = \frac{P_\perp - \hat{\mathbf{u}}_\perp\hat{\mathbf{u}}_\perp^T}{r}$$
 
-$$\frac{\partial B_x}{\partial x_l} = \frac{\partial B_r}{\partial r}c_x^2 + \frac{B_r}{r}c_y^2$$
+(divide the numerator's $P_\perp$ by $r$, then subtract $\mathbf u_\perp(\partial r/\partial\mathbf u)/r^2=\hat{\mathbf u}_\perp\hat{\mathbf u}_\perp^T/r$
+to correct for the denominator's own derivative — the same two-step quotient rule the
+old local-frame derivation used for $\partial(x_l/r)/\partial x_l$, just in vector form
+instead of per-component.) So:
 
-The off-diagonal term follows the same pattern (product rule + quotient rule, this time
-$\partial(x_l/r)/\partial y_l = -x_l y_l/r^3 = -c_xc_y/r$):
-
-$$\frac{\partial B_x}{\partial y_l} = \frac{\partial B_r}{\partial r}c_xc_y - \frac{B_r}{r}c_xc_y = \left(\frac{\partial B_r}{\partial r}-\frac{B_r}{r}\right)c_xc_y$$
-
-and, since $c_x$ has no $z_l$-dependence:
-
-$$\frac{\partial B_x}{\partial z_l} = \frac{\partial B_r}{\partial z}c_x$$
-
-**Row 2** ($B_y=B_r c_y$) is identical by the $x_l\leftrightarrow y_l$ symmetry of $r$, giving
-the mirrored entries (note $\partial B_x/\partial y_l = \partial B_y/\partial x_l$ — the
-top-left $2\times2$ block is symmetric).
-
-**Row 3** ($B_z(r,z_l)$, no directional cosine to differentiate) is a plain chain rule
-through $r$:
-
-$$\frac{\partial B_z}{\partial x_l} = \frac{\partial B_z}{\partial r}c_x, \qquad \frac{\partial B_z}{\partial y_l} = \frac{\partial B_z}{\partial r}c_y, \qquad \frac{\partial B_z}{\partial z_l} = \frac{\partial B_z}{\partial z}$$
+$$\frac{\partial(B_r\hat{\mathbf{u}}_\perp)}{\partial\mathbf{u}} = \hat{\mathbf{u}}_\perp\left(\frac{\partial B_r}{\partial r}\hat{\mathbf{u}}_\perp^T + \frac{\partial B_r}{\partial z}\hat{\mathbf{a}}_j^T\right) + \frac{B_r}{r}\Big(P_\perp - \hat{\mathbf{u}}_\perp\hat{\mathbf{u}}_\perp^T\Big)$$
 
 Assembled:
 
-$$J_{local} = \begin{bmatrix}
-\dfrac{\partial B_r}{\partial r}c_x^2+\dfrac{B_r}{r}c_y^2 & \left(\dfrac{\partial B_r}{\partial r}-\dfrac{B_r}{r}\right)c_xc_y & \dfrac{\partial B_r}{\partial z}c_x \\[1.2em]
-\left(\dfrac{\partial B_r}{\partial r}-\dfrac{B_r}{r}\right)c_xc_y & \dfrac{\partial B_r}{\partial r}c_y^2+\dfrac{B_r}{r}c_x^2 & \dfrac{\partial B_r}{\partial z}c_y \\[1.2em]
-\dfrac{\partial B_z}{\partial r}c_x & \dfrac{\partial B_z}{\partial r}c_y & \dfrac{\partial B_z}{\partial z}
-\end{bmatrix}$$
+$$J_{axis} = \frac{\partial B_z}{\partial r}\,\hat{\mathbf{a}}_j\hat{\mathbf{u}}_\perp^T + \frac{\partial B_z}{\partial z}\,\hat{\mathbf{a}}_j\hat{\mathbf{a}}_j^T + \frac{\partial B_r}{\partial r}\,\hat{\mathbf{u}}_\perp\hat{\mathbf{u}}_\perp^T + \frac{\partial B_r}{\partial z}\,\hat{\mathbf{u}}_\perp\hat{\mathbf{a}}_j^T + \frac{B_r}{r}\Big(P_\perp - \hat{\mathbf{u}}_\perp\hat{\mathbf{u}}_\perp^T\Big)$$
 
-**Singularity at $r=0$:** every off-diagonal term above has an explicit $1/r$
-(inside $B_r/r$ or the $c_xc_y$ products), so naive evaluation blows up on-axis. But
-physically the field must stay smooth there, and $B_r/r \to \partial B_r/\partial r$ as
-$r\to0$ (L'Hôpital, since $B_r(0,z)=0$ by the magnet's axial symmetry — no radial field
-component on the axis itself). Substituting this limit collapses the whole matrix: the
-$c_xc_y$ off-diagonal terms vanish (finite $\times$ $r\to0$ factor), and the top-left
-$2\times2$ block becomes an isotropic $\partial B_r/\partial r \cdot I$:
+Note there is no arbitrary in-plane basis anywhere in this expression — only
+$\hat{\mathbf a}_j$ and $\hat{\mathbf u}_\perp$, both determined by the query point
+itself. That is the concrete payoff of §3.4's observation that no azimuthal reference
+is needed: the old $J_{local}$ needed an entire local *frame* (rotation matrix) to
+project into; this needs only the two vectors already in hand.
 
-$$J_{local}\big|_{r=0} = \operatorname{diag}\!\left(\frac{\partial B_r}{\partial r},\ \frac{\partial B_r}{\partial r},\ \frac{\partial B_z}{\partial z}\right)$$
+**Singularity at $r=0$:** exactly the old limit, transplanted to this basis —
+$B_r/r\to\partial B_r/\partial r$ as $r\to0$ (L'Hôpital, since $B_r(0,z)=0$ by the
+magnet's axial symmetry), which collapses the transverse terms to an isotropic
+$\partial B_r/\partial r\cdot P_\perp$:
+
+$$J_{axis}\big|_{r=0} = \frac{\partial B_r}{\partial r}\big(I-\hat{\mathbf{a}}_j\hat{\mathbf{a}}_j^T\big) + \frac{\partial B_z}{\partial z}\,\hat{\mathbf{a}}_j\hat{\mathbf{a}}_j^T$$
+
+which is the old $\operatorname{diag}(\partial B_r/\partial r,\ \partial B_r/\partial r,\ \partial B_z/\partial z)$
+written basis-free — that diagonal form was this same expression in the special case
+$\hat{\mathbf{a}}_j=\hat{\mathbf{z}}$.
 
 ### 4.E $J_{dipole}$ — the far-field Jacobian
 
@@ -349,13 +365,22 @@ contribution to $M$ below — there is no $R\,J\,R^T$ congruence to apply.
 
 ### 4.F Assembly — folding it all back together
 
-Substitute §4.C's $\Delta\mathbf{v}_{l,ij}$ into $\Delta\mathbf{B}_{l,ij}=J_{local}\Delta\mathbf{v}_{l,ij}$, then into §4.B, for one magnet $j$:
+Substitute §4.C's $\Delta\mathbf{u}_{ij}$ into $\Delta\mathbf{B}_{ij}=J_{axis}\Delta\mathbf{u}_{ij}$, then into §4.B, for one magnet $j$:
 
-$$\Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times\Delta\boldsymbol{\omega} + R_{total,j}J_{local}\Big(R_{total,j}^T[\mathbf{v}]_\times\Delta\boldsymbol{\omega} - R_{total,j}^T\Delta\mathbf{t}\Big)$$
+$$\Delta\mathbf{B}_{w,ij} = -[\mathbf{B}_{w,ij}]_\times\Delta\boldsymbol{\omega} + R\,J_{axis}\Big(R^T[\mathbf{v}]_\times\Delta\boldsymbol{\omega} - R^T\Delta\mathbf{t}\Big)$$
 
 Define that magnet's field gradient in the world frame:
 
-$$M_{ij} = R_{total,j}\,J_{local}\,R_{total,j}^T \quad\text{(interpolated branch)}, \qquad M_{ij} = J_{dipole} \quad\text{(§3.6 branch, already in the world frame)}$$
+$$M_{ij} = R\,J_{axis}\,R^T \quad\text{(interpolated branch)}, \qquad M_{ij} = J_{dipole} \quad\text{(§3.6 branch, already in the world frame)}$$
+
+$M_{ij}$ is nothing but $\partial\mathbf{B}_{w,ij}/\partial\mathbf{s}_i$ — the world-frame
+field gradient with respect to the query point, independent of any particular way of
+computing it. The firmware does not actually form $R\,J_{axis}\,R^T$: it computes the
+algebraically identical closed form directly in world coordinates, using
+$\hat{\mathbf{a}}_{w,j}=R\hat{\mathbf{a}}_j$ (already needed for §3.6) and the world-frame
+radial unit vector, which is exactly $J_{axis}$ (§4.D) with every $\hat{\mathbf a}_j$ and
+$\hat{\mathbf u}_\perp$ replaced by its world-frame counterpart. Both routes give the same
+$M_{ij}$; see `MagnetPlacement::near_approx_world` in `magnet_local_model.cpp`.
 
 Distributing and grouping by $\Delta\mathbf{t}$ / $\Delta\boldsymbol{\omega}$, then summing
 over magnets — note $\mathbf{v} = \mathbf{s}_i-\mathbf{t}$ carries no $j$, since all three
@@ -419,7 +444,7 @@ Each iteration of the pose solver performs one Levenberg-Marquardt step:
 
 ## 6. Validation
 
-Every analytic piece above — the interpolation table's partials, $J_{local}$ (including
+Every analytic piece above — the interpolation table's partials, $J_{axis}$ (including
 the $r=0$ branch), $J_{dipole}$, and the full $9\times6$ forward-model Jacobian — can be,
 and should continue to be, checked against central finite differences swept over a grid
 of poses, sensor gains, and magnet tilts. Perturbing $R$ with the exact matrix exponential

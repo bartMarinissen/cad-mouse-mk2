@@ -28,9 +28,12 @@ struct MagnetPlacement;
 struct MagnetModel {
     // The magnet position in the knob frame
     const Vec3 magnet_pos_knob;
-    // The orientation of the magnet compared to the knob frame.
-    // At perfect manufacturing this would be the identity.
-    const Mat3 magnet_rotation;
+    // The magnet's polarization axis in the knob frame, normalized. At
+    // perfect manufacturing this would be (0,0,1). Spin about this axis is
+    // not represented -- a uniformly polarized cylinder is a solid of
+    // revolution, so spin is physically unobservable and carrying it would
+    // be a dead degree of freedom.
+    const Vec3 magnet_axis;
     // This magnet's polarization (remanence, Br), in mT. Defaults to
     // BICUBIC_FIELD_REFERENCE_MT (magnet_model_table.h) -- i.e. "exactly the
     // magnet the bicubic table was generated for" -- so a magnet weaker or
@@ -55,27 +58,33 @@ struct MagnetModel {
     const Vec3 magnet_centre_knob;
 
     // Dipole moment magnitude, mT*mm^3: the table's reference moment scaled by
-    // this magnet's own strength, through the same strength_ratio. 
+    // this magnet's own strength, through the same strength_ratio.
     //
     // Magnitude only. The polarization points along the magnet's local -z, so
     // the moment VECTOR is -moment_mT_mm3 times the magnet's own axis, which
-    // in world coordinates is the third column of R * magnet_rotation.
+    // in world coordinates is R * magnet_axis.
     const float moment_mT_mm3;
 
     // We assume BicubicField is passed by reference to avoid copying the grid
     MagnetModel(const BicubicField& field_model, const Vec3& m_local,
-                const Mat3 &magnet_rotation = identity3(),
+                const Vec3 &magnet_axis = Vec3(0.0f, 0.0f, 1.0f),
                 float magnet_strength_mT = BICUBIC_FIELD_REFERENCE_MT);
 
     /**
      * Evaluate the magnetic field acording to this model at position p_local in the local magnet frame
-     * 
+     *
      * Returns the magnetic field, and outputs the jacobian in J_local.
-     * 
-     * Note, since this works in the magnet local frame, magnet_pos_knob and magnet_rotation
+     *
+     * Note, since this works in the magnet local frame, magnet_pos_knob and magnet_axis
      * are ignored here
      */
     Vec3 evaluate(const Vec3& p_local, Mat3& J_local) const;
+
+    // The strength-scaled cylindrical table lookup underlying evaluate() --
+    // shared with MagnetPlacement::near_approx_world(), which needs Br, Bz
+    // and their (r, z) partials directly rather than the local-Cartesian
+    // reconstruction evaluate() builds from them.
+    Vec2 evaluate_cylindrical(float r, float z, Mat2& J_cylindrical) const;
 
     // This magnet as seen from the world frame at pose (t, R). Cheap, and
     // called once per magnet per forward-model evaluation rather than once
@@ -98,9 +107,11 @@ private:
 //
 // Note: the way one should create these is though MagnetModel.place()
 struct MagnetPlacement {
-    // R * magnet_rotation, mapping magnet-local directly to world. The
-    // interpolated path needs it to get into and out of the magnet's frame.
-    Mat3 R_total;
+    // R * magnet_axis: the magnet's polarization axis in world coordinates.
+    // Both the interpolated and far-field paths need only this one vector to
+    // account for the magnet's orientation -- neither ever rotates into or
+    // out of a magnet-local frame.
+    Vec3 axis_world;
     // The dipole's location: the magnet's geometric centre, in world
     // coordinates. Cross terms measure their displacement from here.
     Vec3 centre_world;
