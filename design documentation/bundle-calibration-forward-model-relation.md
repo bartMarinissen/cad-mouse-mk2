@@ -62,7 +62,7 @@ surfaced it.
 
 | | Pose solver's forward model | Calibration's forward model |
 |---|---|---|
-| Solves for | one frame's $(\mathbf t,R)$ | $N$ frames' $(\mathbf t_k,R_k)$ + 45 shared params |
+| Solves for | one frame's $(\mathbf t,R)$ | $N$ frames' $(\mathbf t_k,R_k)$ + 27 shared params |
 | Per-frame block (6 cols) | `ForwardModel::evaluate()` | the same call, unchanged |
 | Shared-param block (45 cols) | doesn't exist | new: built from `near_/far_approx_world` |
 | Underlying field/Jacobian math | Math.md §3–4 | same, chain rule extended to the shared params |
@@ -77,7 +77,7 @@ two implementations" and more "the new code didn't disturb the old call
 path" — which is the point: there is one forward model, evaluated over a
 wider parameter vector, not two forward models kept in sync by hand.
 
-## 4. Where the 45 shared columns come from
+## 4. Where the 27 shared columns come from
 
 | Group | Cols | Derivative | Reuses |
 |---|--:|---|---|
@@ -85,12 +85,23 @@ wider parameter vector, not two forward models kept in sync by hand.
 | magnet tilt | 2 per magnet (6) | $M_{ij}R[\mathbf d]_\times - R[\mathbf b]_\times$, chart-projected | same, + gnomonic chart (prior session's §2.5, unaffected by cross-magnet) |
 | strength, common + spread | 3 | $\mathbf B_{ij}/s_j \cdot s_{nom}$ | $\mathbf B_{ij}$ from either call — both branches linear in $s_j$ |
 | sensor offset | 9 | see §5 | raw reading only |
-| sensor gain | 24 (of 27, traceless) | see §5 | raw reading only |
+| sensor gain | 6 (of 9, traceless-diagonal) | see §5 | raw reading only |
 
 Position, tilt and strength are the only groups that touch the field model,
 and each is one 3×3 (or a field value) already computed by the calls in §1 —
 no new field lookups, matching the prior session's efficiency claim, just
 sourced one layer down from where it expected.
+
+**Gain is now diagonal** — $G_i=\mathrm{diag}(g_{i,x},g_{i,y},g_{i,z})$, 3 raw
+numbers per sensor instead of 9. The gauge story from the prior session's §1
+is unchanged, just smaller: the isotropic direction ($g_x=g_y=g_z$) is still
+the same degree of freedom as magnet strength, still fixed by the same
+`det(G)=1`-style gauge, still leaving strength to own absolute scale — it's
+just that "isotropic" now lives inside a 3-dimensional space of diagonal
+matrices instead of a 9-dimensional space of general ones. That leaves 2
+free (traceless-diagonal) params per sensor rather than 8, so the group
+drops from 24 columns to 6, and the total shared-parameter count drops from
+45 to 27.
 
 ## 5. Gain and offset: fit the convention the firmware actually uses
 
@@ -106,6 +117,12 @@ the pose solver already minimizes ($\mathbf r=\hat{\mathbf B}-\mathbf B_{measure
 $$\mathbf r_i = (G_i\,\mathbf{raw}_i - \mathbf{offset}_i) - \mathbf B_{w,i}(\theta_{geom},\rho)$$
 
 $$\frac{\partial \mathbf r_i}{\partial \mathbf{offset}_i} = -I, \qquad \frac{\partial \mathbf r_i}{\partial g_k} = G_k\,\mathbf{raw}_i$$
+
+With gain now diagonal, $G_k$ is one of the 2 traceless *diagonal* basis
+matrices per sensor rather than one of 8 general traceless ones, so
+$G_k\,\mathbf{raw}_i$ is an elementwise scale-and-pick of the raw reading's 3
+components — no matrix-vector product at all, just as cheap as the offset
+column.
 
 Gain and offset columns now act only on a stored raw reading; every
 field-derived column (position, tilt, strength, pose) is untouched by gain
