@@ -131,3 +131,25 @@ any solver code gets written:
   rebuild-from-raw-reading approach, is very unlikely to fit. Not a blocker
   for the math above, but the two-pass design's premise should be checked
   against real capture counts before committing to it.
+
+## Addendum: two equally valid framings of the tilt collapse
+
+§4's tilt column is $N_{ij}[\mathbf d]_\times A_j - [\mathbf B_{ij}]_\times(RA_j)$, where
+$A_j$ is the fixed knob-frame map from $(u,v)$ to a rotation-perturbation
+vector $\boldsymbol\varepsilon_j$. There are two correct ways to describe where
+$RA_j$ comes from, and it's worth having both on record rather than re-deriving
+this the next time it comes up:
+
+- **$\boldsymbol\varepsilon_j$ stays knob-frame; $R\boldsymbol\varepsilon_j$ is a second,
+  world-frame representation of that same physical rotation**, used only by
+  the term that needs one. This is the framing that explains *why* $(u,v)$
+  can't be defined in world frame in the first place: it has to mean the same
+  physical tilt in every captured frame, and only a knob-frame (pose-independent)
+  definition guarantees that.
+- **Equivalently: for that one term, $(u,v)$ is mapped to a rotation directly
+  in the world frame**, via $RA_j$ instead of $A_j$. This is the more direct
+  answer to "is this a world-frame rotation" — yes, for that term's purposes.
+
+Both describe the same computation. The first is the one to reach for when
+the question is what $(u,v)$ *means*; the second is the one to reach for when
+the question is what a specific intermediate *is*.
