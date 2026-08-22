@@ -5,14 +5,26 @@
 
 using namespace ifx::tlx493d;
 
+namespace {
+// Sensor gain is fit as a diagonal matrix now (design documentation/
+// bundle-calibration-forward-model-relation.md §4) -- the off-diagonal
+// entries in a stored CalibrationParams are not a fitted quantity and must
+// not be read, even though the struct still has room for them.
+Mat3 toDiagMat3(const float m[3][3]) {
+  return Mat3(m[0][0], 0.0f,    0.0f,
+              0.0f,    m[1][1], 0.0f,
+              0.0f,    0.0f,    m[2][2]);
+}
+}  // namespace
+
 SensorController::SensorController(const CalibrationParams& cal)
     : mag1Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag2Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       mag3Sensor_(Wire, TLx493D_IIC_ADDR_A0_e),
       sensor_gain_{
-        toMat3(cal.sensor_gain[0]),
-        toMat3(cal.sensor_gain[1]),
-        toMat3(cal.sensor_gain[2]),
+        toDiagMat3(cal.sensor_gain[0]),
+        toDiagMat3(cal.sensor_gain[1]),
+        toDiagMat3(cal.sensor_gain[2]),
       },
       sensor_offset_mT_{
         toVec3(cal.sensor_offset_mT[0]),
