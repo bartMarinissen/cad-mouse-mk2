@@ -511,11 +511,16 @@ subroutine call.
   out-of-line calls into `ldlt_inplace<1>::unblocked`/`assignCoeff`; under
   BLA there is no separate function there at all to call.
 - **`BLA::operator*` for `Matrix<3,3,float> * Matrix<3,3,float>` inlines at
-  most call sites but not all.** `VirtualSensor::evaluate` fully inlines
-  both of its chained 3×3 products (`R * magnet.magnet_rotation`,
-  `R_total * J_local * R_total_T`) — no separate `operator*` call anywhere
-  in its disassembly. But `solve_pose.cpp`'s `orthonormalize_approx()` (two
-  more 3×3 products) and `exp_so3(dw) * R` call the *same* `operator*`
+  most call sites but not all.** At the time of this investigation,
+  `VirtualSensor::evaluate` fully inlined both of the near-field path's
+  chained 3×3 products (`R * magnet.magnet_rotation`, and the
+  `R_total * J_local * R_total_T` Jacobian conjugation) — no separate
+  `operator*` call anywhere in its disassembly. Both products are gone: the
+  near-field branch no longer carries a per-magnet rotation matrix at all
+  (see `design documentation/Math.md` §3.2–3.4, §4.D), so this specific
+  measurement no longer describes the code and has not been re-taken.
+  `solve_pose.cpp`'s `orthonormalize_approx()` (two more 3×3 products) and
+  `exp_so3(dw) * R` call the *same* `operator*`
   specialization out-of-line — confirmed via `nm`: exactly one
   `BLA::operator*<Matrix<3,3,float>,...>` symbol exists in the binary, and
   `solve_knob_pose`'s disassembly `bl`s into it twice. This is GCC's

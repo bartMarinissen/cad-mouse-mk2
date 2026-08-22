@@ -130,6 +130,17 @@ static void assert_within_bicubic_domain(const Vec3& p_local, float margin, cons
     TEST_ASSERT_TRUE_MESSAGE(z >= BICUBIC_ORIGIN.y() + margin && z <= BICUBIC_FAR.y() - margin, msg);
 }
 
+// Projects a world point against a placement's axis to get (r, z), the same
+// way MagnetPlacement::near_approx_world does, packed into a synthetic
+// Vec3(r, 0, z) so it can still be fed to assert_within_bicubic_domain above.
+static Vec3 rz_probe(const MagnetPlacement& placement, const Vec3& p_world) {
+    const Vec3 d = p_world - placement.origin_world;
+    const float z = dot(d, placement.axis_world);
+    const Vec3 d_perp = d - z * placement.axis_world;
+    const float r = sqrtf(dot(d_perp, d_perp));
+    return Vec3(r, 0.0f, z);
+}
+
 // exp_so3() (exact SO(3) exponential map / Rodrigues' formula, used to
 // perturb R below) lives in math3D.h as the one shared implementation -- see
 // TODO/eigen-to-bla-migration.md. It matters here specifically because
@@ -285,7 +296,7 @@ void test_magnet_strength_scales_field_and_jacobian(void) {
         const Vec3 B_unit = unit.evaluate(p, J_unit);
 
         for (float ratio : ratios) {
-            MagnetModel scaled(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>(), identity3(),
+            MagnetModel scaled(CALCULATED_BICUBIC_FIELD, BLA::Zeros<3, 1, float>(), Vec3(0.0f, 0.0f, 1.0f),
                                 ratio * BICUBIC_FIELD_REFERENCE_MT);
             Mat3 J_s;
             const Vec3 B_s = scaled.evaluate(p, J_s);
@@ -461,9 +472,8 @@ void test_cross_magnet_terms_are_actually_present(void) {
         // The paired (magnet 0, sensor 0) point actually reached, checked
         // against the table's real domain rather than trusted from the
         // standoff arithmetic alone.
-        const Vec3 p_local0 = placements[0].R_total.transpose() *
-                               (SENSOR_POS[0] - placements[0].origin_world);
-        assert_within_bicubic_domain(p_local0, 0.0f, "cross_magnet_terms pair 0");
+        assert_within_bicubic_domain(rz_probe(placements[0], SENSOR_POS[0]), 0.0f,
+                                      "cross_magnet_terms pair 0");
 
         MagnetPlacement inert[3] = { placements[0], placements[1], placements[2] };
         for (int j = 0; j < 3; ++j) inert[j].moment_world = BLA::Zeros<3, 1, float>();
@@ -498,15 +508,15 @@ void test_cross_magnet_terms_are_actually_present(void) {
 // tilt and polarization strength.
 static void compute_forward_model_jacobians(
         const Vec3& t, const Mat3& R,
-        const Mat3 magnet_rotations[3],
+        const Vec3 magnet_axes[3],
         const float magnet_strengths[3],
         Matrix9x6f& J_analytic,
         Matrix9x6f& J_numeric) {
 
     MagnetModel magnets[3] = {
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_rotations[0], magnet_strengths[0]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_rotations[1], magnet_strengths[1]),
-        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_rotations[2], magnet_strengths[2]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[0], magnet_axes[0], magnet_strengths[0]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[1], magnet_axes[1], magnet_strengths[1]),
+        MagnetModel(CALCULATED_BICUBIC_FIELD, MAGNET_LOCAL[2], magnet_axes[2], magnet_strengths[2]),
     };
 
     // Sanity-check the representative (magnet 0, sensor 0) pair actually
@@ -518,9 +528,8 @@ static void compute_forward_model_jacobians(
     // through the ~22mm lever arm from pivot to magnet (~22 * 5e-4 =~
     // 0.011mm), with headroom.
     const MagnetPlacement placement0 = magnets[0].place(t, R);
-    const Vec3 p_local0 = placement0.R_total.transpose() *
-                           (SENSOR_POS[0] - placement0.origin_world);
-    assert_within_bicubic_domain(p_local0, 0.02f, "forward_model_jacobian_grid pair 0");
+    assert_within_bicubic_domain(rz_probe(placement0, SENSOR_POS[0]), 0.02f,
+                                  "forward_model_jacobian_grid pair 0");
 
     VirtualSensor sensors[3] = {
         VirtualSensor(SENSOR_POS[0]),
@@ -570,17 +579,21 @@ void test_forward_model_jacobian_grid(void) {
     // Sensor gain/skew is not modeled here -- see the comment on
     // compute_forward_model_jacobians(). Only magnet tilt/orientation varies.
     // Scenario A: Perfect Hardware
-    Mat3 tilts_perfect[3] = { identity3(), identity3(), identity3() };
+    Vec3 axes_perfect[3] = {
+        Vec3(0.0f, 0.0f, 1.0f), Vec3(0.0f, 0.0f, 1.0f), Vec3(0.0f, 0.0f, 1.0f)
+    };
 
     float strengths_perfect[3] = {
         BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT, BICUBIC_FIELD_REFERENCE_MT
     };
 
-    // Scenario B: Realistic Manufacturing Tolerances (magnet tilt)
-    Mat3 tilts_real[3] = {
-        exp_so3(Vec3( 0.03f, -0.02f,  0.01f)), // ~2 deg tilt
-        exp_so3(Vec3(-0.01f,  0.04f,  0.00f)),
-        exp_so3(Vec3( 0.02f,  0.01f, -0.03f))
+    // Scenario B: Realistic Manufacturing Tolerances (magnet tilt). Only the
+    // axis these rotations carry (0,0,1) to matters -- spin about it isn't
+    // represented.
+    Vec3 axes_real[3] = {
+        exp_so3(Vec3( 0.03f, -0.02f,  0.01f)) * Vec3(0.0f, 0.0f, 1.0f), // ~2 deg tilt
+        exp_so3(Vec3(-0.01f,  0.04f,  0.00f)) * Vec3(0.0f, 0.0f, 1.0f),
+        exp_so3(Vec3( 0.02f,  0.01f, -0.03f)) * Vec3(0.0f, 0.0f, 1.0f)
     };
     // Per-magnet polarization spread, expressed as a ratio of
     // BICUBIC_FIELD_REFERENCE_MT so the scenario means the same thing
@@ -595,13 +608,13 @@ void test_forward_model_jacobian_grid(void) {
     };
 
     struct HardwareState {
-        const Mat3* tilts;
+        const Vec3* axes;
         const float* strengths;
         const char* name;
     };
     HardwareState hw_states[] = {
-        { tilts_perfect, strengths_perfect, "Ideal Hardware" },
-        { tilts_real, strengths_real, "Distorted Hardware" }
+        { axes_perfect, strengths_perfect, "Ideal Hardware" },
+        { axes_real, strengths_real, "Distorted Hardware" }
     };
 
     // 2. Define Pose Grid Bounds
@@ -642,7 +655,7 @@ void test_forward_model_jacobian_grid(void) {
                         Mat3 R = exp_so3(r_vec);
                         
                         Matrix9x6f J_analytic, J_numeric;
-                        compute_forward_model_jacobians(t, R, hw.tilts, hw.strengths, J_analytic, J_numeric);
+                        compute_forward_model_jacobians(t, R, hw.axes, hw.strengths, J_analytic, J_numeric);
 
                         float e = max_rel_error_mat<9, 6>(J_analytic, J_numeric);
 

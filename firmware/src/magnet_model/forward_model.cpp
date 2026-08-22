@@ -20,9 +20,9 @@ ForwardModel::ForwardModel(const CalibrationParams& cal)
               VirtualSensor(Positions::sensor_3_world),
           },
           magnets_{
-              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[0]), toMat3(cal.magnet_rotation[0]), cal.magnet_strength_mT[0]),
-              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[1]), toMat3(cal.magnet_rotation[1]), cal.magnet_strength_mT[1]),
-              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[2]), toMat3(cal.magnet_rotation[2]), cal.magnet_strength_mT[2]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[0]), toMagnetAxis(cal.magnet_rotation[0]), cal.magnet_strength_mT[0]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[1]), toMagnetAxis(cal.magnet_rotation[1]), cal.magnet_strength_mT[1]),
+              MagnetModel(CALCULATED_BICUBIC_FIELD, toVec3(cal.magnet_pos_knob[2]), toMagnetAxis(cal.magnet_rotation[2]), cal.magnet_strength_mT[2]),
           }
     {}
 
@@ -33,7 +33,7 @@ void __not_in_flash_func(ForwardModel::evaluate)(const Vec3& t_world,
 
     // Place each magnet in the world once, ahead of the sensor loop. Every
     // sensor sees every magnet, so these three would otherwise be rebuilt
-    // three times each -- and R * magnet_rotation alone is a full 3x3 product.
+    // three times each.
     const MagnetPlacement placements[3] = {
         magnets_[0].place(t_world, R),
         magnets_[1].place(t_world, R),

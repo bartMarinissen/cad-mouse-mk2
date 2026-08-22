@@ -128,3 +128,13 @@ inline Mat3 toMat3(const float m[3][3]) {
 inline Vec3 toVec3(const float v[3]) {
   return Vec3(v[0], v[1], v[2]);
 }
+
+// The magnet's polarization axis, taken from the stored rotation matrix's
+// third column and re-normalized defensively. The other two columns encode
+// spin about that axis, which is physically unobservable (the magnet is a
+// solid of revolution about it) -- MagnetModel carries only the axis, not
+// the full matrix.
+inline Vec3 toMagnetAxis(const float m[3][3]) {
+  Vec3 axis(m[0][2], m[1][2], m[2][2]);
+  return axis / BLA::Norm(axis);
+}
