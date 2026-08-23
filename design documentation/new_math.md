@@ -161,8 +161,15 @@ As we said, this part is just trivial assembly. We might also define the full pr
 ## Jacobian w.r.t. the knob pose
 
 This is the first thing that is actually hard. The forward model above was
-assembly; this is where we have to differentiate through a rotation, twice, and
-keep the signs.
+assembly; this is where we have to differentiate through a rotation and keep
+the signs.
+
+We derive it in the **knob frame**. There the magnet is nailed down — its
+position and its dipole are constants — and the only thing that moves is the
+sensor. That makes the derivation a product rule with two readable terms. It is
+not a statement about how to *evaluate* anything: the forward model picked the
+world frame on cost grounds and keeps it. Deriving in one frame and evaluating
+in another is fine, and the bridge between them is one line, given below.
 
 ### What we are varying
 
@@ -195,10 +202,10 @@ having picked it, so it is worth saying loudly: $\delta \omega$ is a rotation
 *of the knob as seen from the world*, not a rotation expressed in knob
 coordinates.
 
-### Naming the two derivatives of the magnet model
+### The two derivatives of the magnet model
 
-We keep $F$ opaque. What we do need is that it is differentiable in both of its
-arguments, and a name for each derivative:
+$F$ stays opaque, but we need it to be differentiable in both arguments, and we
+need a name for each derivative:
 
 $Jp(x, d) \in \R^{3\times3}$ the derivative of $F$ w.r.t. its **position**
 argument. Entry $(a,b)$ is $\partial F_a / \partial x_b$. This is the field
@@ -207,26 +214,24 @@ gradient at $x$.
 $Jd(x, d) \in \R^{3\times3}$ the derivative of $F$ w.r.t. its **dipole**
 argument. Entry $(a,b)$ is $\partial F_a / \partial d_b$.
 
-Both are functions of the same two arguments $F$ takes, and both are things the
-magnet model owes us — see [[magnet-model]]. We will write
-$$
-Jp_{i,j} = Jp(p^w_{i,j},\; d_i^w)
-\qquad
-Jd_{i,j} = Jd(p^w_{i,j},\; d_i^w)
-$$
-for the pair-specific values, where
-$$
-p^w_{i,j} = S_j^w - M_i^w = S_j^w - R(\omega) M_i^k - x^w
-$$
-is the displacement from magnet $i$ to sensor $j$ in the world frame — exactly
-the first argument the world-frame forward model hands to $F$. So
-$B^w_{i,j} = F(p^w_{i,j}, d_i^w)$, and to first order
-$$
-\delta B^w_{i,j} = Jp_{i,j} \; \delta p^w_{i,j} \;+\; Jd_{i,j} \; \delta d_i^w
-$$
+Both are functions of the same two arguments $F$ takes. The pose Jacobian below
+uses only $Jp$; $Jd$ first appears in bundle calibration.
 
-Everything from here is working out what $\delta p^w_{i,j}$ and $\delta d_i^w$
-are in terms of $\delta x^w$ and $\delta \omega$.
+Displacements get a name, in both frames:
+$$
+p^w_{i,j} = S_j^w - M_i^w
+\qquad
+p^k_{i,j} = S_j^k - M_i^k
+$$
+so that $B^w_{i,j} = F(p^w_{i,j}, d_i^w)$ and $B^k_{i,j} = F(p^k_{i,j}, d_i^k)$,
+and $p^w_{i,j} = R(\omega)\, p^k_{i,j}$. We abbreviate the derivatives evaluated
+at a pair's arguments as
+$$
+Jp_{i,j} = Jp(p^w_{i,j},\, d_i^w)
+\qquad
+Jp^k_{i,j} = Jp(p^k_{i,j},\, d_i^k)
+$$
+and similarly for $Jd$. Same function, different frame's arguments.
 
 ### Variations of a rotation
 
@@ -263,82 +268,57 @@ of $R(\omega)$ and ends up on the right of $R(-\omega)$. Getting this backwards
 produces a Jacobian that is wrong only in the rotation columns, which is exactly
 the kind of error a solver hides by converging anyway, just slower.
 
-### What the model's properties buy us
+### Moving the gradient between frames
 
-Above the barrier we asserted three properties of $F$. Two of them are
-statements about *all* $x$ and $d$, so we may differentiate them, and doing so
-constrains $Jp$ and $Jd$ against each other. This turns out to matter a lot.
-
-**Differentiating the rotation-commutation property.** The property is
+Deriving in the knob frame produces $Jp^k_{i,j}$, and we want to state results
+in terms of $Jp_{i,j}$. The commutation property bridges them in one step.
+Differentiate $F(Rx, Rd) = R\,F(x,d)$ with respect to $x$:
 $$
-F(Rx, Rd) = R \; F(x,d) \qquad \textrm{for all } R \in SO(3)
+Jp(Rx, Rd)\, R = R\, Jp(x,d)
 $$
-Take $R = I + [w]_\times$ for infinitesimal $w$ and expand both sides to first
-order. On the left, the arguments move by $[w]_\times x$ and $[w]_\times d$:
+Take $R = R(\omega)$, $x = p^k_{i,j}$, $d = d_i^k$, and use
+$R(\omega)p^k_{i,j} = p^w_{i,j}$ and $R(\omega)d_i^k = d_i^w$:
 $$
-F(Rx, Rd) \approx F(x,d) + Jp(x,d)\,[w]_\times x + Jd(x,d)\,[w]_\times d
-$$
-Apply antisymmetry to both, $[w]_\times x = -[x]_\times w$ and
-$[w]_\times d = -[d]_\times w$:
-$$
-F(Rx, Rd) \approx F(x,d) - \Big( Jp(x,d)\,[x]_\times + Jd(x,d)\,[d]_\times \Big) w
-$$
-On the right:
-$$
-R\,F(x,d) \approx F(x,d) + [w]_\times F(x,d) = F(x,d) - [F(x,d)]_\times w
-$$
-These agree for every $w$, so the matrices are equal:
-$$
-\boxed{\;[F(x,d)]_\times = Jp(x,d)\,[x]_\times + Jd(x,d)\,[d]_\times\;}
+Jp_{i,j} = R(\omega)\; Jp^k_{i,j}\; R(-\omega)
 $$
 
-This says something physically reasonable: rigidly rotating the whole
-configuration rotates the field, and the two ways the field can respond to that
-rotation — the sensor sweeping through the field, and the magnet's axis turning
-— must add up to exactly a rotation of the field vector.
+The gradient is a tensor, so transporting it between frames is the usual
+congruence, and this is the only bridge the derivation needs.
 
-**Differentiating the magnitude-linearity property.** The property is
-$F(x, a\,d) = a\,F(x,d)$ for all $a \in \R$. Differentiate w.r.t. $a$ and set
-$a = 1$:
+It is sometimes handier to write the same property as
 $$
-Jd(x,d)\; d = F(x,d)
+F(Rx, d) = R\; F(x, R^T d)
 $$
-$F$ is homogeneous of degree one in $d$, so this is just Euler's theorem. It is
-a free consistency check on any implementation of $Jd$: contracting $Jd$ with
-its own dipole must return the field.
-
-**Consequence: $Jd$ is not independent.** The two identities together determine
-$Jd$ completely from $Jp$ and $F$. To see it, split an arbitrary $u \in \R^3$
-into its component along $d$ and its component perpendicular to $d$:
-$$
-u = \underbrace{\frac{d\,(d \cdot u)}{|d|^2}}_{\textrm{along } d} \;+\; u_\perp
-$$
-Euler's identity handles the first part directly. For the second, note that
-$[d]_\times[d]_\times u_\perp = d \times (d \times u_\perp) = d\,(d\cdot u_\perp) - |d|^2 u_\perp = -|d|^2 u_\perp$,
-so $u_\perp = -[d]_\times [d]_\times u_\perp / |d|^2$, and since
-$[d]_\times u_\perp = [d]_\times u$ (the along-$d$ part is annihilated), we get
-$u_\perp = [d]_\times w$ with $w = -[d]_\times u/|d|^2$. That puts $u_\perp$
-inside the range of $[d]_\times$, which is precisely where the commutation
-identity tells us what $Jd$ does. Assembling:
-$$
-Jd(x,d) = \frac{1}{|d|^2}\Big( F(x,d)\, d^T \;-\; \big([F(x,d)]_\times - Jp(x,d)\,[x]_\times\big)[d]_\times \Big)
-$$
-
-So the magnet model only really owes us $Jp$. $Jd$ follows from the field, the
-gradient, and the geometry we already have in hand. We will still write $Jd$
-wherever it appears, because it is the honest name for that derivative and
-substituting the reconstruction inline would make the derivations unreadable —
-but it is never a second thing to tabulate or interpolate.
+which is the statement above with $d$ replaced by $R^T d$ — the same assumption,
+rearranged. It says a rotation sitting on the position argument can always be
+pulled out in front, at the price of counter-rotating the dipole. Differentiating
+this form w.r.t. $x$ gives the same congruence, and it is the form to reach for
+whenever only the position argument carries a rotation.
 
 ### Translation block
 
-Only $p^w_{i,j}$ depends on $x^w$, and it does so trivially:
+In the knob frame,
 $$
-\delta p^w_{i,j} = -\,\delta x^w, \qquad \delta d_i^w = 0
+B^w_{i,j} = R(\omega)\, B^k_{i,j} = R(\omega)\, F\big( S_j^k - M_i^k, \; d_i^k \big)
+\qquad\textrm{with}\qquad
+S_j^k = R(-\omega)\,\big(S_j^w - x^w\big)
+$$
+
+Name the vector from the knob origin to the sensor, since everything below is
+written in terms of it:
+$$
+arm^w_j = S_j^w - x^w
+$$
+It carries a sensor index only — all three magnets ride the same rigid knob.
+
+Now $x^w$ appears in exactly one place, inside $S_j^k$, and $M_i^k$ and $d_i^k$
+are constants:
+$$
+\delta S_j^k = - R(-\omega)\, \delta x^w
 $$
 so
 $$
-\delta B^w_{i,j} = - Jp_{i,j} \; \delta x^w
+\delta B^w_{i,j} = R(\omega)\, Jp^k_{i,j}\, \delta S_j^k = -\, R(\omega)\, Jp^k_{i,j}\, R(-\omega)\; \delta x^w = -\, Jp_{i,j}\; \delta x^w
 $$
 
 Summing over magnets and writing
@@ -352,121 +332,51 @@ $$
 
 ### Rotation block
 
-Now the rotation, through the world-frame formulation
+Now $R(\omega)$ appears in two places — once outside $F$, rotating the result,
+and once inside $S_j^k$, moving the sensor. Neither $M_i^k$ nor $d_i^k$ moves,
+because both are fixed in the knob frame. The product rule gives one term for
+each:
 $$
-B^w_{i,j} = F\big( S_j^w - R(\omega) M_i^k - x^w, \; R(\omega) d_i^k \big)
-$$
-Here $R(\omega)$ appears **twice**, and both occurrences vary. That is the whole
-content of this section; miss one and the result is still smooth, still
-plausible, and wrong.
-
-**The position argument.** $S_j^w$, $M_i^k$ and $x^w$ are all constant under a
-rotation variation, so
-$$
-\delta p^w_{i,j} = -\,\delta R(\omega)\, M_i^k = -[\delta \omega]_\times R(\omega) M_i^k = +\big[R(\omega) M_i^k\big]_\times \delta \omega
-$$
-using antisymmetry in the last step. Note $R(\omega) M_i^k = M_i^w - x^w$ is the
-magnet's offset from the knob origin, expressed in world axes — the lever arm
-the magnet swings on.
-
-**The dipole argument.** $d_i^k$ is constant in the knob frame, so
-$$
-\delta d_i^w = \delta R(\omega)\, d_i^k = [\delta \omega]_\times R(\omega) d_i^k = [\delta \omega]_\times d_i^w = -\big[d_i^w\big]_\times \delta \omega
+\delta B^w_{i,j} = \underbrace{\delta R(\omega)\, B^k_{i,j}}_{\textrm{the field vector turns}} \;+\; \underbrace{R(\omega)\, \delta B^k_{i,j}}_{\textrm{the sensor moves through the field}}
 $$
 
-Putting both into $\delta B^w_{i,j} = Jp_{i,j}\,\delta p^w_{i,j} + Jd_{i,j}\,\delta d_i^w$:
+**The field vector turns.** The knob-frame field $B^k_{i,j}$ is unchanged; only
+the rotation carrying it into the world frame moves:
 $$
-\delta B^w_{i,j} = \Big( Jp_{i,j} \big[R(\omega) M_i^k\big]_\times \;-\; Jd_{i,j} \big[d_i^w\big]_\times \Big)\, \delta \omega
+\delta R(\omega)\, B^k_{i,j} = [\delta \omega]_\times R(\omega) B^k_{i,j} = [\delta \omega]_\times B^w_{i,j} = - \big[B^w_{i,j}\big]_\times \delta \omega
 $$
 
-This is correct but unsatisfying: it needs $Jd$, and every term carries both
-indices so nothing can be shared between magnets.
+**The sensor moves through the field.** In the knob frame the field is a fixed
+object and the sensor slides through it:
+$$
+\delta S_j^k = \delta R(-\omega)\, arm^w_j = - R(-\omega)[\delta \omega]_\times arm^w_j = + R(-\omega)\big[arm^w_j\big]_\times \delta \omega
+$$
+so, converting the resulting field change into the world frame,
+$$
+R(\omega)\, \delta B^k_{i,j} = R(\omega)\, Jp^k_{i,j}\, \delta S_j^k = \underbrace{R(\omega)\, Jp^k_{i,j}\, R(-\omega)}_{Jp_{i,j}} \big[arm^w_j\big]_\times \delta \omega
+$$
 
-### Dropping $Jd$ from the pose Jacobian
-
-The commutation identity, evaluated at this pair's arguments
-$x = p^w_{i,j}$, $d = d_i^w$, reads
-$$
-Jd_{i,j}\big[d_i^w\big]_\times = \big[B^w_{i,j}\big]_\times - Jp_{i,j}\big[p^w_{i,j}\big]_\times
-$$
-which is exactly the term we want to remove. Substituting:
-$$
-\delta B^w_{i,j} = \Big( Jp_{i,j} \big[R(\omega) M_i^k\big]_\times + Jp_{i,j}\big[p^w_{i,j}\big]_\times - \big[B^w_{i,j}\big]_\times \Big) \delta \omega
-$$
-The skew map is linear, so the two $Jp_{i,j}$ terms merge, and their arguments
-collapse:
-$$
-R(\omega)M_i^k + p^w_{i,j} = R(\omega)M_i^k + \big(S_j^w - R(\omega)M_i^k - x^w\big) = S_j^w - x^w
-$$
-The magnet drops out entirely. Name what is left
-$$
-arm^w_j = S_j^w - x^w
-$$
-the vector from the knob origin to sensor $j$ in world axes — it depends on the
-sensor only, because all three magnets ride the same rigid knob. Then
+Adding the two:
 $$
 \delta B^w_{i,j} = \Big( Jp_{i,j} \big[arm^w_j\big]_\times - \big[B^w_{i,j}\big]_\times \Big) \delta \omega
 $$
 
-Now summing over magnets is worth something, because $[arm^w_j]_\times$ carries
-no magnet index and factors out:
+The magnet index appears only in $Jp_{i,j}$ and $B^w_{i,j}$, so summing over
+magnets factors cleanly:
 $$
 \frac{\partial \hat{B}^w_j}{\partial \omega} = JpSum_j \big[arm^w_j\big]_\times - \big[\hat{B}^w_j\big]_\times
 $$
 
-Both pieces are quantities we already have: $JpSum_j$ is shared with the
-translation block, and $\hat{B}^w_j$ is the prediction the residual is built
-from. The pose Jacobian therefore needs nothing from the magnet model beyond
-$Jp$ and the field itself.
+Both pieces are already in hand: $JpSum_j$ is shared with the translation block,
+and $\hat{B}^w_j$ is the prediction the residual is built from.
 
 One thing to be careful about: $\hat{B}^w_j$ here is the **predicted** field, the
 sum over magnets, and not the calibrated reading. The gain never enters, because
 $\hat B$ is a prediction of the physical field and the gain sits on the
 measurement side of the residual.
 
-### Cross-check through the knob frame
-
-The forward model gave two equivalent expressions for $B^w_{i,j}$, and we used
-the world-frame one. The knob-frame one is an independent route to the same
-Jacobian, so it is worth walking as a check. Start from
-$$
-B^w_{i,j} = R(\omega)\, B^k_{i,j} = R(\omega)\, F\big( R(-\omega)(S_j^w - x^w) - M_i^k, \; d_i^k \big)
-$$
-Here $d_i^k$ and $M_i^k$ are genuinely constant, so $Jd$ cannot appear at all —
-but $R(\omega)$ now sits outside $F$, so we owe a product rule instead:
-$$
-\delta B^w_{i,j} = \underbrace{\delta R(\omega)\, B^k_{i,j}}_{\textrm{the field vector turns}} \;+\; \underbrace{R(\omega)\, \delta B^k_{i,j}}_{\textrm{the sensor moves through the field}}
-$$
-
-The first term is immediate:
-$$
-\delta R(\omega)\, B^k_{i,j} = [\delta \omega]_\times R(\omega) B^k_{i,j} = [\delta \omega]_\times B^w_{i,j} = - \big[B^w_{i,j}\big]_\times \delta \omega
-$$
-
-For the second, only the sensor position moves:
-$$
-\delta S_j^k = \delta R(-\omega)\,(S_j^w - x^w) = - R(-\omega)[\delta \omega]_\times arm^w_j = + R(-\omega)\big[arm^w_j\big]_\times \delta \omega
-$$
-so, with $Jp^k_{i,j}$ the position derivative evaluated at the knob-frame
-arguments,
-$$
-R(\omega)\, \delta B^k_{i,j} = R(\omega)\, Jp^k_{i,j}\, R(-\omega) \big[arm^w_j\big]_\times \delta \omega
-$$
-
-The commutation property closes the gap. Differentiating
-$F(Rx, Rd) = R F(x,d)$ w.r.t. $x$ gives $Jp(Rx, Rd)\,R = R\,Jp(x,d)$, i.e.
-$$
-Jp_{i,j} = R(\omega)\, Jp^k_{i,j}\, R(-\omega)
-$$
-The position derivative is a tensor, and transporting it between frames is the
-usual congruence. Substituting, the two terms add to
-$$
-\delta B^w_{i,j} = \Big( Jp_{i,j}\big[arm^w_j\big]_\times - \big[B^w_{i,j}\big]_\times \Big) \delta \omega
-$$
-which is the world-frame result, term for term. The two routes disagree about
-*which* derivative of $F$ does the work — the world frame splits it between $Jp$
-and $Jd$, the knob frame puts all of it in $Jp$ and a product rule — and agree on
-the answer.
+Appendix B does the same derivative through the world frame, where the dipole
+argument does move and $Jd$ has to be carried. It lands on this same expression.
 
 ### The $3\times6$ block for one sensor
 
@@ -502,14 +412,14 @@ with rows in the same order as $r$, so that $J$ and $r$ line up row for row.
 
 Per frame, on top of what the forward model already computes:
 
-- **$Jp_{i,j}$ for all nine pairs.** Unavoidable, and the natural thing for the
-  magnet model to return alongside the field, since both are read out of the
-  same evaluation.
-- **No $Jd$ anywhere.** This is the payoff of the substitution above: the pose
-  solve never touches the dipole derivative.
+- **$Jp_{i,j}$ for all nine pairs.** Unavoidable, and the natural thing to read
+  out of the same evaluation that produces the field.
+- **$Jd$ does not appear.** In the knob frame the dipole is a constant, so there
+  is nothing to differentiate it against. This is visible directly in the
+  derivation rather than being something that cancels later.
 - **Three skew matrices $[arm^w_j]_\times$**, one per sensor rather than one per
-  pair, because the magnet index dropped out. Building them is free — a skew
-  matrix is a rearrangement of three numbers, not arithmetic.
+  pair, since the magnet index never enters $arm^w_j$. Building them is free — a
+  skew matrix is a rearrangement of three numbers, not arithmetic.
 - **Three $3\times3$ products $JpSum_j [arm^w_j]_\times$**, again one per sensor.
   Summing $Jp_{i,j}$ over magnets *before* multiplying is what buys this: nine
   matrix additions are much cheaper than the six extra matrix products we would
@@ -546,72 +456,71 @@ information as $N$ grows while the poses do not.
 
 Gauge is not treated here.
 
-### The parameters
+### The device vector $D$
 
-Per frame, the pose, already handled:
+Give the shared parameters a name and a fixed order, so that "which derivative
+goes in which columns" has an answer:
+$$
+D = \big(\;
+M_0^k \;\; M_1^k \;\; M_2^k
+\;\big|\;
+d_0^k \;\; d_1^k \;\; d_2^k
+\;\big|\;
+g_0 \;\; g_1 \;\; g_2
+\;\big|\;
+\theta_0 \;\; \theta_1 \;\; \theta_2
+\;\big)^T \in \R^{36}
+$$
 
-$x^w \in \R^3$, $\omega \in \R^3$ — 6 columns per frame.
+Twelve entries, each itself a 3-vector, so 36 numbers describing one physical
+device:
 
-Shared, three magnets $i \in \{0,1,2\}$:
+$M_i^k$ — magnet position in the knob frame.
 
-$M_i^k \in \R^3$ — magnet position in the knob frame, 9 columns.
+$d_i^k$ — magnet dipole in the knob frame. The full vector: its direction is
+the magnet's orientation and its magnitude is the magnet's strength, fitted
+jointly rather than split into a tilt and a scale.
 
-$d_i^k \in \R^3$ — magnet dipole in the knob frame, 9 columns. Note this is
-the full vector: its direction is the magnet's orientation and its magnitude is
-the magnet's strength, fitted jointly rather than split into a tilt and a scale.
+$g_j$ — per-axis sensor gain.
 
-Shared, three sensors $j \in \{0,1,2\}$:
+$\theta_j$ — per-axis sensor offset.
 
-$g_j \in \R^3$ — per-axis gain, 9 columns.
+Sensor positions $S_j^w$ are not in $D$. They can be added as a fifth group of
+nine, taking it to $\R^{45}$; the derivative is given below along with the
+reason they are normally held fixed instead.
 
-$\theta_j \in \R^3$ — per-axis offset, 9 columns.
+### Where each derivative goes
 
-$S_j^w \in \R^3$ — sensor position in the world frame, 9 columns, usually held
-fixed (see below).
+Writing $\partial_v$ for the derivative with respect to $v$, the row block for
+sensor $j$ has exactly the layout of $D$:
+$$
+\frac{\partial r^w_j}{\partial D} = \big(\;
+\partial_{M_0^k} \;\; \partial_{M_1^k} \;\; \partial_{M_2^k}
+\;\big|\;
+\partial_{d_0^k} \;\; \partial_{d_1^k} \;\; \partial_{d_2^k}
+\;\big|\;
+\partial_{g_0} \;\; \partial_{g_1} \;\; \partial_{g_2}
+\;\big|\;
+\partial_{\theta_0} \;\; \partial_{\theta_1} \;\; \partial_{\theta_2}
+\;\big)\, r^w_j
+$$
+
+Twelve slots, each a $3\times3$ block, giving $\R^{3\times36}$ per sensor. The
+rest of this section fills the slots in; the layout above is the only place you
+need to look to know where a block lands.
 
 We differentiate the same residual as before,
 $$
 r^w_j = \textrm{diag}(g_j)\, Bm^w_j + \theta_j - \sum_i F\big( S_j^w - R(\omega)M_i^k - x^w, \; R(\omega)d_i^k \big)
 $$
-now w.r.t. all of it. The two derivative primitives $Jp_{i,j}$ and $Jd_{i,j}$
-are the same ones, evaluated at the same arguments; nothing new is asked of the
-magnet model.
+now w.r.t. all of $D$, and additionally w.r.t. this frame's pose. Note this is
+the world-frame form: unlike the pose Jacobian, the parameters here live in the
+knob frame while the residual lives in the world frame, so the rotation between
+them is exactly what the chain rule has to carry.
 
 Below we do **one frame**. Stacking frames is trivial assembly, in the same
 sense sensor stacking was — the only thing worth saying about it is where the
 blocks land, which is the last subsection.
-
-### Pose — reused unchanged
-
-$$
-\frac{\partial r^w_j}{\partial (x^w, \omega)} = Jr_j = \begin{pmatrix}
-JpSum_j & \quad \big[\hat{B}^w_j\big]_\times - JpSum_j \big[arm^w_j\big]_\times
-\end{pmatrix}
-$$
-
-These six columns belong to this frame alone.
-
-### Sensor offset
-
-$\theta_j$ enters the residual once, additively, and only for its own sensor:
-$$
-\frac{\partial r^w_j}{\partial \theta_j} = I_3, \qquad \frac{\partial r^w_j}{\partial \theta_{j'}} = 0 \;\textrm{ for } j' \neq j
-$$
-
-### Sensor gain
-
-$\textrm{diag}(g_j)\,Bm^w_j = \textrm{diag}(Bm^w_j)\,g_j$ — the same product read
-the other way round — so
-$$
-\frac{\partial r^w_j}{\partial g_j} = \textrm{diag}(Bm^w_j), \qquad \frac{\partial r^w_j}{\partial g_{j'}} = 0 \;\textrm{ for } j' \neq j
-$$
-
-These are the only two blocks that come from the measurement side of the
-residual, and they are the only two that are positive; every block that comes
-through $F$ inherits the minus sign in front of the sum. They are also the only
-two blocks that do not depend on the parameters at all: for a given frame they
-are constants, fixed the moment the frame is captured, and never recomputed as
-the solver iterates.
 
 ### Magnet position
 
@@ -621,7 +530,7 @@ $$
 $$
 so
 $$
-\frac{\partial r^w_j}{\partial M_i^k} = + Jp_{i,j}\, R(\omega)
+\partial_{M_i^k}\, r^w_j = + Jp_{i,j}\, R(\omega)
 $$
 
 There is no sum over $i$ here — this is a separate $3\times3$ block for each of
@@ -637,28 +546,59 @@ $$
 $$
 so
 $$
-\frac{\partial r^w_j}{\partial d_i^k} = - Jd_{i,j}\, R(\omega)
+\partial_{d_i^k}\, r^w_j = - Jd_{i,j}\, R(\omega)
 $$
 
-This is where $Jd$ finally earns its name. The pose Jacobian could dispose of it
-because a rigid rotation moves the sensor and turns the dipole together, and the
-commutation identity relates those two effects. Refitting a magnet's dipole
-turns it *without* moving anything else, which is not a rigid motion of the
-configuration, so no identity rescues us and the honest derivative is required.
+This is where $Jd$ earns its name. The pose Jacobian never needed it, because in
+the knob frame the dipole is a constant. Refitting a magnet's dipole changes
+that constant, so the honest derivative is required.
 
-We do not need a second table for it. Evaluated at this pair's arguments, the
-reconstruction from the properties section reads
+A cheap check on it: $F$ is homogeneous of degree one in $d$, so
+$Jd(x,d)\,d = F(x,d)$ — contracting $Jd$ with its own dipole must return the
+field. And if the magnet model does not supply $Jd$ directly, it can be computed
+from $Jp$ and the field instead; Appendix A gives the construction.
+
+### Sensor gain
+
+$\textrm{diag}(g_j)\,Bm^w_j = \textrm{diag}(Bm^w_j)\,g_j$ — the same product read
+the other way round — so
 $$
-Jd_{i,j} = \frac{1}{|d_i^w|^2}\Big( B^w_{i,j}\,(d_i^w)^T - \big(\big[B^w_{i,j}\big]_\times - Jp_{i,j}\big[p^w_{i,j}\big]_\times\big)\big[d_i^w\big]_\times \Big)
+\partial_{g_j}\, r^w_j = \textrm{diag}(Bm^w_j),
+\qquad
+\partial_{g_{j'}}\, r^w_j = 0 \;\textrm{ for } j' \neq j
 $$
-and every quantity on the right is already in hand from evaluating the forward
-model and its gradient at this pair.
+
+### Sensor offset
+
+$\theta_j$ enters the residual once, additively, and only for its own sensor:
+$$
+\partial_{\theta_j}\, r^w_j = I_3,
+\qquad
+\partial_{\theta_{j'}}\, r^w_j = 0 \;\textrm{ for } j' \neq j
+$$
+
+These two are the only blocks that come from the measurement side of the
+residual, and the only two that are positive; every block that comes through $F$
+inherits the minus sign in front of the sum. They are also the only two that do
+not depend on the parameters at all: for a given frame they are constants, fixed
+the moment the frame is captured, and never recomputed as the solver iterates.
+
+### Pose
+
+The per-frame columns are the pose Jacobian, unchanged:
+$$
+\frac{\partial r^w_j}{\partial (x^w, \omega)} = Jr_j = \begin{pmatrix}
+JpSum_j & \quad \big[\hat{B}^w_j\big]_\times - JpSum_j \big[arm^w_j\big]_\times
+\end{pmatrix}
+$$
+
+These six columns belong to this frame alone.
 
 ### Sensor position
 
 Included for completeness, because it costs one line:
 $$
-\frac{\partial r^w_j}{\partial S_j^w} = - JpSum_j
+\partial_{S_j^w}\, r^w_j = - JpSum_j
 $$
 which is exactly the negative of the pose translation block. That is not a
 coincidence: only the *relative* position of knob and sensor enters $F$, so
@@ -671,36 +611,30 @@ and let the magnets absorb the placement error.
 ### One frame's row block
 
 For a single frame the residual is $9\times1$ and the parameters it touches are
-the 36 shared columns plus its own 6 pose columns. Writing the shared columns in
-the order $(M^k, d^k, g, \theta)$, sensor $j$'s three rows are
+the 36 columns of $D$ plus its own 6 pose columns. Sensor $j$'s three rows are
 $$
-\begin{pmatrix}
-\underbrace{Jp_{0,j}R(\omega) \;\; Jp_{1,j}R(\omega) \;\; Jp_{2,j}R(\omega)}_{9,\ \textrm{dense}} &
-\underbrace{-Jd_{0,j}R(\omega) \;\; -Jd_{1,j}R(\omega) \;\; -Jd_{2,j}R(\omega)}_{9,\ \textrm{dense}} &
-\underbrace{\cdots \textrm{diag}(Bm^w_j) \cdots}_{9,\ \textrm{only column block } j} &
-\underbrace{\cdots I_3 \cdots}_{9,\ \textrm{only column block } j} &
-\underbrace{Jr_j}_{6,\ \textrm{this frame}}
-\end{pmatrix}
+\begin{pmatrix} \dfrac{\partial r^w_j}{\partial D} & \quad Jr_j \end{pmatrix} \in \R^{3\times42}
 $$
+with the $D$ half laid out as above and filled from the subsections, and $Jr_j$
+the six per-frame columns.
 
 Stacking the three sensors gives a $9 \times 42$ block for the frame
-($9 \times 51$ if sensor positions are fitted). The magnet halves are dense; the
-sensor halves are block diagonal, since sensor $j$'s gain and offset are
+($9 \times 51$ if sensor positions are fitted). Its sparsity follows the layout:
+the magnet halves are dense, since every magnet reaches every sensor, while the
+gain and offset halves are block diagonal, since sensor $j$'s gain and offset are
 invisible to the other two sensors.
 
 Over $N$ frames the full matrix is $9N \times (36 + 6N)$, and it has the arrowhead
-shape that structure implies: a tall dense column strip for the 36 shared
-parameters, and a block-diagonal strip of $9\times6$ pose blocks, one per frame,
-with nothing off that diagonal because no frame's pose affects any other frame's
-residual.
+shape that structure implies: a tall dense column strip for $D$, and a
+block-diagonal strip of $9\times6$ pose blocks, one per frame, with nothing off
+that diagonal because no frame's pose affects any other frame's residual.
 
 ### What this costs
 
 Per frame, on top of the pose Jacobian:
 
-- **$Jd_{i,j}$ for all nine pairs**, reconstructed rather than tabulated. Each
-  reconstruction is two outer-product-shaped $3\times3$ products and a scaling,
-  from values already computed.
+- **$Jd_{i,j}$ for all nine pairs**, which the pose solve never needed. This is
+  the one genuinely new quantity bundle calibration asks for.
 - **One $R(\omega)$ per frame, right-multiplying eighteen blocks.** Both the
   magnet-position and magnet-dipole blocks end in the same $R(\omega)$, and it
   does not depend on $i$ or $j$. Whether it is cheaper to apply it eighteen times
@@ -713,8 +647,126 @@ Per frame, on top of the pose Jacobian:
   position block, when the latter is used at all.
 
 Note what does *not* get summed here. The pose Jacobian could sum over magnets
-early because the pose moves all magnets together. Bundle parameters are
+early because the pose moves all magnets together. The entries of $D$ are
 per-magnet, so each magnet gets its own columns and the sum stays unsummed —
 nine blocks where the pose needed three. That is the real cost of widening: not
 the arithmetic in any one block, but that the magnet index survives into the
 output.
+
+---------------
+
+## Appendix A: computing $Jd$ from $Jp$
+
+A magnet model that supplies $Jp$ but not $Jd$ is not stuck. The properties
+asserted above the barrier are statements about *all* $x$ and $d$, so they can
+be differentiated, and doing so pins $Jd$ down completely.
+
+**From rotation-commutation.** Take $F(Rx, Rd) = R\,F(x,d)$ with
+$R = I + [w]_\times$ for infinitesimal $w$, and expand both sides to first order.
+On the left the arguments move by $[w]_\times x$ and $[w]_\times d$:
+$$
+F(Rx, Rd) \approx F(x,d) + Jp(x,d)\,[w]_\times x + Jd(x,d)\,[w]_\times d
+$$
+Apply antisymmetry to both, $[w]_\times x = -[x]_\times w$ and
+$[w]_\times d = -[d]_\times w$:
+$$
+F(Rx, Rd) \approx F(x,d) - \Big( Jp(x,d)\,[x]_\times + Jd(x,d)\,[d]_\times \Big) w
+$$
+On the right:
+$$
+R\,F(x,d) \approx F(x,d) + [w]_\times F(x,d) = F(x,d) - [F(x,d)]_\times w
+$$
+These agree for every $w$, so the matrices are equal:
+$$
+\boxed{\;[F(x,d)]_\times = Jp(x,d)\,[x]_\times + Jd(x,d)\,[d]_\times\;}
+$$
+
+This says something physically reasonable: rigidly rotating the whole
+configuration rotates the field, and the two ways the field can respond to that
+rotation — the sensor sweeping through the field, and the magnet's axis turning
+— must add up to exactly a rotation of the field vector.
+
+**From magnitude-linearity.** Differentiate $F(x, a\,d) = a\,F(x,d)$ with
+respect to $a$ and set $a = 1$:
+$$
+Jd(x,d)\; d = F(x,d)
+$$
+$F$ is homogeneous of degree one in $d$, so this is just Euler's theorem.
+
+**Putting them together.** Split an arbitrary $u \in \R^3$ into its component
+along $d$ and its component perpendicular to $d$:
+$$
+u = \underbrace{\frac{d\,(d \cdot u)}{|d|^2}}_{\textrm{along } d} \;+\; u_\perp
+$$
+Euler's identity handles the first part directly. For the second, note that
+$[d]_\times[d]_\times u_\perp = d \times (d \times u_\perp) = d\,(d\cdot u_\perp) - |d|^2 u_\perp = -|d|^2 u_\perp$,
+so $u_\perp = -[d]_\times [d]_\times u_\perp / |d|^2$, and since
+$[d]_\times u_\perp = [d]_\times u$ (the along-$d$ part is annihilated), we get
+$u_\perp = [d]_\times w$ with $w = -[d]_\times u/|d|^2$. That puts $u_\perp$
+inside the range of $[d]_\times$, which is precisely where the commutation
+identity says what $Jd$ does. Assembling:
+$$
+Jd(x,d) = \frac{1}{|d|^2}\Big( F(x,d)\, d^T \;-\; \big([F(x,d)]_\times - Jp(x,d)\,[x]_\times\big)[d]_\times \Big)
+$$
+
+Everything on the right is the field, its gradient, and the geometry — all of
+which are in hand wherever $Jd$ is wanted. Evaluated at a pair's arguments this
+reads
+$$
+Jd_{i,j} = \frac{1}{|d_i^w|^2}\Big( B^w_{i,j}\,(d_i^w)^T - \big(\big[B^w_{i,j}\big]_\times - Jp_{i,j}\big[p^w_{i,j}\big]_\times\big)\big[d_i^w\big]_\times \Big)
+$$
+
+## Appendix B: the rotation derivative through the world frame
+
+The main text derives the pose rotation block in the knob frame. The world-frame
+route is an independent derivation of the same quantity, and walking it is a
+check on the result. Start from
+$$
+B^w_{i,j} = F\big( S_j^w - R(\omega) M_i^k - x^w, \; R(\omega) d_i^k \big)
+$$
+Here $R(\omega)$ appears **twice**, and both occurrences vary — so unlike the
+knob-frame route, this one has to carry $Jd$.
+
+**The position argument.** $S_j^w$, $M_i^k$ and $x^w$ are constant under a
+rotation variation, so
+$$
+\delta p^w_{i,j} = -\,\delta R(\omega)\, M_i^k = -[\delta \omega]_\times R(\omega) M_i^k = +\big[R(\omega) M_i^k\big]_\times \delta \omega
+$$
+where $R(\omega) M_i^k = M_i^w - x^w$ is the magnet's offset from the knob
+origin, in world axes.
+
+**The dipole argument.**
+$$
+\delta d_i^w = \delta R(\omega)\, d_i^k = [\delta \omega]_\times d_i^w = -\big[d_i^w\big]_\times \delta \omega
+$$
+
+Together:
+$$
+\delta B^w_{i,j} = \Big( Jp_{i,j} \big[R(\omega) M_i^k\big]_\times \;-\; Jd_{i,j} \big[d_i^w\big]_\times \Big)\, \delta \omega
+$$
+
+Now apply Appendix A's identity at this pair's arguments,
+$x = p^w_{i,j}$ and $d = d_i^w$:
+$$
+Jd_{i,j}\big[d_i^w\big]_\times = \big[B^w_{i,j}\big]_\times - Jp_{i,j}\big[p^w_{i,j}\big]_\times
+$$
+which removes $Jd$ again:
+$$
+\delta B^w_{i,j} = \Big( Jp_{i,j} \big[R(\omega) M_i^k\big]_\times + Jp_{i,j}\big[p^w_{i,j}\big]_\times - \big[B^w_{i,j}\big]_\times \Big) \delta \omega
+$$
+The skew map is linear, so the two $Jp_{i,j}$ terms merge and their arguments
+collapse:
+$$
+R(\omega)M_i^k + p^w_{i,j} = R(\omega)M_i^k + \big(S_j^w - R(\omega)M_i^k - x^w\big) = S_j^w - x^w = arm^w_j
+$$
+leaving
+$$
+\delta B^w_{i,j} = \Big( Jp_{i,j} \big[arm^w_j\big]_\times - \big[B^w_{i,j}\big]_\times \Big) \delta \omega
+$$
+which is the main text's result, term for term.
+
+The two routes disagree about *which* derivative of $F$ does the work — the knob
+frame puts all of it in $Jp$ and a product rule, the world frame splits it
+between $Jp$ and $Jd$ and then needs an identity to put it back together — and
+agree on the answer. That is also the concrete reason the main text leads with
+the knob frame.
