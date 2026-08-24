@@ -466,21 +466,23 @@ assembled block — the sum, the skew map, and the matrix products — is linear
 
 ## Jacobian w.r.t. the device parameters
 
-Bundle calibration fits the hardware and the poses at the same time, over many
-captured snapshots at once. It is again a least-squares problem, and it requires
-the Jacobian of the residual w.r.t. all of the device parameters. Hence this
-work here. We will speak no further of bundle calibration in this section, and
-focus on the Jacobian instead.
+The previous section varied the knob pose and held the device fixed. Here we do
+the opposite.
 
-This is why we speak of per-snapshot variables and device variables. Device
-variables are also called shared variables, because they apply to all snapshots.
 Recall that **only the pose $(x^w, \omega)$ is a per-snapshot variable.** The
 raw measurements $Bm^w_j$ are of course per-snapshot too, but those are data,
-not parameters.
+not parameters. Every other parameter is shared across all snapshots: a set of
+magnet positions, magnet dipoles, sensor gains, sensor offsets and sensor
+positions describes one physical device and takes one value for the whole
+capture. That split is why we speak of per-snapshot variables and device
+variables; device variables are also called shared variables, because they apply
+to all snapshots.
 
-Every other parameter is shared across all snapshots. A set of magnet positions,
-magnet dipoles, sensor gains, sensor offsets and sensor positions describes one
-physical device and takes one value for the whole capture.
+The reason we want their derivatives is bundle calibration, which fits the device
+and the poses at the same time over many captured snapshots at once. It is again
+a least-squares problem, and it requires the Jacobian of the residual w.r.t. all
+of the device parameters. Hence this work here. We will speak no further of
+bundle calibration in this section, and focus on the Jacobian instead.
 
 ### The device vector $D$
 
