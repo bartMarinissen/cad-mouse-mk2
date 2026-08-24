@@ -30,7 +30,14 @@ Where they are used with implicit application (linalg, multiplication) we will u
 ## Single sensor forward model
 The core of doing any type of modeling right is picking the right shape for your data. So thats where we start.
 
-### Knob variables
+### Per-snapshot variables
+These are the variables that change per snapshot.
+A snapshot is a single reading of all 3 sensors, taken with the knob in a fixed pose.
+The whole point of motion tracking is to take the sensor measurements of a snapshot, and deduce the knob pose that corresponds best to these measurements.
+(For bundle callibration we will call a single measurement a frame, we might then index these variables by a frame-index $k$)
+
+All other variables are effectively constant for a device as long as it isn't modified.
+
 $x^w \in \R^3$ (mm) The position of the knob origin in the world frame.
 
 $\omega \in \R^3$ (franken-units) the orientation of the knob as a 3d vector. It maps orientations in the knob frame $k$ to the world from $w$
@@ -38,9 +45,9 @@ $\omega \in \R^3$ (franken-units) the orientation of the knob as a 3d vector. It
 $R(\omega) \in SO(3) \subset \R^{3 \times 3}$. The rotation matrix corresponding to $\omega$. \
 $R(\omega) = \exp([\omega]_\times) $
 
-### Sensor variables (for sensor index j)
 ${Bm}^w_j \in \R^3$ (mT) The raw measurement at sensor $j$. This is indisputably an input and cannot be changed by the model or modeling choices.
 
+### Sensor variables (for sensor index j)
 $S_j^w \in \R^3$ (mm) the sensor position in the world frame
 
 $g_j \in \R^3$ the sensor gain per axis.
@@ -161,8 +168,8 @@ As we said, this part is just trivial assembly. We might also define the full pr
 ## Jacobian w.r.t. the knob pose
 
 This is the first thing that is actually hard. The forward model above was
-assembly; this is where we have to differentiate through a rotation and keep
-the signs.
+assembly; this is where we have to take derivatives.
+Especially needing differentiate through a rotation whilst keeping the signs correct is challenging.
 
 We derive it in the **knob frame**. There the magnet is nailed down — its
 position and its dipole are constants — and the only thing that moves is the
@@ -297,6 +304,14 @@ whenever only the position argument carries a rotation.
 
 ### Translation block
 
+```
+#TODO: this derivation is nicer through the world frame. So do this one through the world frame.
+There is no need to do both in the same frame, as long as the final expression is in the world frame.
+The two formulations are definitionally the same so we can pick and choose frames for the math.
+
+Don't move this to the appendix either. Just replace it with the simpler derivation.
+```
+
 In the knob frame,
 $$
 B^w_{i,j} = R(\omega)\, B^k_{i,j} = R(\omega)\, F\big( S_j^k - M_i^k, \; d_i^k \big)
@@ -321,13 +336,11 @@ $$
 \delta B^w_{i,j} = R(\omega)\, Jp^k_{i,j}\, \delta S_j^k = -\, R(\omega)\, Jp^k_{i,j}\, R(-\omega)\; \delta x^w = -\, Jp_{i,j}\; \delta x^w
 $$
 
-Summing over magnets and writing
+Summing over the magnets we get the total field jacobian at sensor $j$:
 $$
-JpSum_j = \sum_i Jp_{i,j} \in \R^{3\times3}
-$$
-for the total field gradient at sensor $j$:
-$$
-\frac{\partial \hat{B}^w_j}{\partial x^w} = - JpSum_j
+\boxed{
+\frac{\partial \hat{B}^w_j}{\partial x^w} = - \sum_i Jp_{i,j}
+}
 $$
 
 ### Rotation block
@@ -364,10 +377,12 @@ $$
 The magnet index appears only in $Jp_{i,j}$ and $B^w_{i,j}$, so summing over
 magnets factors cleanly:
 $$
-\frac{\partial \hat{B}^w_j}{\partial \omega} = JpSum_j \big[arm^w_j\big]_\times - \big[\hat{B}^w_j\big]_\times
+\boxed{
+\frac{\partial \hat{B}^w_j}{\partial \omega} = \left(\sum_i Jp_{i,j}\right) \big[arm^w_j\big]_\times - \big[\hat{B}^w_j\big]_\times
+}
 $$
 
-Both pieces are already in hand: $JpSum_j$ is shared with the translation block,
+Both pieces are already in hand: $\sum_i Jp_{i,j}$ is shared with the translation block,
 and $\hat{B}^w_j$ is the prediction the residual is built from.
 
 One thing to be careful about: $\hat{B}^w_j$ here is the **predicted** field, the
@@ -384,15 +399,17 @@ Collecting the two blocks, the derivative of the prediction w.r.t. the pose
 $(x^w, \omega)$ is
 $$
 \frac{\partial \hat{B}^w_j}{\partial (x^w, \omega)} = \begin{pmatrix}
-- JpSum_j & \quad JpSum_j \big[arm^w_j\big]_\times - \big[\hat{B}^w_j\big]_\times
+- \sum_i Jp_{i,j} & \quad \left(\sum_i Jp_{i,j}\right) \big[arm^w_j\big]_\times - \big[\hat{B}^w_j\big]_\times
 \end{pmatrix} \in \R^{3\times6}
 $$
 and since $\delta r^w_j = -\delta \hat{B}^w_j$, the residual's block is its
 negation:
 $$
+\boxed{
 Jr_j = \frac{\partial r^w_j}{\partial (x^w, \omega)} = \begin{pmatrix}
-JpSum_j & \quad \big[\hat{B}^w_j\big]_\times - JpSum_j \big[arm^w_j\big]_\times
+\sum_i Jp_{i,j} & \quad \big[\hat{B}^w_j\big]_\times - \left(\sum_i Jp_{i,j}\right) \big[arm^w_j\big]_\times
 \end{pmatrix} \in \R^{3\times6}
+}
 $$
 
 ### The $9\times6$ block for a frame
@@ -420,11 +437,11 @@ Per frame, on top of what the forward model already computes:
 - **Three skew matrices $[arm^w_j]_\times$**, one per sensor rather than one per
   pair, since the magnet index never enters $arm^w_j$. Building them is free — a
   skew matrix is a rearrangement of three numbers, not arithmetic.
-- **Three $3\times3$ products $JpSum_j [arm^w_j]_\times$**, again one per sensor.
+- **Three $3\times3$ products $\sum_i Jp_{i,j} [arm^w_j]_\times$**, again one per sensor.
   Summing $Jp_{i,j}$ over magnets *before* multiplying is what buys this: nine
   matrix additions are much cheaper than the six extra matrix products we would
   pay by assembling per pair and summing afterwards.
-- **$[\hat{B}^w_j]_\times$ and $JpSum_j$ are shared** — the field with the
+- **$[\hat{B}^w_j]_\times$ and $\sum_i Jp_{i,j}$ are shared** — the field with the
   residual, the gradient between the translation and rotation blocks.
 
 The structural point is that the sum over magnets is pushed as early as it can
@@ -435,26 +452,30 @@ assembled block — the sum, the skew map, and the matrix products — is linear
 
 ## The full Jacobian, for bundle calibration
 
-Bundle calibration fits the hardware and the poses at the same time, over many
-captured frames at once. The parameter split is simple to state:
+```
+#TODO: don't speak of frames here but snapshots.
 
-**Only the pose $(x^w, \omega)$ is per-frame. Every other parameter is shared
-across all frames.** The raw measurements $Bm^w_j$ are of course per-frame too,
-but those are data, not parameters. Everything else — magnet positions, magnet
+We are doing kinematics, so frame already carries some meaning.
+```
+
+Bundle calibration fits the hardware and the poses at the same time, over many
+captured snapshots at once. The parameter split is simple to state:
+
+This is why we speak of per-snapshot variables and device variables.
+Device variables are also called shared variables, because the apply to all-snapshots.
+Recall that **Only the pose $(x^w, \omega)$ is a per-snapshot variables. 
+The raw measurements $Bm^w_j$ are of course per-snapshot too,
+but those are data, not parameters.
+
+Every other parameter is shared
+across all snapshots. A set of Magnet positions, magnet
 dipoles, sensor gains, sensor offsets, sensor positions — describes one physical
 device and takes one value for the whole capture.
 
-**TODO (maintainer):** this shared/per-frame split is a fact about the whole
-document, not about this section. It belongs at the very top, next to the
-notation conventions. Left here for you to place.
-
-That split is the entire reason bundle calibration is worth doing. A single
-frame gives 9 equations against 6 pose unknowns and every shared parameter,
-which is hopeless. $N$ frames give $9N$ equations against $6N$ pose unknowns
-plus a *fixed* number of shared ones, so the shared parameters keep gaining
-information as $N$ grows while the poses do not.
-
-Gauge is not treated here.
+Bundle calibration is again a least-squares problem. Which requires the full Jacobian w.r.t all of the device
+paramaters. Hence this work here.
+We will speak no further of bundle calibration in this section.
+Instead we shall focus on the jacobian.
 
 ### The device vector $D$
 
@@ -492,7 +513,11 @@ reason they are normally held fixed instead.
 ### Where each derivative goes
 
 Writing $\partial_v$ for the derivative with respect to $v$, the row block for
-sensor $j$ has exactly the layout of $D$:
+sensor $j$ follows exactly the layout of $D$:
+```
+TODO:
+I do not want the $\partial_v$ notation. Drop it everywhere. And write things out fully.
+```
 $$
 \frac{\partial r^w_j}{\partial D} = \big(\;
 \partial_{M_0^k} \;\; \partial_{M_1^k} \;\; \partial_{M_2^k}
@@ -513,14 +538,10 @@ We differentiate the same residual as before,
 $$
 r^w_j = \textrm{diag}(g_j)\, Bm^w_j + \theta_j - \sum_i F\big( S_j^w - R(\omega)M_i^k - x^w, \; R(\omega)d_i^k \big)
 $$
-now w.r.t. all of $D$, and additionally w.r.t. this frame's pose. Note this is
-the world-frame form: unlike the pose Jacobian, the parameters here live in the
-knob frame while the residual lives in the world frame, so the rotation between
-them is exactly what the chain rule has to carry.
+now w.r.t. all of $D$. We don't treat the snapshot-variables (i.e. the Pose) here. That was already done in [#Jacobian w.r.t. the knob pose]
 
-Below we do **one frame**. Stacking frames is trivial assembly, in the same
-sense sensor stacking was — the only thing worth saying about it is where the
-blocks land, which is the last subsection.
+In this case we use the world-frame formulation. This turns out to be the nicest form to calculate the derivatives.
+Its only $R(\omega)$ that works nicer in the knob frame. That is because it occurs on both arguments to $F$.
 
 ### Magnet position
 
@@ -528,7 +549,7 @@ $M_i^k$ enters only the position argument, and only for its own magnet:
 $$
 \frac{\partial p^w_{i,j}}{\partial M_i^k} = - R(\omega)
 $$
-so
+so by simple application of the chain rule:
 $$
 \partial_{M_i^k}\, r^w_j = + Jp_{i,j}\, R(\omega)
 $$
@@ -544,19 +565,19 @@ $d_i^k$ enters only the dipole argument:
 $$
 \frac{\partial d_i^w}{\partial d_i^k} = R(\omega)
 $$
-so
+so by simple application of the chain rule:
 $$
 \partial_{d_i^k}\, r^w_j = - Jd_{i,j}\, R(\omega)
 $$
 
 This is where $Jd$ earns its name. The pose Jacobian never needed it, because in
 the knob frame the dipole is a constant. Refitting a magnet's dipole changes
-that constant, so the honest derivative is required.
+that constant, so the honest derivative is required. **Note: if the magnet model does not supply $Jd$ directly, it can be computed
+from $Jp$ and the field instead;** Appendix A gives the construction.
+```
+REMARK: I droped the check. I do not understand it. It might be valuable, but its not worth the space in this document, since its meant to be understood by me.
+```
 
-A cheap check on it: $F$ is homogeneous of degree one in $d$, so
-$Jd(x,d)\,d = F(x,d)$ — contracting $Jd$ with its own dipole must return the
-field. And if the magnet model does not supply $Jd$ directly, it can be computed
-from $Jp$ and the field instead; Appendix A gives the construction.
 
 ### Sensor gain
 
@@ -583,55 +604,26 @@ inherits the minus sign in front of the sum. They are also the only two that do
 not depend on the parameters at all: for a given frame they are constants, fixed
 the moment the frame is captured, and never recomputed as the solver iterates.
 
-### Pose
+### Sensor position (non-critical)
 
-The per-frame columns are the pose Jacobian, unchanged:
+The sensors sit on a manufactured PCB and are therefore quite accurately placed.
+Hence we consider these quite fixed.
+One might consider calibrating out errors on the sensor positions (specifically errors that can't be produced by a rigid transformation of the nominal positions). But we likely will not
+
+We still include it for completeness, because it costs one line:
 $$
-\frac{\partial r^w_j}{\partial (x^w, \omega)} = Jr_j = \begin{pmatrix}
-JpSum_j & \quad \big[\hat{B}^w_j\big]_\times - JpSum_j \big[arm^w_j\big]_\times
-\end{pmatrix}
+\partial_{S_j^w}\, r^w_j = - \sum_i Jp_{i,j}
 $$
 
-These six columns belong to this frame alone.
-
-### Sensor position
-
-Included for completeness, because it costs one line:
-$$
-\partial_{S_j^w}\, r^w_j = - JpSum_j
-$$
-which is exactly the negative of the pose translation block. That is not a
-coincidence: only the *relative* position of knob and sensor enters $F$, so
-moving the knob one way and the sensor the other way are the same change to
-every prediction. Fitting both at once therefore adds three directions the data
-cannot separate, per sensor. The sensors sit on a manufactured PCB and are the
-best-known geometry in the device, so the usual choice is to hold $S_j^w$ fixed
-and let the magnets absorb the placement error.
-
-### One frame's row block
-
-For a single frame the residual is $9\times1$ and the parameters it touches are
-the 36 columns of $D$ plus its own 6 pose columns. Sensor $j$'s three rows are
-$$
-\begin{pmatrix} \dfrac{\partial r^w_j}{\partial D} & \quad Jr_j \end{pmatrix} \in \R^{3\times42}
-$$
-with the $D$ half laid out as above and filled from the subsections, and $Jr_j$
-the six per-frame columns.
-
-Stacking the three sensors gives a $9 \times 42$ block for the frame
-($9 \times 51$ if sensor positions are fitted). Its sparsity follows the layout:
-the magnet halves are dense, since every magnet reaches every sensor, while the
-gain and offset halves are block diagonal, since sensor $j$'s gain and offset are
-invisible to the other two sensors.
-
-Over $N$ frames the full matrix is $9N \times (36 + 6N)$, and it has the arrowhead
-shape that structure implies: a tall dense column strip for $D$, and a
-block-diagonal strip of $9\times6$ pose blocks, one per frame, with nothing off
-that diagonal because no frame's pose affects any other frame's residual.
-
+```
+REMARK:
+we are computing jacobians, not explaining bundle calibration.
+For the later bundle callibration it will be nicer to actually have the shared Jacobian
+and the per-snapshot jacobian to be separate. So building them together here will only be confusing later.
+```
 ### What this costs
 
-Per frame, on top of the pose Jacobian:
+Per snapshot, the Jacobian of the residual w.r.t. the Device parameters requires:
 
 - **$Jd_{i,j}$ for all nine pairs**, which the pose solve never needed. This is
   the one genuinely new quantity bundle calibration asks for.
@@ -643,7 +635,7 @@ Per frame, on top of the pose Jacobian:
 - **The gain and offset blocks are free.** $I_3$ is not stored, and
   $\textrm{diag}(Bm^w_j)$ is three numbers copied from the frame's measurement,
   fixed for the life of the frame.
-- **$JpSum_j$ is shared** between the pose translation block and the sensor
+- **$\sum_i Jp_{i,j}$ is shared** between the pose translation block and the sensor
   position block, when the latter is used at all.
 
 Note what does *not* get summed here. The pose Jacobian could sum over magnets
