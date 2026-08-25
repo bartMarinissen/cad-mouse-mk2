@@ -641,6 +641,39 @@ $$
 }
 $$
 
+### The assembled row block
+
+Dropping each result into the slot the layout gave it, the device Jacobian for
+sensor $j$ is
+$$
+\boxed{
+\begin{aligned}
+\frac{\partial r^w_j}{\partial D} = \Big(\;
+& Jp_{0,j} R(\omega) \;\; Jp_{1,j} R(\omega) \;\; Jp_{2,j} R(\omega)
+\;\Big|\;
+{-}Jd_{0,j} R(\omega) \;\; {-}Jd_{1,j} R(\omega) \;\; {-}Jd_{2,j} R(\omega) \\[4pt]
+&\Big|\;
+\underbrace{0 \cdots \textrm{diag}(Bm^w_j) \cdots 0}_{\textrm{slot } j}
+\;\Big|\;
+\underbrace{0 \cdots I_3 \cdots 0}_{\textrm{slot } j}
+\;\Big)
+\end{aligned}
+}
+$$
+
+Twelve $3\times3$ slots, so $\R^{3\times36}$, in the order $D$ fixed.
+
+The two halves have opposite shapes, and that is the whole structure of the
+matrix. Every magnet reaches every sensor, so the six magnet slots are dense and
+carry both indices. A sensor's gain and offset are invisible to the other two
+sensors, so of those six slots only the two belonging to sensor $j$ survive — the
+other four are identically zero, which is why the layout has twelve slots but a
+row only ever has eight live ones.
+
+Stacking the three sensors gives $\R^{9\times36}$ for the snapshot, with the
+magnet columns dense down all three row blocks and the gain and offset columns
+block diagonal.
+
 ### What this costs
 
 Per snapshot, the Jacobian of the residual w.r.t. the device parameters requires:
